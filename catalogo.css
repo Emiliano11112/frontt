@@ -1,5 +1,5 @@
 /* =========================
-   BASE RESET
+   RESET & BASE
 ========================= */
 * {
   box-sizing: border-box;
@@ -27,41 +27,46 @@ body {
    PRODUCT CARD
 ========================= */
 .product-card {
-  background: white;
-  border-radius: 18px;
-  box-shadow: 0 10px 28px rgba(15,23,42,.08);
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 8px 22px rgba(15,23,42,.08);
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  position: relative;
   transition: transform .25s ease, box-shadow .25s ease;
 }
 
 .product-card:hover {
-  transform: translateY(-6px);
-  box-shadow: 0 18px 40px rgba(15,23,42,.14);
+  transform: translateY(-4px);
+  box-shadow: 0 14px 34px rgba(15,23,42,.14);
 }
 
 /* =========================
-   IMAGE (CONTROLLED)
+   TAG
 ========================= */
-.product-image {
+.product-card .tag {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: white;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  z-index: 2;
+}
+
+/* =========================
+   IMAGE (CONTROLADA)
+========================= */
+.product-thumb {
   width: 100%;
-  height: 170px; /* 🔑 LIMITE CLARO */
-  background: #f1f5f9;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.product-image img {
-  max-width: 85%;
-  max-height: 85%;
+  height: 150px;            /* 🔑 límite real */
   object-fit: contain;
-  transition: transform .25s ease;
-}
-
-.product-card:hover .product-image img {
-  transform: scale(1.05);
+  background: #f1f5f9;
+  padding: 12px;
 }
 
 /* =========================
@@ -75,22 +80,22 @@ body {
   flex: 1;
 }
 
-.product-info h3 {
+.product-title {
   font-size: 15px;
   font-weight: 700;
   line-height: 1.2;
 }
 
-.product-info p {
+.product-sub {
   font-size: 13px;
   color: #475569;
   line-height: 1.35;
 }
 
 /* =========================
-   FOOTER
+   ACTIONS
 ========================= */
-.product-footer {
+.product-actions {
   margin-top: auto;
   display: flex;
   align-items: center;
@@ -101,42 +106,28 @@ body {
 .price {
   font-size: 16px;
   font-weight: 800;
-  color: #0f172a;
 }
 
 /* =========================
-   ADD BUTTON
+   BUTTONS
 ========================= */
-.add-btn {
+.btn {
   border: none;
-  background: linear-gradient(135deg, #2563eb, #1e40af);
-  color: white;
   padding: 8px 14px;
   border-radius: 999px;
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
-  transition: all .2s ease;
 }
 
-.add-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(37,99,235,.35);
-}
-
-/* =========================
-   TAG / PROMO
-========================= */
-.tag {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  background: linear-gradient(135deg, #22c55e, #16a34a);
+.btn-primary {
+  background: linear-gradient(135deg, #2563eb, #1e40af);
   color: white;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
+}
+
+.btn-primary:hover {
+  box-shadow: 0 6px 16px rgba(37,99,235,.35);
+  transform: translateY(-1px);
 }
 
 /* =========================
@@ -146,8 +137,8 @@ body {
   position: fixed;
   bottom: 24px;
   right: 24px;
-  width: 58px;
-  height: 58px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   background: linear-gradient(135deg, #2563eb, #1e3a8a);
   color: white;
@@ -164,8 +155,7 @@ body {
   display: none;
 }
 
-#cartFloating::after {
-  content: attr(data-count);
+.cart-badge {
   position: absolute;
   top: -6px;
   right: -6px;
@@ -173,12 +163,8 @@ body {
   color: white;
   font-size: 12px;
   font-weight: 700;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 999px;
 }
 
 /* =========================
@@ -235,10 +221,6 @@ body {
   flex: 1;
 }
 
-.cart-item-info strong {
-  font-size: 14px;
-}
-
 .cart-item-price {
   font-weight: 800;
 }
@@ -251,7 +233,7 @@ body {
 }
 
 /* =========================
-   EMPTY STATES
+   EMPTY STATE
 ========================= */
 .no-results {
   grid-column: 1 / -1;
@@ -259,10 +241,17 @@ body {
   opacity: .6;
   padding: 40px;
 }
+
 .no-results h2 {
   font-size: 22px;
   margin-bottom: 12px;
 }
-}.no-results p {
+
+.no-results p {
   font-size: 15px;
+}
+.no-results img {
+  margin-top: 20px;
+  width: 120px;
+  opacity: .8;
 }
