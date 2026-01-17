@@ -129,7 +129,7 @@ function animateFlyToCart(sourceImg){
     clone.style.top = `${rectSrc.top}px`;
     clone.style.width = `${rectSrc.width}px`;
     clone.style.height = `${rectSrc.height}px`;
-    clone.style.transition = 'transform 520ms cubic-bezier(.2,.9,.2,1), opacity 520ms ease';
+    clone.style.transition = 'transform 600ms cubic-bezier(.2,.9,.2,1), opacity 600ms ease';
     clone.style.zIndex = 1500;
     clone.style.borderRadius = '8px';
     document.body.appendChild(clone);
