@@ -1,0 +1,35 @@
+[
+  {
+    "id": 1,
+    "name": "dasddasd",
+    "price": 299.0,
+    "description": "aaad",
+    "category": "lacteos",
+    "image_url": "/uploads/34937a68f61845bb9768f3d64ebba8b5.png",
+    "created_at": "2025-12-06T21:36:42",
+    "updated_at": null,
+    "active": true
+  },
+  {
+    "id": 2,
+    "name": "2112121",
+    "price": 1000.0,
+    "description": "adsssad",
+    "category": "fiambres",
+    "image_url": "/uploads/ca8e2af9756d42ed97ceda6f5e5522a5.png",
+    "created_at": "2025-12-06T22:08:11",
+    "updated_at": null,
+    "active": true
+  },
+  {
+    "id": 3,
+    "name": "12212",
+    "price": 122.0,
+    "description": "221",
+    "category": "lacteos",
+    "image_url": "/uploads/a204a50a17e442109c9fa7dca08414f5.png",
+    "created_at": "2025-12-07T02:11:54",
+    "updated_at": null,
+    "active": true
+  }
+]

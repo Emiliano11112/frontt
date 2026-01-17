@@ -1,0 +1,376 @@
+/* Catalog-specific styles (light overrides to match main site aesthetics) */
+:root{--catalog-gap:20px}
+.small-hero{padding:46px 0;background:linear-gradient(135deg, rgba(255,200,90,0.15) 0%, rgba(242,107,56,0.03) 26%);border-bottom-left-radius:22px;border-bottom-right-radius:22px;position:relative;overflow:hidden}
+.small-hero::after{content:'';position:absolute;left:-8%;top:-14%;width:420px;height:420px;border-radius:50%;background:linear-gradient(180deg,var(--accent-3), rgba(255,255,255,0.14));opacity:0.06;filter:blur(20px)}
+.small-hero .hero-cta{display:flex;gap:12px;align-items:center}
+.small-hero .hero-art{position:relative}
+.small-hero .hero-art::after{content:'';position:absolute;right:-36px;bottom:-20px;width:140px;height:140px;border-radius:24px;background:linear-gradient(90deg, rgba(109,211,200,0.6), rgba(242,107,56,0.6));opacity:0.09;filter:blur(10px);transform:rotate(22deg);}
+.catalog-controls{display:flex;gap:18px;align-items:center;justify-content:space-between;margin-bottom:18px;padding:12px;border-radius:14px;background:linear-gradient(180deg,#fff,#fffef6);box-shadow:0 10px 40px rgba(10,34,64,0.04)}
+.filters{display:flex;gap:12px;align-items:center}
+.filter-btn{background:var(--surface);border-radius:999px;padding:8px 14px;border:1px solid rgba(10,34,64,0.08);cursor:pointer;font-weight:700;color:var(--deep);transition:all .12s ease}
+.filter-btn:hover{background:linear-gradient(90deg, rgba(242,107,56,0.06), rgba(255,200,90,0.02));transform:translateY(-2px)}
+.filter-btn.active{background:linear-gradient(90deg,var(--accent),var(--accent-2));color:#fff;box-shadow:0 14px 40px rgba(242,107,56,0.08)}
+.filter-btn:focus{outline:3px solid rgba(242,107,56,0.08);outline-offset:3px}
+.search{display:flex;align-items:center;gap:8px;flex:1}
+.search input{padding:12px 16px;border-radius:12px;border:1px solid rgba(10,34,64,0.08);min-width:220px;background:linear-gradient(180deg,#fff,#fffef8);flex:1}
+.search svg{opacity:0.5;color:rgba(10,34,64,0.6)}
+.search input:focus{outline:3px solid rgba(242,107,56,0.12);outline-offset:3px}
+
+/* Catalog hero overrides */
+.small-hero .hero-text h1{font-size:56px;line-height:1.03;margin-bottom:6px}
+.small-hero .subtitulo{font-size:18px;color:rgba(10,34,64,0.78);max-width:60ch;margin-top:8px}
+
+.catalog-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--catalog-gap);align-items:start}
+.product-card{background:linear-gradient(180deg,#ffffff,#fffdf9);border-radius:18px;padding:18px;border:1px solid rgba(10,34,64,0.06);box-shadow:0 24px 80px rgba(10,34,64,0.10);display:flex;flex-direction:column;gap:14px;transition:transform .25s cubic-bezier(.2,.9,.3,1),box-shadow .25s cubic-bezier(.2,.9,.3,1);position:relative;border-left:6px solid rgba(242,107,56,0.06)}
+/* Promotion style */
+.promotion-card{background:linear-gradient(90deg, rgba(242,107,56,0.04), rgba(109,211,200,0.02));border-left:6px solid rgba(242,107,56,0.12);min-height:260px;padding:16px;cursor:pointer}
+.promotion-card .product-title{color:var(--accent-2)}
+.promotion-card .price-bubble{background:linear-gradient(90deg,#ef4444,var(--accent-2));font-weight:800;right:14px;top:12px;padding:8px 10px;font-size:0.94rem}
+.promotion-card .product-thumb{height:120px}
+.promotion-thumbs{display:flex;gap:6px;flex-wrap:wrap}
+.promotion-card .price-display{margin-top:10px}
+.promotion-card .product-info{padding-top:8px;display:flex;flex-direction:column}
+.promotion-card .product-actions{align-items:flex-end}
+.promotion-card .price-display{font-size:15px; font-weight:800; color:var(--accent);}
+.promo-count{background:rgba(10,34,64,0.03);padding:4px 8px;border-radius:999px;font-size:12px;color:#4b5563;font-weight:700}
+.cart-item.promo-summary{background:linear-gradient(180deg,#fffefb,#fff6f2);border-left:4px solid rgba(239,68,68,0.06);display:flex;flex-direction:column;gap:12px;padding:14px;border-radius:12px;margin-bottom:18px}
+/* promotion thumbnails and compare price styles */
+.promotion-thumbs img, .promo-thumb{width:32px;height:32px;object-fit:cover;border-radius:6px;border:1px solid rgba(10,34,64,0.04);}
+.promo-thumb-wrap img{width:32px;height:32px;object-fit:cover;border-radius:6px;border:1px solid rgba(10,34,64,0.04);}
+.promo-thumb-more{width:32px;height:32px;border-radius:6px;border:1px solid rgba(10,34,64,0.04);display:flex;align-items:center;justify-content:center;background:rgba(10,34,64,0.04);color:var(--deep);font-weight:700}
+.promotion-card .product-sub{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:100%}
+.promotion-card .product-info{gap:10px}
+.price-compare{display:flex;align-items:center;gap:8px;font-weight:800}
+.price-compare .old{color:#8b8b8b;text-decoration:line-through;font-weight:700}
+.price-compare .new{color:var(--accent)}
+.modal-price{margin-top:8px;font-weight:800}
+.product-card::before{content:'';position:absolute;right:-24px;top:-24px;width:120px;height:120px;border-radius:50%;background:linear-gradient(90deg, rgba(242,107,56,0.12), rgba(109,211,200,0.08));filter:blur(40px);opacity:0.6;pointer-events:none}
+.product-card::after{content:'';position:absolute;left:0;top:0;height:100%;width:6px;border-top-left-radius:12px;border-bottom-left-radius:12px;background:linear-gradient(180deg,var(--accent),var(--accent-2));opacity:0.95;pointer-events:none}
+.product-card:focus-within{outline:3px solid rgba(10,34,64,0.04);outline-offset:2px}
+.product-thumb{display:block;height:220px;width:100%;border-radius:14px;background:linear-gradient(180deg,#fff,#f4f6f9);align-self:center;padding:12px;object-fit:contain;border:1px solid rgba(10,34,64,0.04);transition:transform .25s ease, box-shadow .25s ease}
+
+.product-card:hover .product-thumb{transform:scale(1.035);box-shadow:0 28px 74px rgba(10,34,64,0.12)}
+.product-info{display:flex;flex-direction:column;gap:6px}
+.product-title{font-size:19px;font-weight:900;color:var(--deep);letter-spacing:-0.35px}
+.product-meta{font-size:13px;color:var(--text-muted)}
+.product-sub{font-size:13px;color:var(--text-muted);margin-top:2px}
+.product-meta{color:rgba(10,34,64,0.85);font-size:13px}
+.product-actions{display:flex;gap:10px;margin-top:auto;justify-content:space-between;align-items:center}
+.product-actions .btn.small{padding:6px 8px;font-size:13px}
+.promo-badge{background:linear-gradient(90deg,#ef4444,var(--accent-2));color:#fff;padding:4px 8px;border-radius:8px;font-weight:700}
+.cart-item.promo-summary .promo-badge{white-space:nowrap}
+.promo-thumb-more{display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;background:linear-gradient(90deg,#ef4444,var(--accent-2));border-radius:6px;padding:6px}
+.product-actions .btn{padding:8px 12px;border-radius:8px}
+.product-actions .btn-primary{background:var(--accent);color:#fff;border:none}
+.product-actions .btn-primary:hover{filter:brightness(.96);transform:translateY(-1px)}
+.product-actions .btn-outline{border:2px solid rgba(10,34,64,0.12);color:var(--deep)}
+.product-actions .btn-outline:hover{background:rgba(10,34,64,0.04)}
+.price{font-weight:900;color:var(--accent);font-size:1.05rem}
+.product-card .price-bubble{position:absolute;right:18px;top:18px;background:linear-gradient(90deg,var(--accent),var(--accent-2));color:#ffffff;padding:12px 14px;border-radius:12px;font-weight:900;font-size:1.03rem;box-shadow:0 26px 64px rgba(242,107,56,0.16);letter-spacing:0.6px;transform-origin:center;transform:translateY(-6px) scale(.98);opacity:0;transition:opacity .25s ease, transform .25s cubic-bezier(.2,.9,.3,1)}
+/* category tag */
+.product-card .tag{position:absolute;left:14px;top:18px;background:linear-gradient(90deg, rgba(255,255,255,0.8), rgba(255,255,255,0.95));color:var(--deep);padding:6px 12px;border-radius:999px;font-weight:800;font-size:12px;border:1px solid rgba(10,34,64,0.04);box-shadow:0 8px 24px rgba(10,34,64,0.06)}
+
+.catalog-footer{margin-top:18px;display:flex;gap:18px;align-items:center;justify-content:space-between}
+
+.no-results{padding:28px;border-radius:12px;background:linear-gradient(180deg,#fff,#fff8f2);text-align:center;color:var(--deep);box-shadow:0 10px 40px rgba(10,34,64,0.08);grid-column:1/-1}
+
+/* WS indicator */
+.ws-indicator{display:flex;align-items:center;gap:8px;padding:8px;border-radius:10px;background:linear-gradient(180deg,#fff,#fff8f3);align-self:center;border:1px solid rgba(10,34,64,0.06);box-shadow:0 8px 24px rgba(10,34,64,0.04)}
+.ws-indicator .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#ef4444;box-shadow:0 6px 14px rgba(239,68,68,0.06)}
+.ws-indicator.connected .dot{background:#34d399;box-shadow:0 6px 14px rgba(52,211,153,0.06)}
+
+/* dark mode toggle removed for this catalog */
+
+/* skeleton placeholders */
+.skeleton{background:linear-gradient(90deg,#f4f6f9 25%, #eef4fd 50%, #f4f6f9 75%);background-size:200% 100%;animation: shimmer 1.2s linear infinite;border-radius:12px;padding:14px}
+.skeleton .thumb{height:220px;border-radius:12px;background:#fff;margin-bottom:10px}
+.skeleton .line{height:12px;border-radius:6px;background:#fff;margin-bottom:8px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* highlight animation to indicate a recently added product */
+.product-card.highlight{box-shadow:0 22px 64px rgba(242,107,56,0.14);transform:translateY(-6px)}
+.product-card.in-view{opacity:1;transform:none}
+.product-card{opacity:1;transform:none}
+/* image overlay with quick CTA */
+.card-overlay{position:absolute;left:0;right:0;top:0;height:220px;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .18s ease}
+.product-card:hover .card-overlay{opacity:1;pointer-events:auto;background:linear-gradient(180deg, rgba(6,26,43,0.0), rgba(6,26,43,0.08));}
+.overlay-actions{display:flex;gap:10px}
+.overlay-actions .btn{padding:8px 10px;border-radius:10px;font-weight:700}
+.overlay-actions .btn.btn-outline{background:rgba(255,255,255,0.95);border:none;color:var(--deep)}
+.overlay-actions .btn.btn-outline:hover{transform:translateY(-3px)}
+.overlay-actions .btn.btn-primary{background:linear-gradient(90deg,var(--accent),var(--accent-2));color:#fff;border:none}
+@keyframes highlightPulse{0%{transform:scale(1)}50%{transform:scale(1.01)}100%{transform:scale(1)}}
+
+/* transient toast for catalog */
+.catalog-toast{position:fixed;right:20px;bottom:20px;background:linear-gradient(90deg, rgba(6,26,43,0.98), rgba(2,60,56,0.78));color:#fff;padding:10px 14px;border-radius:10px;opacity:0;transform:translateY(10px);transition:opacity .25s, transform .25s;z-index:10001}
+.catalog-toast.visible{opacity:1;transform:translateY(0)}
+
+/* floating cart button */
+.cart-floating{position:fixed;right:20px;bottom:20px;background:linear-gradient(180deg,var(--accent),var(--accent-2));border-radius:50%;width:62px;height:62px;display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 16px 60px rgba(10,34,64,0.14);z-index:9998;cursor:pointer;transition:transform .14s ease}
+.cart-floating .cart-badge{position:absolute;top:-8px;right:-8px;background:#ef4444;color:#fff;border-radius:50%;min-width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:13px;padding:0 7px;font-weight:800}
+.cart-floating.hidden{display:none}
+.cart-floating:focus{outline:3px solid rgba(242,107,56,0.2)}
+
+/* cart drawer modal (floating card) */
+.cart-drawer{position:fixed;right:20px;bottom:90px;min-width:340px;max-width:480px;background:linear-gradient(180deg,#fff,#fff8f2);border-radius:12px;padding:16px;border:1px solid rgba(10,34,64,0.08);box-shadow:0 30px 110px rgba(10,34,64,0.22);z-index:10000;display:block;opacity:0;transform:translateY(10px) scale(0.995);pointer-events:none;transition:transform .22s ease, opacity .22s ease;transform-origin:bottom right}
+.cart-drawer.open{opacity:1;transform:translateY(0);pointer-events:auto}
+.cart-drawer .cart-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px}
+.cart-drawer .cart-head{border-bottom:1px solid rgba(10,34,64,0.04);padding-bottom:8px}
+.cart-drawer .cart-head div{font-weight:800;color:var(--deep)}
+/* close btn in cart head */
+.cart-drawer .cart-head .btn.secondary{border:1px solid rgba(10,34,64,0.08);background:transparent;color:var(--deep);padding:6px 8px;border-radius:8px}
+.cart-drawer .cart-head .btn.secondary:hover{background:rgba(10,34,64,0.04)}
+
+.cart-item{display:flex;gap:14px;align-items:flex-start;padding:12px;border-radius:12px;background:linear-gradient(180deg,#ffffff,#fffdfb);border:1px solid rgba(10,34,64,0.06);border-left:6px solid rgba(242,107,56,0.12);margin-bottom:12px;box-shadow:0 8px 24px rgba(10,34,64,0.04)}
+.cart-item.sub-entry{background:rgba(0,0,0,0.02);border-radius:8px;border:0;padding:8px 10px;margin-bottom:8px;opacity:0;transform:translateY(-6px);transition:opacity .18s ease, transform .18s ease;display:flex;align-items:center;gap:12px}
+.cart-item.sub-entry .cart-item-price{font-weight:600;color:var(--accent)}
+.cart-item.sub-entry .cart-item-price{font-size:13px}
+.cart-item .expander{border-radius:6px;padding:4px 8px;border:1px solid rgba(10,34,64,0.06);background:#fffef8;cursor:pointer}
+.cart-item .expander{transform-origin:center}
+.cart-item.promo-summary .expander{padding:6px 10px;font-size:16px}
+.cart-item .sub-list{overflow:hidden;max-height:0;opacity:0;transition:opacity .25s ease, max-height .25s ease;padding-top:8px;border-top:1px dashed rgba(10,34,64,0.06);margin-top:8px;margin-left:64px;padding-left:12px;border-left:2px solid rgba(10,34,64,0.03);width:calc(100% - 64px);display:flex;flex-direction:column;gap:10px}
+.cart-item.expanded .sub-list{max-height:220px;opacity:1;overflow:auto}
+.cart-item .expander:focus{outline:3px solid rgba(242,107,56,0.12);outline-offset:3px}
+.cart-item .expander[aria-expanded="true"]{transform:rotate(45deg);transition:transform .18s ease}
+.cart-item .sub-list .cart-item.sub-entry{opacity:0;transform:translateY(-6px);transition:opacity .18s ease,transform .18s ease}
+.cart-item.expanded .sub-list .cart-item.sub-entry{opacity:1;transform:translateY(0)}
+/* sub-entry content style */
+.cart-item.sub-entry .cart-item-title{font-weight:600;font-size:13px}
+.cart-item.sub-entry .cart-item-meta{display:none}
+.cart-item.sub-entry .cart-item-right{min-width:48px}
+/* Condense sub-entry appearance  */
+.cart-item .sub-list .cart-item.sub-entry{padding:6px 8px}
+/* Hide thumbnails inside sub-entries to keep them compact */
+.cart-item.sub-entry .cart-thumb{display:none}
+/* More link - shows number of additional items in group */
+.cart-item.sub-entry.more-link{background:transparent;border-radius:6px;padding:6px 8px;cursor:pointer}
+.cart-item.sub-entry.more-link .cart-item-title{color:var(--accent);font-weight:700}
+.cart-item.sub-entry.more-link:hover{background:linear-gradient(90deg, rgba(242,107,56,0.02), rgba(242,107,56,0.0))}
+.cart-drawer .cart-items{display:flex;flex-direction:column;gap:12px;max-height:360px;overflow:auto;padding-right:6px}
+.cart-item.promo-summary .summary-row{display:flex;gap:16px;align-items:flex-start;width:100%}
+.cart-item.promo-summary .summary-row .cart-item-right{align-self:flex-start;margin-left:18px}
+
+/* Stack expand/controls vertically on promo summaries to avoid crowding */
+.cart-item.promo-summary .cart-item-top-right{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:0 0 auto;min-width:54px}
+
+/* Make promo count and promo badge clearer and less dense */
+.cart-item.promo-summary .cart-item-count{font-size:13px;margin-top:4px;color:rgba(0,0,0,0.6)}
+.cart-item.promo-summary .promo-badge-wrapper{margin-left:0;margin-right:0;padding-top:4px;display:inline-flex;align-items:center;justify-content:center;gap:6px;flex-shrink:0}
+.cart-item.promo-summary .cart-item-right .cart-item-price{min-width:86px;font-weight:900}
+
+/* Slightly larger spacing for sub entries under promotions */
+.cart-item.promo-summary .sub-list {gap:10px;padding-top:10px}
+.cart-item.promo-summary .sub-list .cart-item.sub-entry{padding:10px 12px}
+.cart-item img{width:56px;height:56px;object-fit:contain;border-radius:8px;background:#fff;padding:6px}
+.cart-thumb img.promo-thumb{width:32px;height:32px;object-fit:cover;border-radius:6px;margin-right:6px;border:1px solid rgba(10,34,64,0.04)}
+.cart-thumb img.cart-sub-thumb{width:24px;height:24px;object-fit:cover;border-radius:6px;border:1px solid rgba(10,34,64,0.04)}
+.cart-thumb{display:flex;align-items:center;justify-content:flex-start;gap:8px;min-width:36px;max-width:120px;flex:0 0 auto;overflow:hidden}
+.cart-item.promo-summary .cart-thumb{min-width:44px;max-width:64px}
+.cart-item.promo-summary .cart-thumb img{width:48px;height:48px}
+.cart-item.sub-entry .cart-thumb{min-width:0}
+.cart-item-top{display:flex;align-items:center;gap:12px;justify-content:space-between}
+.cart-item-top-left{display:flex;flex-direction:column;align-items:flex-start;gap:6px;flex:1;min-width:0}
+.cart-item.promo-summary .cart-item-top-left{flex:1 1 66%}
+.cart-item.promo-summary .cart-item-title{margin-bottom:6px}
+.cart-item.promo-summary .promo-label{font-size:12px;color:var(--text-muted);font-weight:700;margin-bottom:2px}
+.cart-item.promo-summary .promo-name{font-weight:800;font-size:16px;line-height:1.1;}
+.cart-item.promo-summary .promo-name{word-break:break-word;hyphens:none;overflow-wrap:anywhere;letter-spacing:normal}
+.cart-item.promo-summary .promo-name{writing-mode: horizontal-tb !important; text-orientation: mixed !important; transform: none !important; display:inline-block !important; white-space: normal !important; word-break: normal !important; overflow-wrap:normal !important; direction:ltr !important}
+.cart-item-top-right{display:flex;align-items:center;gap:8px}
+.cart-item-top-right .expander{position:relative;z-index:3;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;margin-bottom:6px}
+.cart-item-top-right .promo-badge-wrapper{position:relative;z-index:2}
+.cart-item-count{font-size:12px;color:#6b7280;margin-right:12px}
+.cart-item-title{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-clamp:2;white-space:normal;max-width:160px}
+.cart-item.promo-summary .cart-item-title{max-width:100%;
+  -webkit-line-clamp:3;
+  line-clamp:3;
+  display:-webkit-box;
+  -webkit-box-orient:vertical;
+  overflow:hidden;
+  white-space:normal; /* allow wrap */
+  overflow-wrap:break-word;
+}
+
+.cart-item.promo-summary .cart-item-top-right{flex:0 0 auto}
+.cart-item-right{display:flex;flex-direction:column;align-items:flex-end;gap:8px;min-width:84px}
+.cart-item .promo-badge{margin-left:8px}
+.cart-item .cart-item-price{min-width:64px;text-align:right}
+.cart-item .cart-item-info{flex: 1 1 auto; min-width: 0; gap: 12px}
+.cart-item .cart-item-title{font-weight:700}
+.promo-badge-wrapper{margin-left:8px;margin-right:8px;display:inline-flex;align-items:center}
+.cart-item .cart-item-meta{font-size:13px;color:rgba(10,34,64,0.64);margin-top:8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;display:block}
+.cart-item .cart-item-price{font-weight:800;color:var(--accent)}
+.quantity-control{display:inline-flex;align-items:center;border-radius:8px;border:1px solid rgba(10,34,64,0.06);overflow:hidden}
+.quantity-control button{border:0;background:rgba(10,34,64,0.03);color:var(--deep);padding:6px 8px;cursor:pointer;font-weight:700}
+.quantity-control button:hover{background:rgba(10,34,64,0.06)}
+.quantity-control .qty{padding:6px 10px;border-left:1px solid rgba(10,34,64,0.04);border-right:1px solid rgba(10,34,64,0.04)}
+.cart-drawer .cart-footer{display:flex;flex-direction:column;gap:10px;margin-top:12px;border-top:1px dashed rgba(10,34,64,0.04);padding-top:12px}
+.cart-drawer #cartTotalPrice{font-weight:900;color:var(--deep);font-size:1.05rem}
+
+/* Highlight the checkout CTA inside drawer */
+.cart-drawer .btn#checkoutBtn{background:linear-gradient(90deg,var(--accent),var(--accent-2));color:#fff;border:none;box-shadow:0 18px 54px rgba(242,107,56,0.12)}
+.cart-drawer .btn#checkoutBtn:hover{filter:brightness(.98);transform:translateY(-1px)}
+
+/* Remove/secondary buttons inside the cart should be clearly visible */
+.cart-drawer .btn.secondary.remove{border:1px solid rgba(239,68,68,0.2);color:#ef4444;background:transparent;padding:8px 10px;margin-top:6px}
+.cart-drawer .btn.secondary.remove:hover{background:rgba(239,68,68,0.06)}
+.cart-drawer .cart-actions{display:flex;gap:8px;justify-content:space-between}
+.cart-drawer .cart-actions .btn.secondary{border:1px solid rgba(10,34,64,0.08);background:transparent;color:var(--deep);padding:8px 10px}
+.cart-drawer .cart-actions .btn.secondary:hover{background:rgba(10,34,64,0.04)}
+.cart-drawer .empty{padding:20px;text-align:center;color:rgba(10,34,64,0.75)}
+
+/* Final safety override: ensure elements inside cart drawer render horizontally */
+.cart-drawer .cart-item *{writing-mode:horizontal-tb !important;text-orientation:mixed !important;transform:none !important}
+.cart-drawer .cart-item .promo-label,
+.cart-drawer .cart-item .promo-name,
+.cart-drawer .cart-item .cart-item-title,
+.cart-drawer .cart-item .cart-item-meta{writing-mode:horizontal-tb !important; text-orientation:mixed !important; transform:none !important; display:inline-block !important; white-space:normal !important}
+
+/* product modal for adding quantity */
+.cart-modal{position:fixed;left:0;top:0;right:0;bottom:0;display:none;align-items:center;justify-content:center;background:linear-gradient(180deg, rgba(0,0,0,0.45), rgba(0,0,0,0.32));z-index:9999}
+.cart-modal.open{display:flex}
+.cart-modal .modal-card{background:linear-gradient(180deg,#fff,#fffef9);border-radius:12px;padding:18px;min-width:320px;max-width:520px;border:1px solid rgba(10,34,64,0.06);box-shadow:0 18px 94px rgba(10,34,64,0.12)}
+.cart-modal .modal-card .modal-media{display:flex;gap:12px;align-items:center}
+.cart-modal img{width:84px;height:84px;object-fit:contain;border-radius:8px}
+.cart-modal .modal-title{font-weight:700;margin-bottom:6px}
+.cart-modal .modal-desc{font-size:13px;color:rgba(10,34,64,0.66)}
+.cart-modal .modal-actions{display:flex;gap:8px;align-items:center;margin-top:12px}
+.cart-modal .modal-actions .btn{min-width:120px}
+.cart-modal .modal-actions .secondary{background:transparent;border:1px solid rgba(10,34,64,0.06)}
+.cart-modal #addToCartBtn{background:var(--accent);color:#fff;border:none}
+.cart-modal #addToCartBtn:hover{filter:brightness(.98);transform:translateY(-1px)}
+
+/* subtle hover for product cards to make them stand out */
+.product-card:hover{transform:translateY(-10px);box-shadow:0 44px 110px rgba(10,34,64,0.20)}
+.product-card.in-view .price-bubble{transform:translateY(0) scale(1);opacity:1}
+/* Accessible focus styles for interactive elements inside cards */
+.product-card button:focus, .product-card a:focus{outline:3px solid rgba(242,107,56,0.18);outline-offset:3px;border-radius:8px}
+.product-card:focus-within{transform:translateY(-10px);box-shadow:0 34px 84px rgba(10,34,64,0.18)}
+
+/* responsive */
+@media(min-width:1280px){
+  .catalog-grid{grid-template-columns:repeat(4,1fr)}
+}
+@media(max-width:1024px){
+  .catalog-grid{grid-template-columns:repeat(2,1fr)}
+}
+.product-card{min-height:340px}
+@media(max-width:900px){
+  .product-thumb{height:140px}
+}
+.product-info{padding-top:8px}
+.cart-drawer{right:12px;left:12px;bottom:24px}
+.cart-drawer .cart-items{max-height:240px}
+@media(max-width:700px){
+  .catalog-controls{flex-direction:column;align-items:stretch}
+  .catalog-grid{grid-template-columns:1fr}
+  .catalog-grid{gap:14px}
+  .small-hero{padding:22px 0}
+  /* On small screens, make cart drawer fit mobile nicely */
+  .cart-drawer{right:12px;left:12px;bottom:70px;min-width:auto;max-width:calc(100% - 24px)}
+  .cart-drawer{min-width:100%;max-width:100%;left:0;right:0;bottom:0;border-radius:16px 16px 0 0}
+  .cart-floating{right:14px;bottom:16px}
+  /* Stack cart item contents on smaller screens to avoid very long horizontal rows */
+  .cart-item{flex-wrap:wrap;align-items:center;padding:12px}
+  .cart-item .cart-item-right{min-width:48px;width:100%;display:flex;justify-content:flex-end;margin-top:8px}
+  .cart-item .cart-item-info{flex-basis:100%;}
+  /* On mobile, revert promo top-right to horizontal so content fits better */
+  .cart-item.promo-summary .cart-item-top-right{flex-direction:row;align-items:center;gap:8px;min-width:92px}
+  .cart-item.promo-summary .cart-item-top-right .expander{margin-bottom:0;margin-right:6px}
+
+  /* Make promo title expand fully on mobile, avoid clipping */
+  .cart-item.promo-summary .cart-item-title{display:block;max-width:100%;overflow:visible;white-space:normal;overflow-wrap:break-word;-webkit-line-clamp:none;line-clamp:none;-webkit-box-orient:unset}
+  .cart-item.promo-summary .promo-name{display:inline-block}
+
+  /* Reduce thumbnail for more text space */
+  .cart-item.promo-summary .cart-thumb{min-width:36px;max-width:44px}
+  .cart-item.promo-summary .cart-thumb img{width:40px;height:40px}
+  /* Ensure promo controls never overlap on mobile */
+  .cart-item.promo-summary .cart-item-top-right .expander{min-width:40px;padding:6px 10px}
+  .cart-item.promo-summary .cart-item-top-right .promo-badge-wrapper{flex-shrink:0;margin-left:6px}
+
+  /* Title font size a touch smaller to help cramped long titles fit better */
+  .cart-item.promo-summary .cart-item-title{font-size:15px}
+
+  /* Ensure price remains aligned right but reduce min-width to free space */
+  .cart-item.promo-summary .cart-item-right{min-width:64px}
+  .cart-item.promo-summary .promo-label{font-size:11px}
+  .cart-item.promo-summary .promo-name{font-size:15px}
+  .cart-item.promo-summary .promo-badge{font-size:12px;padding:4px 6px}
+}
+
+/* Additional mobile improvements to make UX similar to desktop but touch-friendly */
+@media (max-width: 700px) {
+  /* Hero adjustments */
+  .small-hero .hero-text h1{font-size:28px;line-height:1.08}
+  .small-hero .subtitulo{font-size:14px}
+
+  /* Make filter row horizontally scrollable on small screens */
+  .filters{overflow-x:auto;white-space:nowrap;padding-bottom:6px;gap:10px}
+  .filters .filter-btn{display:inline-flex;flex:0 0 auto}
+  .filter-btn{padding:10px 14px;font-size:15px}
+
+  /* Search should be flexible and not force overflow */
+  .search{flex:0 1 auto;width:100%;margin-top:6px}
+  .search input{min-width:0;width:100%}
+
+  /* Product actions stack vertically and are touch-friendly */
+  .product-actions{flex-direction:column;align-items:stretch;gap:8px}
+  .product-actions .btn{width:100%;padding:10px 12px}
+
+  /* Hide hover overlay on touch devices - use product-actions for add/remove instead */
+  .card-overlay{display:none}
+
+  /* Slightly smaller thumbs to fit better on small screens */
+  .product-thumb{height:140px}
+
+  /* Make modals readable and full width with comfortable padding */
+  .cart-modal .modal-card{min-width:auto;max-width:calc(100% - 32px);width:calc(100% - 32px)}
+  .cart-modal .modal-media img{width:84px;height:84px}
+
+  /* Bottom-sheet cart should not exceed viewport; allow scrolling for content */
+  .cart-drawer{height:auto;max-height:calc(100vh - 84px);overflow:auto;padding-bottom:24px}
+
+  /* Larger tappable area for quantity controls */
+  .quantity-control button{padding:8px 12px;font-size:15px}
+  .quantity-control .qty{padding:8px 12px;font-weight:800}
+
+  /* Make card footprint a bit more compact */
+  .product-card{min-height:auto;padding:14px}
+  /* Reduce heavy shadows and transforms for mobile to keep layout stable */
+  .product-card{box-shadow:0 12px 34px rgba(10,34,64,0.06)}
+  .product-card:hover{transform:none}
+}
+
+/* Extra narrow screens: stack promo-top-right vertically to avoid horizontal squeeze */
+@media (max-width: 420px){
+  .cart-item.promo-summary .cart-item-top-right{flex-direction:column;align-items:flex-end;min-width:56px}
+  .cart-item.promo-summary .cart-item-top-right .expander{margin-bottom:6px}
+}
+
+@media(max-width:700px){
+  .cart-drawer .cart-actions{flex-direction:column;gap:10px}
+  .cart-drawer .cart-actions .btn{width:100%}
+  .cart-drawer .cart-footer{padding-bottom:28px}
+}
+
+@media(max-width:520px){
+  .cart-floating{width:72px;height:72px}
+  .cart-floating .cart-badge{min-width:22px;height:22px;font-size:12px;top:-10px;right:-10px}
+}
+
+/* Prefer hiding overlay for touch-only devices explicitly (helps some tablets) */
+@media (hover: none) and (pointer: coarse){
+  .card-overlay{display:none}
+}
+.subtitulo{font-size:16px}  
+
+/* Respect reduced motion preference to improve accessibility */
+@media (prefers-reduced-motion: reduce){
+  *{ animation-duration:0.001ms !important; animation-iteration-count:1 !important; transition:none !important; }
+}
+
+/* Skip link base style, visual when focused */
+.skip-link{position:absolute;left:-999px;top:auto;width:1px;height:1px;overflow:hidden}
+.skip-link:focus{left:8px;top:8px;width:auto;height:auto;padding:8px 12px;background:#fff;border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,0.08);z-index:10000;color:var(--deep)}

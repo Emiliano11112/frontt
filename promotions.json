@@ -1,0 +1,24 @@
+[
+  {
+    "id": 1765066541397,
+    "name": "1212",
+    "description": "aaaaa",
+    "productIds": [
+      1
+    ],
+    "type": "percent",
+    "value": 12
+  },
+  {
+    "id": 1765073530213,
+    "name": "promo pene masivo",
+    "description": "aaaaa",
+    "productIds": [
+      1,
+      2,
+      3
+    ],
+    "type": "percent",
+    "value": 11
+  }
+]
