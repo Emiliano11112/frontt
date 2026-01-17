@@ -1,6 +1,13 @@
 document.addEventListener("DOMContentLoaded", () => {
 
-  const API_URL = "/api/productos"; // ESTE ES EL ÚNICO PUNTO DE BACKEND
+  const ENDPOINTS = [
+    "/api/productos",
+    "/productos",
+    "/api/products",
+    "/products",
+    "http://localhost:3000/api/productos",
+    "http://localhost:3000/productos"
+  ];
 
   const grid = document.getElementById("catalogGrid");
   const searchInput = document.getElementById("searchInput");
@@ -10,24 +17,40 @@ document.addEventListener("DOMContentLoaded", () => {
   let filtroActual = "all";
 
   async function cargarProductos() {
-    try {
-      const res = await fetch(API_URL, { cache: "no-store" });
+    for (const url of ENDPOINTS) {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) continue;
 
-      if (!res.ok) throw new Error("Backend no responde");
+        const data = await res.json();
+        if (!Array.isArray(data)) continue;
 
-      const data = await res.json();
-
-      if (!Array.isArray(data)) throw new Error("JSON inválido");
-
-      productos = data;
-      render();
-    } catch (err) {
-      grid.innerHTML = `
-        <div style="grid-column:1/-1;opacity:.6;text-align:center">
-          No se pudieron cargar productos
-        </div>
-      `;
+        productos = normalizar(data);
+        render();
+        return;
+      } catch (_) {}
     }
+
+    grid.innerHTML = `
+      <div style="grid-column:1/-1;text-align:center;opacity:.6">
+        Backend no encontrado o JSON inválido
+      </div>
+    `;
+  }
+
+  function normalizar(data) {
+    return data.map(p => ({
+      nombre: p.nombre || p.name || "Sin nombre",
+      descripcion: p.descripcion || p.description || "",
+      precio: p.precio || p.price || 0,
+      categoria: p.categoria || p.category || "otros",
+      promocion: p.promocion || p.promo || false,
+      imagen:
+        p.imagen ||
+        p.image ||
+        p.img ||
+        "https://via.placeholder.com/200x150?text=Sin+imagen"
+    }));
   }
 
   function render() {
@@ -35,21 +58,21 @@ document.addEventListener("DOMContentLoaded", () => {
     grid.innerHTML = "";
 
     const filtrados = productos.filter(p => {
-      const matchFiltro =
+      const okFiltro =
         filtroActual === "all" ||
-        (filtroActual === "promociones" && p.promocion === true) ||
+        (filtroActual === "promociones" && p.promocion) ||
         p.categoria === filtroActual;
 
-      const matchTexto =
-        p.nombre?.toLowerCase().includes(texto) ||
-        p.descripcion?.toLowerCase().includes(texto);
+      const okTexto =
+        p.nombre.toLowerCase().includes(texto) ||
+        p.descripcion.toLowerCase().includes(texto);
 
-      return matchFiltro && matchTexto;
+      return okFiltro && okTexto;
     });
 
     if (filtrados.length === 0) {
       grid.innerHTML = `
-        <div style="grid-column:1/-1;opacity:.6;text-align:center">
+        <div style="grid-column:1/-1;text-align:center;opacity:.6">
           Sin resultados
         </div>
       `;
@@ -63,12 +86,12 @@ document.addEventListener("DOMContentLoaded", () => {
       card.innerHTML = `
         ${p.promocion ? `<span class="tag">Promo</span>` : ""}
         <div class="product-image">
-          <img src="${p.imagen}" alt="${p.nombre}" loading="lazy"
-               onerror="this.src='https://via.placeholder.com/200x150?text=Sin+imagen'">
+          <img src="${p.imagen}" loading="lazy"
+            onerror="this.src='https://via.placeholder.com/200x150?text=Sin+imagen'">
         </div>
         <div class="product-info">
           <h3>${p.nombre}</h3>
-          <p>${p.descripcion || ""}</p>
+          <p>${p.descripcion}</p>
           <div class="product-footer">
             <span class="price">$${p.precio}</span>
           </div>
