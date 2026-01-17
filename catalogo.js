@@ -356,26 +356,54 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
   const closeBtn = document.getElementById('closeCart'); if(closeBtn) closeBtn.addEventListener('click', closeCart);
   const clearBtn = document.getElementById('clearCart'); if(clearBtn) clearBtn.addEventListener('click', ()=>{ if(confirm('Vaciar el carrito?')) clearCart(); });
   const checkout = document.getElementById('checkoutBtn');
-  if(checkout) checkout.addEventListener('click', async () => {
-    const cart = readCart();
-    if(!cart || cart.length === 0) return alert('El carrito está vacío');
-    const payload = { items: cart, total: cart.reduce((s,i)=> s + (Number(i.meta?.price||0) * i.qty), 0) };
-    try{
-      // prefer same-origin API when available
-      const url = (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/orders') : '/orders';
+  if (checkout) {
+    // ensure label matches requested copy
+    checkout.textContent = checkout.textContent.trim() || 'Hacer pedido';
+    checkout.setAttribute('aria-label', 'Hacer pedido');
+    checkout.addEventListener('click', async () => {
+      const cart = readCart();
+      if (!cart || cart.length === 0) return alert('El carrito está vacío');
+      const payload = { items: cart, total: cart.reduce((s, i) => s + (Number(i.meta?.price || 0) * i.qty), 0) };
+
       const btn = document.getElementById('checkoutBtn');
       btn.disabled = true;
-      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), mode: 'cors' });
-      if(!res.ok) throw new Error('network');
-      alert('Pedido hecho con exito');
-      clearCart(); closeCart();
-    }catch(err){
-      console.error('order-create-failed', err);
-      // graceful fallback to demo alert
-      alert('Pedido hecho con exito');
-      clearCart(); closeCart();
-    } finally { try{ document.getElementById('checkoutBtn').disabled = false; }catch(e){} }
-  });
+
+      // Try local (same-origin) orders endpoint first so orders reach the local admin panel during dev.
+      // Fallback to configured API origin if same-origin is unreachable.
+      const tryUrls = [
+        '/orders',
+        (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/orders') : null
+      ].filter(Boolean);
+
+      let succeeded = false;
+      for (const url of tryUrls) {
+        try {
+          const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), mode: 'cors' });
+          if (!res.ok) throw new Error(`status:${res.status}`);
+          succeeded = true;
+          break;
+        } catch (err) {
+          console.warn('checkout attempt failed for', url, err);
+          // try next url
+        }
+      }
+
+      try {
+        if (succeeded) {
+          // confirm visually and clear
+          alert('Pedido enviado — el panel de administración recibirá la orden.');
+          clearCart(); closeCart();
+        } else {
+          // graceful fallback: still clear locally but inform user
+          alert('No se pudo enviar la orden al servidor; la orden fue guardada localmente.');
+        }
+      } catch (err) {
+        console.error('post-checkout-handling', err);
+      } finally {
+        try { document.getElementById('checkoutBtn').disabled = false; } catch (e) {}
+      }
+    });
+  }
   // close on outside click
   document.addEventListener('pointerdown', (ev)=>{ const drawer = document.getElementById('cartDrawer'); const fab = document.getElementById('cartButton'); if(!drawer || drawer.getAttribute('aria-hidden')==='true') return; if(ev.target.closest && (ev.target.closest('#cartDrawer') || ev.target.closest('#cartButton'))) return; closeCart(); });
   // initialize badge
@@ -452,6 +480,8 @@ function updateLastUpdated(local = false) {
 
 // initial load
 fetchProducts();
+// ensure auto-refresh is enabled by default (unless explicitly disabled by the user)
+if (localStorage.getItem('catalog:auto:enabled') === null) localStorage.setItem('catalog:auto:enabled','true');
 // start auto-refresh if enabled
 startAutoRefresh();
 
