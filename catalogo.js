@@ -16,6 +16,47 @@ let countdown = AUTO_REFRESH_SECONDS;
 
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+// promotions support
+let promotions = [];
+
+async function fetchPromotions(){
+  const tryUrls = [
+    `${API_ORIGIN}/promotions`,
+    `${API_ORIGIN}/promociones`,
+    'promotions.json',
+    'promotions.json' // fallback to local file in workspace
+  ];
+  for (const url of tryUrls){
+    try {
+      const res = await fetch(url, { mode: 'cors' });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (Array.isArray(data) && data.length>0){ promotions = data; return promotions; }
+    } catch (err) { /* ignore and try next */ }
+  }
+  promotions = [];
+  return promotions;
+}
+
+function getBestPromotionForProduct(productId){
+  if (!promotions || promotions.length===0) return null;
+  const pid = Number(productId);
+  // find promotions that include this productId
+  const matches = promotions.filter(pr => Array.isArray(pr.productIds) && pr.productIds.some(x => Number(x) === pid));
+  if (!matches.length) return null;
+  // prefer the one with highest percent/fixed value (simple heuristic)
+  matches.sort((a,b)=> (b.value||0)-(a.value||0));
+  return matches[0];
+}
+
+function getDiscountedPrice(price, promo){
+  if (!promo) return price;
+  const val = Number(promo.value || 0);
+  if (promo.type === 'percent') return Math.max(0, +(price * (1 - val/100)).toFixed(2));
+  if (promo.type === 'fixed') return Math.max(0, +(price - val).toFixed(2));
+  return price;
+}
+
 function normalize(p) {
   // soporta respuesta en español o inglés y normaliza valores
   const name = (p.nombre || p.name || "").trim();
@@ -56,6 +97,8 @@ async function fetchProducts({ showSkeleton = true } = {}) {
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const data = await res.json();
     products = data.map(normalize);
+    // try to load promotions (best-effort)
+    await fetchPromotions();
     render({ animate: true });
     updateLastUpdated();
   } catch (err) {
@@ -64,12 +107,40 @@ async function fetchProducts({ showSkeleton = true } = {}) {
     try {
       const local = await (await fetch('products.json')).json();
       products = local.map(normalize);
+      await fetchPromotions();
       render({ animate: true });
       updateLastUpdated(true);
     } catch (e) {
       showMessage('No hay productos disponibles', 'error');
     }
   }
+}
+
+// visual "fly to cart" effect
+function animateFlyToCart(sourceImg){
+  try{
+    const fab = document.getElementById('cartButton');
+    if (!fab || !sourceImg) return;
+    const rectSrc = sourceImg.getBoundingClientRect();
+    const rectDst = fab.getBoundingClientRect();
+    const clone = sourceImg.cloneNode(true);
+    clone.classList.add('fly-ghost');
+    clone.style.left = `${rectSrc.left}px`;
+    clone.style.top = `${rectSrc.top}px`;
+    clone.style.width = `${rectSrc.width}px`;
+    clone.style.height = `${rectSrc.height}px`;
+    clone.style.transition = 'transform 520ms cubic-bezier(.2,.9,.2,1), opacity 520ms ease';
+    clone.style.zIndex = 1500;
+    clone.style.borderRadius = '8px';
+    document.body.appendChild(clone);
+    requestAnimationFrame(()=>{
+      const dx = rectDst.left + rectDst.width/2 - (rectSrc.left + rectSrc.width/2);
+      const dy = rectDst.top + rectDst.height/2 - (rectSrc.top + rectSrc.height/2);
+      clone.style.transform = `translate(${dx}px, ${dy}px) scale(.12)`;
+      clone.style.opacity = '0.02';
+    });
+    setTimeout(()=>{ try{ clone.remove(); }catch(_){} }, 600);
+  }catch(e){ /* ignore */ }
 }
 
 function render({ animate = false } = {}) {
@@ -104,21 +175,31 @@ function render({ animate = false } = {}) {
     }
 
     const imgSrc = p.imagen || 'images/placeholder.png';
+    const pid = String(p.id ?? p._id ?? p.nombre ?? i);
+    card.dataset.pid = pid;
+
+    // check promotion for this product
+    const promo = getBestPromotionForProduct(p.id ?? p._id ?? pid);
+    const discounted = promo ? getDiscountedPrice(Number(p.precio ?? p.price ?? 0), promo) : null;
+    const isNew = p.created_at ? (Date.now() - new Date(p.created_at).getTime()) < (1000 * 60 * 60 * 24 * 7) : false;
+
     card.innerHTML = `
       <div class="product-image">
-        <div class="price-badge">$${Number(p.precio).toFixed(2)}</div>
+        ${promo ? `<div class="promo-ribbon">-${promo.type==='percent'?promo.value+'%':'$'+promo.value}</div>` : ''}
+        <div class="price-badge">${discounted ? `<span class="price-new">$${Number(discounted).toFixed(2)}</span><span class="price-old">$${Number(p.precio).toFixed(2)}</span>` : `$${Number(p.precio).toFixed(2)}`}</div>
         <img src="${imgSrc}" alt="${escapeHtml(p.nombre)}" loading="lazy" fetchpriority="low">
       </div>
       <div class="product-info">
-        <h3>${escapeHtml(p.nombre)}</h3>
+        <h3>${escapeHtml(p.nombre)} ${isNew ? `<span class="new-badge">Nuevo</span>` : ''}</h3>
         <p>${escapeHtml(p.descripcion)}</p>
-        <div class="price">$${Number(p.precio).toFixed(2)}</div>
+        <div class="price">${discounted ? `<span class="price-new">$${Number(discounted).toFixed(2)}</span> <span class="price-old">$${Number(p.precio).toFixed(2)}</span>` : `$${Number(p.precio).toFixed(2)}`}</div>
+        <div class="card-actions"><button class="btn btn-add" data-id="${pid}" aria-label="Agregar ${escapeHtml(p.nombre)} al carrito">Agregar</button></div>
       </div>`;
-
     // post-render image handling: detect aspect ratio, fade-in, error fallback, lightbox trigger
     const temp = document.createElement('div');
     temp.appendChild(card);
     const img = temp.querySelector('img');
+    const addBtn = temp.querySelector('.btn-add');
 
     img.addEventListener('load', () => {
       try {
@@ -131,10 +212,24 @@ function render({ animate = false } = {}) {
     });
     img.addEventListener('error', () => { img.src = 'images/placeholder.png'; img.classList.add('img-loaded'); });
 
-    // accessible interactions (click / keyboard)
+    // stop propagation on Add button and wire add-to-cart (prevents opening lightbox)
+    if (addBtn) {
+      addBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const id = addBtn.dataset.id;
+        addToCart(String(id), 1, img);
+        openCart(String(id));
+      });
+      addBtn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); addBtn.click(); } });
+    }
+
+    // accessible interactions (click / keyboard) for the card (lightbox)
     card.addEventListener('click', (ev) => {
+      // ignore clicks originating from interactive controls inside the card
+      if (ev.target.closest && ev.target.closest('.btn')) return;
       const src = img.getAttribute('src');
-      openLightbox(src, p.nombre, p.descripcion);
+      const promo = getBestPromotionForProduct(p.id ?? p._id ?? pid);
+      openLightbox(src, p.nombre, `${p.descripcion || ''}${promo ? ' — ' + promo.name : ''}`);
     });
     card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); card.click(); } });
 
@@ -196,8 +291,19 @@ function writeCart(cart){ localStorage.setItem(CART_KEY, JSON.stringify(cart)); 
 
 function updateCartBadge(){ const count = readCart().reduce((s,i)=>s+i.qty,0); const el = document.getElementById('cartCount'); if(el) el.textContent = String(count); if(count>0){ el.classList.add('has-items'); el.animate?.([{ transform: 'scale(1)' },{ transform: 'scale(1.12)' },{ transform: 'scale(1)' }], { duration: 320 }); } }
 
-function addToCart(productId, qty = 1){ const cart = readCart(); const idx = cart.findIndex(i=>i.id===productId); if(idx>=0){ cart[idx].qty = Math.min(99, cart[idx].qty + qty); } else { const p = products.find(x => String(x.id ?? x._id) === String(productId)); cart.push({ id: String(productId), qty: Math.min(99, qty), meta: { name: p?.nombre || p?.name || '', price: p?.precio ?? p?.price ?? 0, image: p?.imagen || p?.image || p?.image_url || '' } }); }
-  writeCart(cart); renderCart(); pulseCard(productId);
+function addToCart(productId, qty = 1, sourceEl = null){
+  const cart = readCart();
+  const idx = cart.findIndex(i=>i.id===productId);
+  if(idx>=0){ cart[idx].qty = Math.min(99, cart[idx].qty + qty); }
+  else {
+    const p = products.find(x => String(x.id ?? x._id) === String(productId));
+    cart.push({ id: String(productId), qty: Math.min(99, qty), meta: { name: p?.nombre || p?.name || '', price: p?.precio ?? p?.price ?? 0, image: p?.imagen || p?.image || p?.image_url || '' } });
+  }
+  writeCart(cart);
+  renderCart();
+  pulseCard(productId);
+  // fly animation from the source image to cart
+  if (sourceEl && !reduceMotion) animateFlyToCart(sourceEl);
 }
 function setCartItem(productId, qty){ const cart = readCart(); const idx = cart.findIndex(i=>i.id===productId); if(idx>=0){ if(qty<=0) cart.splice(idx,1); else cart[idx].qty = Math.min(99, qty); writeCart(cart); renderCart(); } }
 function removeFromCart(productId){ const cart = readCart().filter(i=>i.id!==productId); writeCart(cart); renderCart(); }
@@ -207,10 +313,18 @@ function pulseCard(productId){ const sel = `[data-pid="${productId}"]`; const ca
 
 function renderCart(){ const container = document.getElementById('cartItems'); const subtotalEl = document.getElementById('cartSubtotal'); const cart = readCart(); container.innerHTML = '';
   if(cart.length===0){ container.innerHTML = '<div class="cart-empty">Tu carrito está vacío</div>'; subtotalEl.textContent = '$0.00'; updateCartBadge(); return; }
-  let subtotal = 0; cart.forEach(item=>{ const row = document.createElement('div'); row.className = 'cart-item'; row.dataset.pid = item.id; const img = document.createElement('div'); img.className = 'ci-image'; img.innerHTML = `<img src="${item.meta?.image || 'images/placeholder.png'}" alt="${escapeHtml(item.meta?.name||'')}">`; const info = document.createElement('div'); info.className = 'ci-info'; info.innerHTML = `<div class="ci-name">${escapeHtml(item.meta?.name||'')}</div><div class="ci-price">$${Number(item.meta?.price||0).toFixed(2)}</div>`;
+  let subtotal = 0; cart.forEach(item=>{ const row = document.createElement('div'); row.className = 'cart-item'; row.dataset.pid = item.id; const img = document.createElement('div'); img.className = 'ci-image'; img.innerHTML = `<img src="${item.meta?.image || 'images/placeholder.png'}" alt="${escapeHtml(item.meta?.name||'')}">`; const info = document.createElement('div'); info.className = 'ci-info';
+    // prefer live product data (to reflect promotions), fallback to stored meta
+    const prod = products.find(x => String(x.id ?? x._id) === String(item.id));
+    const livePriceBase = prod ? (prod.precio ?? prod.price ?? item.meta?.price ?? 0) : (item.meta?.price ?? 0);
+    const promo = getBestPromotionForProduct(prod?.id ?? item.id);
+    const unitPrice = promo ? getDiscountedPrice(livePriceBase, promo) : livePriceBase;
+    info.innerHTML = `
+      <div class="ci-name">${escapeHtml(item.meta?.name||prod?.nombre||'')}</div>
+      <div class="ci-price">${promo ? `<span class="price-new">$${Number(unitPrice).toFixed(2)}</span> <span class="price-old">$${Number(livePriceBase).toFixed(2)}</span>` : `$${Number(unitPrice).toFixed(2)}`}${promo ? ` <small style="color:var(--muted);margin-left:6px">(${escapeHtml(promo.name||'promo')})</small>` : ''}</div>`;
     const controls = document.createElement('div'); controls.className = 'ci-controls'; controls.innerHTML = `<div class="qty" role="group" aria-label="Cantidad"><button class="qty-dec" aria-label="Disminuir">−</button><div class="val" aria-live="polite">${item.qty}</div><button class="qty-inc" aria-label="Aumentar">+</button></div><button class="btn btn-ghost remove">Eliminar</button>`;
     row.appendChild(img); row.appendChild(info); row.appendChild(controls); container.appendChild(row);
-    subtotal += (item.meta?.price||0) * item.qty;
+    subtotal += Number(unitPrice || 0) * item.qty;
     // bindings
     controls.querySelector('.qty-inc').addEventListener('click', ()=> setCartItem(item.id, item.qty+1));
     controls.querySelector('.qty-dec').addEventListener('click', ()=> setCartItem(item.id, item.qty-1));
@@ -224,7 +338,20 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
 
 // bindings for cart UI
 (function bindCartUI(){
-  document.addEventListener('click',(ev)=>{ const add = ev.target.closest && ev.target.closest('.btn-add'); if(add){ ev.preventDefault(); ev.stopPropagation(); const id = add.dataset.id; addToCart(String(id), 1); openCart(String(id)); return; } });
+  document.addEventListener('click',(ev)=>{ 
+    const add = ev.target.closest && ev.target.closest('.btn-add'); 
+    if(add){ 
+      ev.preventDefault(); ev.stopPropagation(); 
+      const id = add.dataset.id; 
+      // try to find the product image in the same card to animate from
+      const card = add.closest && add.closest('.product-card');
+      const img = card && card.querySelector('img');
+      addToCart(String(id), 1, img || null); 
+      openCart(String(id)); 
+      return; 
+    } 
+  });
+
   const fab = document.getElementById('cartButton'); if(fab) fab.addEventListener('click', ()=>{ const drawer = document.getElementById('cartDrawer'); if(drawer.getAttribute('aria-hidden')==='true') openCart(); else closeCart(); });
   const closeBtn = document.getElementById('closeCart'); if(closeBtn) closeBtn.addEventListener('click', closeCart);
   const clearBtn = document.getElementById('clearCart'); if(clearBtn) clearBtn.addEventListener('click', ()=>{ if(confirm('Vaciar el carrito?')) clearCart(); });
