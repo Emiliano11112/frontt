@@ -1,32 +1,25 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Catálogo · DistriAr</title>
+  <title>Catálogo</title>
   <link rel="stylesheet" href="catalogo.css">
 </head>
-
 <body>
 
-<main class="page">
-  <h1 class="title">Catálogo de productos</h1>
-
-  <div class="catalog-controls">
-    <div class="filters">
-      <button data-filter="all" class="active">Todos</button>
-      <button data-filter="lacteos">Lácteos</button>
-      <button data-filter="fiambres">Fiambres</button>
-      <button data-filter="complementos">Complementos</button>
-      <button data-filter="promociones">Promociones</button>
-    </div>
-
-    <input id="searchInput" type="search" placeholder="Buscar producto…" />
+<section class="controls">
+  <input id="searchInput" type="search" placeholder="Buscar producto..." />
+  <div class="filters">
+    <button data-filter="all" class="active">Todos</button>
+    <button data-filter="lacteos">Lácteos</button>
+    <button data-filter="fiambres">Fiambres</button>
+    <button data-filter="complementos">Complementos</button>
   </div>
+</section>
 
-  <div id="catalogGrid"></div>
-</main>
+<section id="catalogGrid"></section>
 
-<script defer src="catalogo.js"></script>
+<script src="catalogo.js"></script>
 </body>
 </html>

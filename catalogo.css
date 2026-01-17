@@ -7,36 +7,29 @@
 body {
   font-family: system-ui, sans-serif;
   background: #f6f8fc;
-  color: #0f172a;
+  padding: 24px;
 }
 
-.page {
-  padding: 40px;
-}
-
-.title {
-  margin-bottom: 20px;
-}
-
-.catalog-controls {
+.controls {
   display: flex;
-  flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 24px;
+  flex-wrap: wrap;
 }
 
-.filters {
-  display: flex;
-  gap: 8px;
+.controls input {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  flex: 1;
 }
 
 .filters button {
-  border: 1px solid #c7d2fe;
-  background: white;
-  padding: 6px 12px;
-  border-radius: 999px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: none;
+  background: #e5e7eb;
   cursor: pointer;
-  font-weight: 600;
 }
 
 .filters button.active {
@@ -44,32 +37,23 @@ body {
   color: white;
 }
 
-#searchInput {
-  padding: 8px 14px;
-  border-radius: 8px;
-  border: 1px solid #cbd5f5;
-  min-width: 220px;
-  flex: 1;
-}
-
 #catalogGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 22px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 20px;
 }
 
 .product-card {
   background: white;
-  border-radius: 16px;
-  box-shadow: 0 10px 28px rgba(0,0,0,.08);
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.08);
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  position: relative;
 }
 
 .product-image {
-  height: 170px;
+  height: 160px;
   background: #f1f5f9;
   display: flex;
   align-items: center;
@@ -83,15 +67,14 @@ body {
 }
 
 .product-info {
-  padding: 16px;
+  padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  flex: 1;
 }
 
 .product-info h3 {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -100,27 +83,7 @@ body {
   color: #475569;
 }
 
-.product-footer {
-  margin-top: auto;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
 .price {
   font-weight: 800;
-}
-
-.tag {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  background: #22c55e;
-  color: white;
-  padding: 4px 10px;
-  font-size: 11px;
-  border-radius: 999px;
-}
-.tag.sale {
-  background: #ef4444;
+  margin-top: auto;
 }
