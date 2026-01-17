@@ -16,6 +16,21 @@
     <button data-filter="fiambres">Fiambres</button>
     <button data-filter="complementos">Complementos</button>
   </div>
+
+  <!-- Auto-refresh control -->
+  <div class="auto-refresh" aria-hidden="false">
+    <div class="auto-controls">
+      <label class="switch">
+        <input id="autoRefreshToggle" type="checkbox" checked>
+        <span class="slider"></span>
+      </label>
+      <div class="auto-info">
+        <div class="mode">Auto‑refresh <span id="autoMode">soft</span></div>
+        <div class="countdown">Actualiza en <span id="refreshCountdown">30</span>s</div>
+      </div>
+    </div>
+    <div class="last-updated" id="lastUpdated" aria-live="polite">Última actualización: —</div>
+  </div>
 </section>
 
 <section id="catalogGrid"></section>
