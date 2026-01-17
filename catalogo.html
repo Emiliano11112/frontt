@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Catálogo</title>
   <link rel="stylesheet" href="catalogo.css">
+  <link rel="icon" href="/images/icon.png" />
 </head>
 <body>
 
@@ -34,6 +35,29 @@
 </section>
 
 <section id="catalogGrid"></section>
+
+<!-- Cart drawer + floating cart button -->
+<aside id="cartDrawer" class="cart-drawer" aria-hidden="true" aria-label="Carrito de compras">
+  <div class="cart-inner" role="region" aria-live="polite">
+    <header class="cart-head">
+      <h3>Tu carrito</h3>
+      <button id="closeCart" class="cart-close" aria-label="Cerrar carrito">✕</button>
+    </header>
+    <div id="cartItems" class="cart-items" tabindex="0"></div>
+    <div class="cart-summary">
+      <div class="cart-sub">Subtotal <span id="cartSubtotal">$0.00</span></div>
+      <div class="cart-actions">
+        <button id="clearCart" class="btn btn-ghost">Vaciar</button>
+        <button id="checkoutBtn" class="btn">Pagar</button>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<button id="cartButton" class="cart-fab" aria-label="Abrir carrito">
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6h15l-1.5 9h-12L4 2H2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="10" cy="20" r="1" fill="currentColor"></circle><circle cx="18" cy="20" r="1" fill="currentColor"></circle></svg>
+  <span id="cartCount" class="cart-count" aria-hidden="true">0</span>
+</button>
 
 <script src="catalogo.js"></script>
 </body>
