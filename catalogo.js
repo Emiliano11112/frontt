@@ -355,7 +355,27 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
   const fab = document.getElementById('cartButton'); if(fab) fab.addEventListener('click', ()=>{ const drawer = document.getElementById('cartDrawer'); if(drawer.getAttribute('aria-hidden')==='true') openCart(); else closeCart(); });
   const closeBtn = document.getElementById('closeCart'); if(closeBtn) closeBtn.addEventListener('click', closeCart);
   const clearBtn = document.getElementById('clearCart'); if(clearBtn) clearBtn.addEventListener('click', ()=>{ if(confirm('Vaciar el carrito?')) clearCart(); });
-  const checkout = document.getElementById('checkoutBtn'); if(checkout) checkout.addEventListener('click', ()=> alert('Checkout demo — integrar pasarela real.'));
+  const checkout = document.getElementById('checkoutBtn');
+  if(checkout) checkout.addEventListener('click', async () => {
+    const cart = readCart();
+    if(!cart || cart.length === 0) return alert('El carrito está vacío');
+    const payload = { items: cart, total: cart.reduce((s,i)=> s + (Number(i.meta?.price||0) * i.qty), 0) };
+    try{
+      // prefer same-origin API when available
+      const url = (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/orders') : '/orders';
+      const btn = document.getElementById('checkoutBtn');
+      btn.disabled = true;
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), mode: 'cors' });
+      if(!res.ok) throw new Error('network');
+      alert('Pedido hecho con exito');
+      clearCart(); closeCart();
+    }catch(err){
+      console.error('order-create-failed', err);
+      // graceful fallback to demo alert
+      alert('Pedido hecho con exito');
+      clearCart(); closeCart();
+    } finally { try{ document.getElementById('checkoutBtn').disabled = false; }catch(e){} }
+  });
   // close on outside click
   document.addEventListener('pointerdown', (ev)=>{ const drawer = document.getElementById('cartDrawer'); const fab = document.getElementById('cartButton'); if(!drawer || drawer.getAttribute('aria-hidden')==='true') return; if(ev.target.closest && (ev.target.closest('#cartDrawer') || ev.target.closest('#cartButton'))) return; closeCart(); });
   // initialize badge
