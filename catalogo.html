@@ -4,51 +4,28 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Catálogo · DistriAr</title>
-
   <link rel="stylesheet" href="catalogo.css">
 </head>
 
 <body>
+<main class="page">
+  <h1 class="title">Catálogo de productos</h1>
 
-<main style="padding:40px">
-  <h1 style="margin-bottom:20px">Catálogo de productos</h1>
+  <div class="catalog-controls">
+    <div class="filters">
+      <button data-filter="all" class="active">Todos</button>
+      <button data-filter="lacteos">Lácteos</button>
+      <button data-filter="fiambres">Fiambres</button>
+      <button data-filter="complementos">Complementos</button>
+      <button data-filter="promociones">Promociones</button>
+    </div>
 
-  <div id="catalogGrid">
-    <article class="product-card">
-      <span class="tag">Promo</span>
-
-      <div class="product-image">
-        <img src="https://via.placeholder.com/300x200" alt="Producto">
-      </div>
-
-      <div class="product-info">
-        <h3>Producto Test</h3>
-        <p>Descripción visible del producto</p>
-
-        <div class="product-footer">
-          <span class="price">$100</span>
-          <button class="add-btn">Agregar</button>
-        </div>
-      </div>
-    </article>
-
-    <article class="product-card">
-      <div class="product-image">
-        <img src="https://via.placeholder.com/300x200" alt="Producto">
-      </div>
-
-      <div class="product-info">
-        <h3>Otro producto</h3>
-        <p>Funciona correctamente</p>
-
-        <div class="product-footer">
-          <span class="price">$250</span>
-          <button class="add-btn">Agregar</button>
-        </div>
-      </div>
-    </article>
+    <input id="searchInput" type="search" placeholder="Buscar producto…" />
   </div>
+
+  <div id="catalogGrid"></div>
 </main>
 
+<script src="catalogo.js"></script>
 </body>
 </html>

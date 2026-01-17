@@ -1,131 +1,67 @@
-const API_BASE = 'https://backend-0lcs.onrender.com';
+const API_URL = "/api/productos"; // ← tu backend real acá
 
-const catalogGrid = document.getElementById('catalogGrid');
-const searchInput = document.getElementById('search');
-const filterButtons = document.querySelectorAll('.filter-btn');
+const grid = document.getElementById("catalogGrid");
+const searchInput = document.getElementById("searchInput");
+const filterButtons = document.querySelectorAll(".filters button");
 
-let PRODUCTS = [];
-let FILTER = 'all';
-let CART = JSON.parse(localStorage.getItem('cart') || '[]');
+let productos = [];
+let filtroActual = "all";
 
-/* =========================
-   FETCH PRODUCTS
-========================= */
-async function loadProducts() {
-  const res = await fetch(`${API_BASE}/products`);
-  PRODUCTS = await res.json();
-  renderProducts(PRODUCTS);
+async function cargarProductos() {
+  const res = await fetch(API_URL);
+  productos = await res.json();
+  render();
 }
 
-/* =========================
-   RENDER
-========================= */
-function renderProducts(list) {
-  catalogGrid.innerHTML = '';
+function render() {
+  const texto = searchInput.value.toLowerCase();
 
-  if (!list.length) {
-    catalogGrid.innerHTML = `<p style="opacity:.6">No hay productos</p>`;
-    return;
-  }
+  const filtrados = productos.filter(p => {
+    const matchFiltro =
+      filtroActual === "all" ||
+      (filtroActual === "promociones" && p.promocion) ||
+      p.categoria === filtroActual;
 
-  list.forEach(p => {
-    const card = document.createElement('article');
-    card.className = 'product-card';
-    card.dataset.category = p.category || '';
+    const matchTexto =
+      p.nombre.toLowerCase().includes(texto) ||
+      p.descripcion.toLowerCase().includes(texto);
+
+    return matchFiltro && matchTexto;
+  });
+
+  grid.innerHTML = "";
+
+  filtrados.forEach(p => {
+    const card = document.createElement("article");
+    card.className = "product-card";
 
     card.innerHTML = `
+      ${p.promocion ? `<span class="tag">Promo</span>` : ""}
       <div class="product-image">
-        <img src="${API_BASE}${p.image_url || ''}" alt="${p.name}">
+        <img src="${p.imagen}" alt="${p.nombre}" loading="lazy">
       </div>
       <div class="product-info">
-        <h3>${p.name}</h3>
-        <p>${p.description || ''}</p>
+        <h3>${p.nombre}</h3>
+        <p>${p.descripcion}</p>
         <div class="product-footer">
-          <span class="price">$${p.price}</span>
-          <button class="add-btn">Agregar</button>
+          <span class="price">$${p.precio}</span>
         </div>
       </div>
     `;
 
-    card.querySelector('.add-btn').onclick = () => addToCart(p);
-    catalogGrid.appendChild(card);
+    grid.appendChild(card);
   });
 }
 
-/* =========================
-   FILTERS
-========================= */
-function applyFilters() {
-  let filtered = [...PRODUCTS];
-
-  if (FILTER !== 'all') {
-    filtered = filtered.filter(p => p.category === FILTER);
-  }
-
-  const q = searchInput.value.toLowerCase().trim();
-  if (q) {
-    filtered = filtered.filter(p =>
-      p.name.toLowerCase().includes(q) ||
-      (p.description || '').toLowerCase().includes(q)
-    );
-  }
-
-  renderProducts(filtered);
-}
+searchInput.addEventListener("input", render);
 
 filterButtons.forEach(btn => {
-  btn.onclick = () => {
-    filterButtons.forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    FILTER = btn.dataset.filter;
-    applyFilters();
-  };
+  btn.addEventListener("click", () => {
+    filterButtons.forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    filtroActual = btn.dataset.filter;
+    render();
+  });
 });
 
-searchInput.addEventListener('input', applyFilters);
-
-/* =========================
-   CART
-========================= */
-function addToCart(product) {
-  const found = CART.find(p => p.id === product.id);
-  if (found) {
-    found.qty++;
-  } else {
-    CART.push({ ...product, qty: 1 });
-  }
-  saveCart();
-}
-
-function saveCart() {
-  localStorage.setItem('cart', JSON.stringify(CART));
-  renderCart();
-}
-
-function renderCart() {
-  const drawer = document.getElementById('cartDrawer');
-  const floating = document.getElementById('cartFloating');
-
-  if (!drawer || !floating) return;
-
-  drawer.innerHTML = `
-    <h3>Carrito</h3>
-    ${CART.map(p => `
-      <div class="cart-item">
-        <span>${p.name} x${p.qty}</span>
-        <strong>$${p.price * p.qty}</strong>
-      </div>
-    `).join('')}
-    <hr>
-    <strong>Total: $${CART.reduce((a,p)=>a+p.price*p.qty,0)}</strong>
-  `;
-
-  floating.textContent = CART.reduce((a,p)=>a+p.qty,0);
-  floating.style.display = CART.length ? 'flex' : 'none';
-}
-
-/* =========================
-   INIT
-========================= */
-loadProducts();
-renderCart();
+cargarProductos();
