@@ -1,123 +1,47 @@
-/* =========================
-   AISLAMIENTO TOTAL
-========================= */
 #catalogSection {
-  all: initial;
-  display: block;
-  font-family: Inter, system-ui, sans-serif;
-}
-
-/* =========================
-   GRID
-========================= */
-#catalogGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 20px;
-  padding: 20px 0 80px;
-}
-
-/* =========================
-   CARD
-========================= */
-#catalogGrid .product-card {
-  background: #ffffff;
-  border-radius: 14px;
-  box-shadow: 0 8px 20px rgba(0,0,0,.08);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  position: relative;
-}
-
-/* =========================
-   TAG
-========================= */
-#catalogGrid .tag {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  background: #16a34a;
-  color: white;
-  font-size: 11px;
-  padding: 4px 8px;
-  border-radius: 999px;
-  z-index: 2;
-}
-
-/* =========================
-   IMAGE (CONTROLADA)
-========================= */
-#catalogGrid .product-thumb {
-  width: 100%;
-  height: 140px;
-  object-fit: contain;
-  background: #f1f5f9;
-  padding: 10px;
-}
-
-/* =========================
-   INFO
-========================= */
-#catalogGrid .product-info {
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex: 1;
-}
-
-#catalogGrid .product-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: #0f172a;
-}
-
-#catalogGrid .product-sub {
-  font-size: 13px;
-  color: #475569;
-  line-height: 1.3;
-}
-
-/* =========================
-   ACTIONS
-========================= */
-#catalogGrid .product-actions {
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-#catalogGrid .price {
-  font-size: 15px;
-  font-weight: 800;
-}
-
-/* =========================
-   BUTTON
-========================= */
-#catalogGrid button {
-  border: none;
-  background: #2563eb;
-  color: white;
-  padding: 7px 14px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-/* =========================
-   EMPTY
-========================= */
-#catalogGrid .no-results {
-  grid-column: 1 / -1;
-  text-align: center;
-  opacity: .6;
   padding: 40px;
 }
-#catalogGrid .no-results h2 {
-  font-size: 18px;
-  margin-bottom: 10px;
+
+#catalogGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 24px;
+}
+
+.product-card {
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 10px 25px rgba(0,0,0,.08);
+  display: flex;
+  flex-direction: column;
+}
+
+.product-thumb {
+  width: 100%;
+  height: 200px;
+  object-fit: cover;
+}
+
+.product-info {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.product-title {
+  font-weight: 600;
+}
+
+.product-actions {
+  margin-top: auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.product-price {
+  font-size: 1.2em;
+  font-weight: bold;
+  color: #27ae60;
 }
