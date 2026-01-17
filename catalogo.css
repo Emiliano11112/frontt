@@ -48,8 +48,8 @@ body {
   padding: 8px 14px;
   border-radius: 8px;
   border: 1px solid #cbd5f5;
-  flex: 1;
   min-width: 220px;
+  flex: 1;
 }
 
 #catalogGrid {

@@ -1,67 +1,94 @@
-const API_URL = "/api/productos"; // ← tu backend real acá
+document.addEventListener("DOMContentLoaded", () => {
 
-const grid = document.getElementById("catalogGrid");
-const searchInput = document.getElementById("searchInput");
-const filterButtons = document.querySelectorAll(".filters button");
+  const API_URL = "/api/productos"; // ESTE ES EL ÚNICO PUNTO DE BACKEND
 
-let productos = [];
-let filtroActual = "all";
+  const grid = document.getElementById("catalogGrid");
+  const searchInput = document.getElementById("searchInput");
+  const filterButtons = document.querySelectorAll(".filters button");
 
-async function cargarProductos() {
-  const res = await fetch(API_URL);
-  productos = await res.json();
-  render();
-}
+  let productos = [];
+  let filtroActual = "all";
 
-function render() {
-  const texto = searchInput.value.toLowerCase();
+  async function cargarProductos() {
+    try {
+      const res = await fetch(API_URL, { cache: "no-store" });
 
-  const filtrados = productos.filter(p => {
-    const matchFiltro =
-      filtroActual === "all" ||
-      (filtroActual === "promociones" && p.promocion) ||
-      p.categoria === filtroActual;
+      if (!res.ok) throw new Error("Backend no responde");
 
-    const matchTexto =
-      p.nombre.toLowerCase().includes(texto) ||
-      p.descripcion.toLowerCase().includes(texto);
+      const data = await res.json();
 
-    return matchFiltro && matchTexto;
-  });
+      if (!Array.isArray(data)) throw new Error("JSON inválido");
 
-  grid.innerHTML = "";
-
-  filtrados.forEach(p => {
-    const card = document.createElement("article");
-    card.className = "product-card";
-
-    card.innerHTML = `
-      ${p.promocion ? `<span class="tag">Promo</span>` : ""}
-      <div class="product-image">
-        <img src="${p.imagen}" alt="${p.nombre}" loading="lazy">
-      </div>
-      <div class="product-info">
-        <h3>${p.nombre}</h3>
-        <p>${p.descripcion}</p>
-        <div class="product-footer">
-          <span class="price">$${p.precio}</span>
+      productos = data;
+      render();
+    } catch (err) {
+      grid.innerHTML = `
+        <div style="grid-column:1/-1;opacity:.6;text-align:center">
+          No se pudieron cargar productos
         </div>
-      </div>
-    `;
+      `;
+    }
+  }
 
-    grid.appendChild(card);
+  function render() {
+    const texto = searchInput.value.toLowerCase();
+    grid.innerHTML = "";
+
+    const filtrados = productos.filter(p => {
+      const matchFiltro =
+        filtroActual === "all" ||
+        (filtroActual === "promociones" && p.promocion === true) ||
+        p.categoria === filtroActual;
+
+      const matchTexto =
+        p.nombre?.toLowerCase().includes(texto) ||
+        p.descripcion?.toLowerCase().includes(texto);
+
+      return matchFiltro && matchTexto;
+    });
+
+    if (filtrados.length === 0) {
+      grid.innerHTML = `
+        <div style="grid-column:1/-1;opacity:.6;text-align:center">
+          Sin resultados
+        </div>
+      `;
+      return;
+    }
+
+    filtrados.forEach(p => {
+      const card = document.createElement("article");
+      card.className = "product-card";
+
+      card.innerHTML = `
+        ${p.promocion ? `<span class="tag">Promo</span>` : ""}
+        <div class="product-image">
+          <img src="${p.imagen}" alt="${p.nombre}" loading="lazy"
+               onerror="this.src='https://via.placeholder.com/200x150?text=Sin+imagen'">
+        </div>
+        <div class="product-info">
+          <h3>${p.nombre}</h3>
+          <p>${p.descripcion || ""}</p>
+          <div class="product-footer">
+            <span class="price">$${p.precio}</span>
+          </div>
+        </div>
+      `;
+
+      grid.appendChild(card);
+    });
+  }
+
+  searchInput.addEventListener("input", render);
+
+  filterButtons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      filterButtons.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      filtroActual = btn.dataset.filter;
+      render();
+    });
   });
-}
 
-searchInput.addEventListener("input", render);
-
-filterButtons.forEach(btn => {
-  btn.addEventListener("click", () => {
-    filterButtons.forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-    filtroActual = btn.dataset.filter;
-    render();
-  });
+  cargarProductos();
 });
-
-cargarProductos();
