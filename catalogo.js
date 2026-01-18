@@ -2,9 +2,10 @@
 const API_URL = "https://backend-0lcs.onrender.com/products";
 const API_ORIGIN = new URL(API_URL).origin;
 
-const grid = document.getElementById("catalogGrid");
-const searchInput = document.getElementById("searchInput");
-const filterButtons = document.querySelectorAll(".filters button");
+// DOM references will be initialized in `init()` to avoid race conditions
+let grid = null;
+let searchInput = null;
+let filterButtons = null;
 
 // auto-refresh configuration (seconds)
 const AUTO_REFRESH_SECONDS = 30;
@@ -299,16 +300,30 @@ function render({ animate = false } = {}) {
   });
 
   grid.innerHTML = '';
+  // ensure promotions container exists (separate from product grid)
+  let promosRow = document.getElementById('promotionsRow');
+  if (!promosRow) {
+    promosRow = document.createElement('div');
+    promosRow.id = 'promotionsRow';
+    promosRow.className = 'promotions-row';
+    // insert promotions container before the grid to keep products always visible below
+    grid.parentNode.insertBefore(promosRow, grid);
+  }
+
   if (filtered.length === 0) {
     grid.innerHTML = '<p class="message">No hay resultados</p>';
+    promosRow.innerHTML = ''; // clear promos when no results
     return;
   }
 
   const frag = document.createDocumentFragment();
 
   // Render simple promotion cards for promotions that apply to the currently filtered products
+  // Put promotions into a separate horizontal row so they don't push or hide products on mobile.
   if (Array.isArray(promotions) && promotions.length) {
     const promoFrag = document.createDocumentFragment();
+    // clear previous promos container
+    promosRow.innerHTML = '';
     const seen = new Set();
     promotions.forEach(pr => {
       try {
@@ -347,7 +362,8 @@ function render({ animate = false } = {}) {
         promoFrag.appendChild(card);
       } catch (e) { /* ignore individual promo errors */ }
     });
-    frag.appendChild(promoFrag);
+    // append promos into the promotionsRow (separate from product grid)
+    promosRow.appendChild(promoFrag);
   }
   filtered.forEach((p, i) => {
     const card = document.createElement('article');
@@ -921,32 +937,49 @@ function updateLastUpdated(local = false) {
   });
 })();
 
-// initial load
-fetchProducts();
-// ensure auto-refresh is enabled by default (unless explicitly disabled by the user)
-if (localStorage.getItem('catalog:auto:enabled') === null) localStorage.setItem('catalog:auto:enabled','true');
-// start auto-refresh if enabled
-startAutoRefresh();
-
-searchInput.addEventListener("input", () => { render({ animate: true }); });
-
 // wire clear button (if present)
-const clearBtn = document.querySelector('.search-clear');
-if (clearBtn) {
-  clearBtn.addEventListener('click', (ev) => {
-    ev.preventDefault();
-    try { searchInput.value = ''; searchInput.focus(); render({ animate: true }); } catch (e) { console.error(e); }
-  });
+// small helper to avoid XSS when inserting strings into innerHTML
+// Initialize UI after DOM is ready. Defensive: ensures elements exist so mobile
+// browsers that load scripts early don't cause a hard error that stops rendering.
+function init(){
+  try{
+    grid = document.getElementById("catalogGrid") || (function(){ const s = document.createElement('section'); s.id='catalogGrid'; document.body.appendChild(s); return s;} )();
+    searchInput = document.getElementById("searchInput") || (function(){ const i = document.createElement('input'); i.id='searchInput'; i.type='search'; document.body.insertBefore(i, grid); return i;} )();
+    filterButtons = document.querySelectorAll(".filters button") || [];
+
+    // initial load
+    try{ fetchProducts(); }catch(e){ console.error('fetchProducts init failed', e); showMessage('No se pudieron cargar productos', 'error'); }
+    // ensure auto-refresh is enabled by default (unless explicitly disabled by the user)
+    if (localStorage.getItem('catalog:auto:enabled') === null) localStorage.setItem('catalog:auto:enabled','true');
+    // start auto-refresh if enabled
+    startAutoRefresh();
+
+    if (searchInput) searchInput.addEventListener("input", () => { render({ animate: true }); });
+
+    // wire clear button (if present)
+    const clearBtn = document.querySelector('.search-clear');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        try { searchInput.value = ''; searchInput.focus(); render({ animate: true }); } catch (e) { console.error(e); }
+      });
+    }
+
+    if (filterButtons && filterButtons.forEach) {
+      filterButtons.forEach(btn => {
+        btn.addEventListener("click", () => {
+          filterButtons.forEach(b => b.classList.remove("active"));
+          btn.classList.add("active");
+          currentFilter = btn.dataset.filter;
+          render({ animate: true });
+        });
+      });
+    }
+  }catch(err){ console.error('init failed', err); }
 }
 
-filterButtons.forEach(btn => {
-  btn.addEventListener("click", () => {
-    filterButtons.forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-    currentFilter = btn.dataset.filter;
-    render({ animate: true });
-  });
-});
+// run init when DOM ready
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
 // small helper to avoid XSS when inserting strings into innerHTML
 function escapeHtml(str) {

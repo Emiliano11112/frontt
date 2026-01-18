@@ -40,6 +40,12 @@ body{
 
  #catalogGrid{max-width:1180px;margin:12px auto;padding:0 12px 40px;display:grid;grid-template-columns:repeat(4,1fr);gap:var(--gap)}
 
+/* promotions row: separate container above the products grid */
+.promotions-row{max-width:1180px;margin:12px auto;padding:0 12px 12px;display:flex;gap:12px;align-items:flex-start;overflow-x:auto}
+.promotions-row .promotion-card{flex:0 0 320px;min-width:240px}
+.promotions-row::-webkit-scrollbar{height:8px}
+.promotions-row::-webkit-scrollbar-thumb{background:rgba(10,34,64,0.08);border-radius:8px}
+
 .product-card{background:linear-gradient(180deg,#ffffff,#fffaf6);border-radius:12px;padding:10px;border:1px solid rgba(6,26,43,0.06);display:flex;flex-direction:column;gap:8px;position:relative;transition:box-shadow .18s ease}
 /* remove whole-card lift effect; keep a subtle shadow on hover only (no transform) */
 .product-card:hover{box-shadow:0 14px 36px rgba(6,26,43,0.06)}
@@ -107,6 +113,10 @@ body{
 /* small utilities and responsive */
 @media (max-width:1024px){#catalogGrid{grid-template-columns:repeat(2,1fr)}}
 @media (max-width:700px){#catalogGrid{grid-template-columns:1fr;padding:0 12px}.controls{flex-direction:column;align-items:stretch}.product-image{height:140px}}
+@media (max-width:700px){
+  .promotions-row{padding-left:12px;padding-right:12px;gap:10px}
+  .promotions-row .promotion-card{flex:0 0 260px;min-width:220px}
+}
 
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 
