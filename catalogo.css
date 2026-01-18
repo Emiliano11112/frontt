@@ -332,6 +332,21 @@ body{
   .promotion-card{flex-direction:row}
   .promotion-card .product-thumb{flex:0 0 96px;height:96px}
 }
+# Mobile-specific visibility fixes
+@media (max-width:740px){
+  /* Ensure reveal animations don't keep cards invisible on narrow viewports */
+  .product-card.reveal{ opacity:1 !important; transform:none !important; animation:none !important; }
+
+  /* Remove decorative pseudo-elements that may overlap images */
+  .product-card::before, .product-card::after{ display:none !important; }
+
+  /* Bring images to front and force visibility */
+  .product-image, .product-image img, .promotion-card img, .product-thumb img{ position:relative !important; z-index:999 !important; opacity:1 !important; visibility:visible !important; transform:none !important; }
+
+  /* Ensure the promotions row and grid don't create new stacking contexts hiding images */
+  #catalogGrid, .promotions-row{ z-index:0; }
+}
+
 
 /* Emergency visibility fixes for small screens where images were hidden */
 #catalogGrid, .promotions-row { position: relative; z-index: 0; }
