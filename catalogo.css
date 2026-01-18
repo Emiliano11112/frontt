@@ -332,7 +332,7 @@ body{
   .promotion-card{flex-direction:row}
   .promotion-card .product-thumb{flex:0 0 96px;height:96px}
 }
-# Mobile-specific visibility fixes
+/* Mobile-specific visibility fixes */
 @media (max-width:740px){
   /* Ensure reveal animations don't keep cards invisible on narrow viewports */
   .product-card.reveal{ opacity:1 !important; transform:none !important; animation:none !important; }
@@ -364,7 +364,6 @@ body{
   .price-badge, .product-card .price-bubble, .promotion-card .price-display{ position:absolute; right:14px; top:12px; z-index:1250; }
   .product-card::before, .product-card::after{ display:none !important; }
   .promotion-card{ min-width:220px; flex:0 0 auto; border-radius:12px; padding:12px; box-shadow:none; border:1px solid rgba(6,26,43,0.04); background:linear-gradient(180deg,#fff,#fffef8); }
-}
 }
 
 /* Extra aggressive mobile visibility fixes (debug & fix) */
