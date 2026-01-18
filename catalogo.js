@@ -144,10 +144,18 @@ function normalize(p) {
 } 
 
 function showMessage(msg, level = "info") {
-  grid.innerHTML = `<p class="message ${level}" role="status" aria-live="polite">${msg}</p>`;
+  try{
+    if (!grid) {
+      grid = document.getElementById('catalogGrid') || (function(){ const s = document.createElement('section'); s.id='catalogGrid'; document.body.appendChild(s); return s;} )();
+    }
+    grid.innerHTML = `<p class="message ${level}" role="status" aria-live="polite">${msg}</p>`;
+  }catch(e){ console.error('showMessage failed', e); }
 }
 
 function renderSkeleton(count = 6) {
+  if (!grid) {
+    grid = document.getElementById('catalogGrid') || (function(){ const s = document.createElement('section'); s.id='catalogGrid'; document.body.appendChild(s); return s;} )();
+  }
   grid.innerHTML = '';
   const frag = document.createDocumentFragment();
   for (let i = 0; i < count; i++) {
@@ -289,6 +297,16 @@ function animateFlyToCart(sourceImg){
 }
 
 function render({ animate = false } = {}) {
+  // defensive: ensure `grid` exists in the DOM. If not, create a visible fallback
+  if (!grid) {
+    grid = document.getElementById('catalogGrid');
+    if (!grid) {
+      grid = document.createElement('section');
+      grid.id = 'catalogGrid';
+      document.body.appendChild(grid);
+    }
+  }
+  grid.style.minHeight = grid.style.minHeight || '200px';
   const search = (searchInput.value || '').toLowerCase();
   const filtered = products.filter(p => {
     const matchesSearch =
@@ -307,7 +325,10 @@ function render({ animate = false } = {}) {
     promosRow.id = 'promotionsRow';
     promosRow.className = 'promotions-row';
     // insert promotions container before the grid to keep products always visible below
-    grid.parentNode.insertBefore(promosRow, grid);
+    try{
+      if (grid.parentNode) grid.parentNode.insertBefore(promosRow, grid);
+      else document.body.insertBefore(promosRow, grid);
+    }catch(e){ document.body.appendChild(promosRow); }
   }
 
   if (filtered.length === 0) {
@@ -980,6 +1001,25 @@ function init(){
 
 // run init when DOM ready
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+
+// Create a visible overlay for uncaught errors so mobile users see what's failing
+function showOverlayError(msg){
+  try{
+    let o = document.getElementById('__catalog_error_overlay');
+    if (!o){
+      o = document.createElement('div'); o.id='__catalog_error_overlay';
+      o.style.position='fixed'; o.style.left='12px'; o.style.right='12px'; o.style.top='12px'; o.style.zIndex='2000'; o.style.padding='12px 16px'; o.style.background='#ffecec'; o.style.border='2px solid #ff6b6b'; o.style.borderRadius='10px'; o.style.color='#2b2b2b'; o.style.fontWeight='700'; o.style.boxShadow='0 12px 40px rgba(0,0,0,0.12)';
+      const btn = document.createElement('button'); btn.textContent='Cerrar'; btn.style.float='right'; btn.style.marginLeft='10px'; btn.style.background='transparent'; btn.style.border='none'; btn.style.cursor='pointer'; btn.addEventListener('click', ()=>o.remove());
+      o.appendChild(btn);
+      const txt = document.createElement('div'); txt.id='__catalog_error_text'; txt.style.marginRight='48px'; o.appendChild(txt);
+      document.body.appendChild(o);
+    }
+    const t = document.getElementById('__catalog_error_text'); if (t) t.textContent = String(msg).slice(0,800);
+  }catch(e){ console.error('showOverlayError failed', e); }
+}
+
+window.addEventListener('error', function(ev){ try{ showOverlayError('Error: '+(ev && ev.message ? ev.message : String(ev))); }catch(e){} });
+window.addEventListener('unhandledrejection', function(ev){ try{ showOverlayError('Promise rejection: '+(ev && ev.reason ? String(ev.reason) : String(ev))); }catch(e){} });
 
 // small helper to avoid XSS when inserting strings into innerHTML
 function escapeHtml(str) {
