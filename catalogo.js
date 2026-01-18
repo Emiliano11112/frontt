@@ -9,6 +9,8 @@ const filterButtons = document.querySelectorAll(".filters button");
 // auto-refresh configuration (seconds)
 const AUTO_REFRESH_SECONDS = 30;
 let products = [];
+// indica si los productos fueron cargados desde el API remoto o desde el archivo local
+let productsSource = 'api';
 let currentFilter = "all";
 let autoTimer = null;
 let countdownTimer = null;
@@ -21,6 +23,8 @@ let promotions = [];
 
 async function fetchPromotions(){
   const tryUrls = [
+    '/promotions',
+    '/promociones',
     `${API_ORIGIN}/promotions`,
     `${API_ORIGIN}/promociones`,
     'promotions.json',
@@ -31,28 +35,89 @@ async function fetchPromotions(){
       const res = await fetch(url, { mode: 'cors' });
       if (!res.ok) continue;
       const data = await res.json();
-      if (Array.isArray(data) && data.length>0){ promotions = data; return promotions; }
+      // tolerate different payload shapes: array, { promotions: [...] }, { data: [...] }
+      let list = [];
+      if (Array.isArray(data)) list = data;
+      else if (data && Array.isArray(data.promotions)) list = data.promotions;
+      else if (data && Array.isArray(data.data)) list = data.data;
+
+      if (list.length > 0){ promotions = list; return promotions; }
     } catch (err) { /* ignore and try next */ }
   }
+  // fallback: try promotions saved by the admin UI in localStorage (same-origin admin)
+  try {
+    const stored = localStorage.getItem('admin_promotions_v1');
+    if (stored) {
+      const data = JSON.parse(stored);
+      if (Array.isArray(data) && data.length > 0) {
+        promotions = data;
+        return promotions;
+      }
+    }
+  } catch (err) { /* ignore parsing errors */ }
+
   promotions = [];
   return promotions;
 }
 
-function getBestPromotionForProduct(productId){
+// Listen for admin broadcasts (when admin saves promotions it uses BroadcastChannel 'promo_channel')
+try{
+  if (typeof BroadcastChannel !== 'undefined'){
+    const bc = new BroadcastChannel('promo_channel');
+    bc.onmessage = (ev) => {
+      try{
+        if (!ev.data) return;
+        // admin posts { action: 'promotions-updated', promos }
+        if (ev.data.action === 'promotions-updated' && Array.isArray(ev.data.promos)){
+          promotions = ev.data.promos;
+          console.log('[catalogo] promotions updated via BroadcastChannel', promotions);
+          // re-render catalog to reflect promotion changes
+          try{ render({ animate: true }); }catch(e){}
+        }
+      }catch(e){/* ignore */}
+    };
+  }
+}catch(e){/* ignore if BroadcastChannel unavailable */}
+
+function getBestPromotionForProduct(product){
   if (!promotions || promotions.length===0) return null;
-  const pid = Number(productId);
-  // find promotions that include this productId
-  const matches = promotions.filter(pr => Array.isArray(pr.productIds) && pr.productIds.some(x => Number(x) === pid));
+  // allow passing either a product object or an id/string
+  let candidates = [];
+  const prodObj = (typeof product === 'object' && product !== null) ? product : null;
+  const prodId = prodObj ? (prodObj.id ?? prodObj._id ?? prodObj._id_str ?? prodObj.sku) : product;
+  const prodName = prodObj ? (prodObj.nombre || prodObj.name || '') : '';
+  const pidStr = prodId !== undefined && prodId !== null ? String(prodId) : null;
+
+  const matches = promotions.filter(pr => {
+    if (!pr || !Array.isArray(pr.productIds)) return false;
+    return pr.productIds.some(x => {
+      if (x === undefined || x === null) return false;
+      const xs = String(x);
+      if (pidStr && xs === pidStr) return true;
+      // also accept numeric equality when possible
+      if (pidStr && !Number.isNaN(Number(xs)) && !Number.isNaN(Number(pidStr)) && Number(xs) === Number(pidStr)) return true;
+      // allow matching by product name (useful if admin saved names)
+      if (prodName && xs.toLowerCase() === prodName.toLowerCase()) return true;
+      return false;
+    });
+  });
+
   if (!matches.length) return null;
-  // prefer the one with highest percent/fixed value (simple heuristic)
-  matches.sort((a,b)=> (b.value||0)-(a.value||0));
+  // prefer the one with highest value (percent/fixed)
+  matches.sort((a,b)=> (Number(b.value)||0) - (Number(a.value)||0));
   return matches[0];
 }
 
 function getDiscountedPrice(price, promo){
   if (!promo) return price;
-  const val = Number(promo.value || 0);
-  if (promo.type === 'percent') return Math.max(0, +(price * (1 - val/100)).toFixed(2));
+  let val = Number(promo.value || 0);
+  if (promo.type === 'percent') {
+    // Support promotions where `value` is a fraction (0.12) or a percent (12)
+    if (val > 0 && val <= 1) {
+      return Math.max(0, +(price * (1 - val)).toFixed(2));
+    }
+    return Math.max(0, +(price * (1 - val / 100)).toFixed(2));
+  }
   if (promo.type === 'fixed') return Math.max(0, +(price - val).toFixed(2));
   return price;
 }
@@ -64,9 +129,18 @@ function normalize(p) {
   const category = (p.categoria || p.category || "").trim();
   const price = p.precio ?? p.price ?? 0;
   let image = p.imagen || p.image || p.image_url || p.imageUrl || null;
-  if (image && image.startsWith("/")) image = API_ORIGIN + image;
+  // Si la ruta es relativa (empieza por '/') no anteponer el origen remoto cuando los
+  // datos proceden del `products.json` local — así los assets locales se resuelven correctamente
+  if (image && image.startsWith('/')) {
+    if (productsSource === 'api') {
+      image = API_ORIGIN + image;
+    } else {
+      // mantener ruta relativa para que el servidor local la sirva
+      image = image;
+    }
+  }
   return { ...p, nombre: name, descripcion: description, categoria: category, precio: price, imagen: image };
-}
+} 
 
 function showMessage(msg, level = "info") {
   grid.innerHTML = `<p class="message ${level}" role="status" aria-live="polite">${msg}</p>`;
@@ -88,32 +162,102 @@ function renderSkeleton(count = 6) {
     frag.appendChild(card);
   }
   grid.appendChild(frag);
+
+  // Wire promotion card buttons (filter to promo products when clicked)
+  try{
+    document.querySelectorAll('.promotion-card .promo-view').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const pid = btn.getAttribute('data-pid');
+        const promo = promotions.find(p => String(p.id) === String(pid));
+        if (!promo) return;
+        // set filter to show only products in this promotion
+        const ids = Array.isArray(promo.productIds) ? promo.productIds.map(x => String(x)) : [];
+        // narrow products to those matching ids (or names)
+        const matched = products.filter(p => ids.includes(String(p.id ?? p._id ?? p.nombre ?? p.name ?? '')) || ids.includes(String(p.nombre || p.name || '')));
+        if (matched.length) {
+          // temporarily render only matched products
+          grid.innerHTML = '';
+          const mf = document.createDocumentFragment();
+          matched.forEach((p,i) => {
+            const card = document.createElement('article');
+            card.className = 'product-card';
+            card.dataset.pid = String(p.id ?? p._id ?? i);
+            card.innerHTML = `
+              <div class="product-image">
+                <div class="price-badge">$${Number(p.precio || p.price || 0).toFixed(2)}</div>
+                <img src="${p.imagen || 'images/placeholder.png'}" alt="${escapeHtml(p.nombre || p.name || '')}" loading="lazy">
+              </div>
+              <div class="product-info">
+                <h3>${escapeHtml(p.nombre || p.name || '')}</h3>
+                <p>${escapeHtml(p.descripcion || p.description || '')}</p>
+                <div class="price">$${Number(p.precio || p.price || 0).toFixed(2)}</div>
+                <div class="card-actions"><button class="btn btn-add" data-id="${String(p.id ?? p._id ?? i)}">Agregar</button></div>
+              </div>`;
+            mf.appendChild(card);
+          });
+          grid.appendChild(mf);
+        }
+      });
+    });
+  }catch(e){/* ignore promo wiring errors */}
 }
 
 async function fetchProducts({ showSkeleton = true } = {}) {
   if (showSkeleton) renderSkeleton();
-  try {
-    const res = await fetch(API_URL, { mode: 'cors', cache: 'no-store' });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    const data = await res.json();
-    products = data.map(normalize);
-    // try to load promotions (best-effort)
-    await fetchPromotions();
-    render({ animate: true });
-    updateLastUpdated();
-  } catch (err) {
-    console.error('Error cargando productos desde backend:', err);
+  // try multiple endpoints: same-origin -> configured remote -> local static file
+  const tryUrls = ['/products', API_URL, 'products.json'];
+  let data = null;
+  let used = null;
+  for (const url of tryUrls) {
+    try {
+      const res = await fetch(url, { mode: 'cors', cache: 'no-store' });
+      if (!res.ok) continue;
+      const json = await res.json();
+      if (json && (Array.isArray(json) || Array.isArray(json.products) || Array.isArray(json.data))) {
+        data = Array.isArray(json) ? json : (json.products || json.data);
+        used = url;
+        break;
+      }
+    } catch (err) { /* try next */ }
+  }
+
+  if (!data) {
+    // try cached copy
+    try {
+      const cached = localStorage.getItem('catalog:products_cache_v1');
+      if (cached) {
+        const local = JSON.parse(cached);
+        products = local.map(normalize);
+        await fetchPromotions();
+        render({ animate: true });
+        showMessage('Mostrando catálogo desde caché local (offline).', 'info');
+        return;
+      }
+    } catch (cacheErr) { console.warn('cache read failed', cacheErr); }
+
     showMessage('No se pudieron cargar productos desde el backend. Usando catálogo local si está disponible. ⚠️', 'warning');
     try {
       const local = await (await fetch('products.json')).json();
+      productsSource = 'local';
       products = local.map(normalize);
       await fetchPromotions();
       render({ animate: true });
       updateLastUpdated(true);
+      return;
     } catch (e) {
       showMessage('No hay productos disponibles', 'error');
+      return;
     }
   }
+
+  // success
+  productsSource = (used === 'products.json') ? 'local' : 'api';
+  products = data.map(normalize);
+  try { localStorage.setItem('catalog:products_cache_v1', JSON.stringify(data)); localStorage.setItem('catalog:products_cache_ts', String(Date.now())); } catch (e) { /* ignore */ }
+  await fetchPromotions();
+  render({ animate: true });
+  updateLastUpdated();
 }
 
 // visual "fly to cart" effect
@@ -161,6 +305,50 @@ function render({ animate = false } = {}) {
   }
 
   const frag = document.createDocumentFragment();
+
+  // Render simple promotion cards for promotions that apply to the currently filtered products
+  if (Array.isArray(promotions) && promotions.length) {
+    const promoFrag = document.createDocumentFragment();
+    const seen = new Set();
+    promotions.forEach(pr => {
+      try {
+        const prIds = Array.isArray(pr.productIds) ? pr.productIds.map(x => String(x)) : [];
+        const match = filtered.find(p => {
+          const pid = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '');
+          if (prIds.length && prIds.includes(pid)) return true;
+          // fallback: try matching by product name
+          if (prIds.length && prIds.some(x => x.toLowerCase() === String(p.nombre || p.name || '').toLowerCase())) return true;
+          return false;
+        });
+        if (!match || seen.has(pr.id)) return;
+        seen.add(pr.id);
+        const card = document.createElement('article');
+        card.className = 'promotion-card reveal';
+        const imgSrc = match.imagen || match.image || 'images/placeholder.png';
+        // compute readable promo label: support percent as fraction (0.12) or as whole number (12)
+        let promoLabel = 'Oferta';
+        try {
+          if (pr.type === 'percent') {
+            const raw = Number(pr.value || 0);
+            const pct = (raw > 0 && raw <= 1) ? Math.round(raw * 100) : Math.round(raw);
+            promoLabel = `-${pct}%`;
+          } else if (pr.value) {
+            promoLabel = `$${Number(pr.value).toFixed(2)}`;
+          }
+        } catch (e) { promoLabel = 'Oferta'; }
+        card.innerHTML = `
+          <div class="product-thumb"><img src="${imgSrc}" alt="${escapeHtml(match.nombre || match.name || '')}"></div>
+          <div class="product-info">
+            <h3 class="product-title">${escapeHtml(pr.name || 'Promoción')}</h3>
+            <div class="product-sub">${escapeHtml(pr.description || match.descripcion || '')}</div>
+            <div class="price-display">${promoLabel}</div>
+            <div class="product-actions"><button class="btn btn-primary promo-view" data-pid="${escapeHtml(String(pr.id))}">Agregar</button></div>
+          </div>`;
+        promoFrag.appendChild(card);
+      } catch (e) { /* ignore individual promo errors */ }
+    });
+    frag.appendChild(promoFrag);
+  }
   filtered.forEach((p, i) => {
     const card = document.createElement('article');
     card.className = 'product-card';
@@ -179,13 +367,27 @@ function render({ animate = false } = {}) {
     card.dataset.pid = pid;
 
     // check promotion for this product
-    const promo = getBestPromotionForProduct(p.id ?? p._id ?? pid);
+    const promo = getBestPromotionForProduct(p);
     const discounted = promo ? getDiscountedPrice(Number(p.precio ?? p.price ?? 0), promo) : null;
     const isNew = p.created_at ? (Date.now() - new Date(p.created_at).getTime()) < (1000 * 60 * 60 * 24 * 7) : false;
 
+    // build promo ribbon label robustly (supports fractional percent values)
+    let promoRibbon = '';
+    if (promo) {
+      try {
+        if (promo.type === 'percent') {
+          const raw = Number(promo.value || 0);
+          const pct = (raw > 0 && raw <= 1) ? Math.round(raw * 100) : Math.round(raw);
+          promoRibbon = `-${pct}%`;
+        } else if (promo.value) {
+          promoRibbon = `$${Number(promo.value).toFixed(2)}`;
+        }
+      } catch (e) { promoRibbon = '' }
+    }
+
     card.innerHTML = `
       <div class="product-image">
-        ${promo ? `<div class="promo-ribbon">-${promo.type==='percent'?promo.value+'%':'$'+promo.value}</div>` : ''}
+        ${promo && promoRibbon ? `<div class="promo-ribbon">${promoRibbon}</div>` : ''}
         <div class="price-badge">${discounted ? `<span class="price-new">$${Number(discounted).toFixed(2)}</span><span class="price-old">$${Number(p.precio).toFixed(2)}</span>` : `$${Number(p.precio).toFixed(2)}`}</div>
         <img src="${imgSrc}" alt="${escapeHtml(p.nombre)}" loading="lazy" fetchpriority="low">
       </div>
@@ -210,26 +412,50 @@ function render({ animate = false } = {}) {
       } catch (er) { /* ignore */ }
       img.classList.add('img-loaded');
     });
-    img.addEventListener('error', () => { img.src = 'images/placeholder.png'; img.classList.add('img-loaded'); });
+    img.addEventListener('error', () => {
+      try {
+        const tries = Number(img.dataset.tryCount || '0');
+        img.dataset.tryCount = String(tries + 1);
+        // sequence of fallbacks:
+        // 1) if image used API_ORIGIN prefix, remove origin -> try relative
+        if (tries === 0 && img.src && typeof API_ORIGIN === 'string' && img.src.startsWith(API_ORIGIN) && location.origin !== API_ORIGIN) {
+          img.src = img.src.replace(API_ORIGIN, '');
+          return;
+        }
+        // 2) if src starts with leading slash (root-relative), try removing it to load from current folder
+        if (tries === 1 && img.src && img.src.startsWith('/')) {
+          img.src = img.src.replace(/^\//, '');
+          return;
+        }
+        // 3) try loading from local `uploads/` folder (without leading slash)
+        if (tries === 2 && img.src) {
+          const name = img.src.split('/').pop();
+          if (name) { img.src = `uploads/${name}`; return; }
+        }
+        // 4) try loading from `images/` fallback
+        if (tries === 3) { img.src = `images/${img.getAttribute('alt') ? img.getAttribute('alt').replace(/[^a-z0-9\.\-]/gi,'').toLowerCase()+'.png' : 'placeholder.png'}`; return; }
+      } catch (err) { /* ignore */ }
+      // final fallback
+      img.src = 'images/placeholder.png';
+      img.classList.add('img-loaded');
+    });
 
     // stop propagation on Add button and wire add-to-cart (prevents opening lightbox)
     if (addBtn) {
       addBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const id = addBtn.dataset.id;
-        addToCart(String(id), 1, img);
-        openCart(String(id));
+        showQuantitySelector(String(id), img || null);
       });
       addBtn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); addBtn.click(); } });
     }
 
-    // accessible interactions (click / keyboard) for the card (lightbox)
+    // accessible interactions: no lightbox on click — emulate lift animation on click/tap
     card.addEventListener('click', (ev) => {
       // ignore clicks originating from interactive controls inside the card
       if (ev.target.closest && ev.target.closest('.btn')) return;
-      const src = img.getAttribute('src');
-      const promo = getBestPromotionForProduct(p.id ?? p._id ?? pid);
-      openLightbox(src, p.nombre, `${p.descripcion || ''}${promo ? ' — ' + promo.name : ''}`);
+      // card clicks are intentionally inert (no lift effect); keep for accessibility only
+      try { card.focus && card.focus(); } catch (_) {}
     });
     card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); card.click(); } });
 
@@ -242,6 +468,21 @@ function render({ animate = false } = {}) {
     const revealed = grid.querySelectorAll('.product-card.reveal');
     revealed.forEach((el) => el.addEventListener('animationend', () => el.classList.remove('reveal'), { once: true }));
   }
+
+  // Wire promotion buttons: add a single promo-summary item to cart
+  try {
+    document.querySelectorAll('.promotion-card .promo-view').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const pid = btn.getAttribute('data-pid');
+        const promo = promotions.find(p => String(p.id) === String(pid));
+        if (!promo) return;
+        const promoCartId = `promo:${String(promo.id)}`;
+        addToCart(promoCartId, 1, null);
+        openCart();
+      });
+    });
+  } catch (e) { /* ignore wiring errors */ }
 }
 
 /* lightbox: simple, accessible image viewer */
@@ -291,14 +532,113 @@ function writeCart(cart){ localStorage.setItem(CART_KEY, JSON.stringify(cart)); 
 
 function updateCartBadge(){ const count = readCart().reduce((s,i)=>s+i.qty,0); const el = document.getElementById('cartCount'); if(el) el.textContent = String(count); if(count>0){ el.classList.add('has-items'); el.animate?.([{ transform: 'scale(1)' },{ transform: 'scale(1.12)' },{ transform: 'scale(1)' }], { duration: 320 }); } }
 
+/* showQuantitySelector: minimal, scoped modal to choose quantity before adding to cart */
+function showQuantitySelector(productId, sourceEl = null){
+  try{
+    // avoid duplicates
+    const existing = document.getElementById('__qty_selector');
+    if (existing) existing.remove();
+
+    const prod = products.find(x => String(x.id ?? x._id) === String(productId));
+    const title = prod ? (prod.nombre || prod.name || '') : (productId || 'Producto');
+    let qty = 1;
+
+    const overlay = document.createElement('div');
+    overlay.id = '__qty_selector';
+    overlay.className = 'qty-overlay';
+    const imgSrc = prod?.imagen || prod?.image || prod?.image_url || 'images/placeholder.png';
+    const unitPrice = Number(prod?.precio ?? prod?.price ?? 0) || 0;
+    overlay.innerHTML = `
+      <div class="qty-box" role="dialog" aria-modal="true" aria-label="Seleccionar cantidad">
+        <div class="qb-top"><img class="qb-img" src="${imgSrc}" alt="${escapeHtml(String(title))}"></div>
+        <div class="qb-head"><strong>${escapeHtml(String(title))}</strong></div>
+        <div class="qb-controls">
+          <button class="qb-dec" aria-label="Disminuir cantidad">−</button>
+          <div class="qb-val" aria-live="polite">1</div>
+          <button class="qb-inc" aria-label="Aumentar cantidad">+</button>
+        </div>
+        <div class="qb-price">Precio unitario: $${Number(unitPrice).toFixed(2)}</div>
+        <div class="qb-total">Total: $${Number(unitPrice * qty).toFixed(2)}</div>
+        <div class="qb-actions"><button class="btn btn-ghost qb-cancel">Cancelar</button><button class="btn btn-primary qb-confirm">Agregar</button></div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const styleId = '__qty_selector_styles';
+    if (!document.getElementById(styleId)){
+      const s = document.createElement('style'); s.id = styleId; s.textContent = `
+        .qty-overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(6,26,43,0.32);z-index:1550}
+        .qty-box{background:#fff;border-radius:12px;padding:14px;width:320px;max-width:92%;box-shadow:0 20px 60px rgba(6,26,43,0.16);border:1px solid rgba(6,26,43,0.04);display:flex;flex-direction:column;gap:12px;align-items:center}
+        .qb-top{width:100%}
+        .qb-img{width:100%;height:140px;object-fit:contain;border-radius:8px;background:linear-gradient(180deg,#fafafa,#fff);margin-bottom:8px}
+        .qb-head{font-size:15px;color:var(--deep);text-align:center}
+        .qb-controls{display:flex;align-items:center;gap:12px}
+        .qb-controls .qb-val{min-width:46px;text-align:center;font-weight:800}
+        .qb-controls button{width:44px;height:44px;border-radius:10px;border:1px solid rgba(6,26,43,0.06);background:#fff;font-size:20px}
+        .qb-actions{display:flex;gap:8px;justify-content:flex-end;width:100%}
+      `; document.head.appendChild(s);
+    }
+
+    const valEl = overlay.querySelector('.qb-val');
+    const inc = overlay.querySelector('.qb-inc');
+    const dec = overlay.querySelector('.qb-dec');
+    const confirm = overlay.querySelector('.qb-confirm');
+    const cancel = overlay.querySelector('.qb-cancel');
+
+    const totalEl = overlay.querySelector('.qb-total');
+    function refresh() { valEl.textContent = String(qty); try{ totalEl.textContent = `Total: $${Number(unitPrice * qty).toFixed(2)}`; totalEl.classList.add('pulse'); setTimeout(()=> totalEl.classList.remove('pulse'), 220); }catch(_){} }
+    inc.addEventListener('click', ()=>{ if (qty < 99) qty += 1; refresh(); });
+    dec.addEventListener('click', ()=>{ if (qty > 1) qty -= 1; refresh(); });
+    cancel.addEventListener('click', ()=>{ overlay.remove(); });
+    confirm.addEventListener('click', ()=>{ try{ addToCart(String(productId), qty, sourceEl); openCart(String(productId)); }catch(e){console.error(e);} finally{ overlay.remove(); } });
+
+    const onKey = (ev)=>{ if (ev.key === 'Escape') { overlay.remove(); window.removeEventListener('keydown', onKey); } if (ev.key === 'Enter') { confirm.click(); } };
+    window.addEventListener('keydown', onKey);
+    setTimeout(()=>{ confirm.focus(); }, 40);
+  }catch(err){ console.error('showQuantitySelector', err); }
+}
+
 function addToCart(productId, qty = 1, sourceEl = null){
   const cart = readCart();
   const idx = cart.findIndex(i=>i.id===productId);
-  if(idx>=0){ cart[idx].qty = Math.min(99, cart[idx].qty + qty); }
-  else {
-    const p = products.find(x => String(x.id ?? x._id) === String(productId));
-    cart.push({ id: String(productId), qty: Math.min(99, qty), meta: { name: p?.nombre || p?.name || '', price: p?.precio ?? p?.price ?? 0, image: p?.imagen || p?.image || p?.image_url || '' } });
+  if(idx>=0){
+    cart[idx].qty = Math.min(99, cart[idx].qty + qty);
+    writeCart(cart);
+    renderCart();
+    pulseCard(productId);
+    return;
   }
+
+  // Special handling for promo-summary items (id like 'promo:123')
+  if (String(productId).startsWith('promo:')){
+    const promoId = String(productId).split(':')[1];
+    const promo = promotions.find(p => String(p.id) === String(promoId));
+    if (promo) {
+      const included = (Array.isArray(promo.productIds) ? promo.productIds : []).map(pidItem => {
+        const prod = products.find(p => String(p.id ?? p._id) === String(pidItem) || String(p.nombre || p.name || '') === String(pidItem));
+        if (!prod) return null;
+        const unitBase = Number(prod.precio ?? prod.price ?? 0) || 0;
+        const discounted = getDiscountedPrice(unitBase, promo);
+        return { id: String(prod.id ?? prod._id ?? pidItem), name: prod.nombre || prod.name || '', price: Number(discounted || unitBase), image: prod.imagen || prod.image || '' };
+      }).filter(Boolean);
+
+      // if nothing matched, don't add an empty promo
+      if (included.length === 0) return;
+
+      const total = included.reduce((s,i) => s + Number(i.price || 0), 0);
+      cart.push({ id: String(productId), qty: Math.min(99, qty), meta: { name: promo.name || 'Promoción', price: Number(total.toFixed(2)), image: included[0].image || '', products: included } });
+      writeCart(cart);
+      renderCart();
+      // no per-product pulse animation; briefly pulse cart instead
+      try{ document.getElementById('cartButton')?.animate?.([{ transform: 'scale(1)' },{ transform: 'scale(1.06)' },{ transform: 'scale(1)' }], { duration: 380 }); }catch(_){}
+      return;
+    }
+    return;
+  }
+
+  // Default single product add
+  const p = products.find(x => String(x.id ?? x._id) === String(productId));
+  if (!p) return; // avoid adding unknown ids
+  cart.push({ id: String(productId), qty: Math.min(99, qty), meta: { name: p?.nombre || p?.name || '', price: p?.precio ?? p?.price ?? 0, image: p?.imagen || p?.image || p?.image_url || '' } });
   writeCart(cart);
   renderCart();
   pulseCard(productId);
@@ -317,11 +657,17 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     // prefer live product data (to reflect promotions), fallback to stored meta
     const prod = products.find(x => String(x.id ?? x._id) === String(item.id));
     const livePriceBase = prod ? (prod.precio ?? prod.price ?? item.meta?.price ?? 0) : (item.meta?.price ?? 0);
-    const promo = getBestPromotionForProduct(prod?.id ?? item.id);
+    const promo = getBestPromotionForProduct(prod || item);
     const unitPrice = promo ? getDiscountedPrice(livePriceBase, promo) : livePriceBase;
-    info.innerHTML = `
-      <div class="ci-name">${escapeHtml(item.meta?.name||prod?.nombre||'')}</div>
-      <div class="ci-price">${promo ? `<span class="price-new">$${Number(unitPrice).toFixed(2)}</span> <span class="price-old">$${Number(livePriceBase).toFixed(2)}</span>` : `$${Number(unitPrice).toFixed(2)}`}${promo ? ` <small style="color:var(--muted);margin-left:6px">(${escapeHtml(promo.name||'promo')})</small>` : ''}</div>`;
+    // build name and price HTML, support promo-summary items that include multiple products
+    let nameHtml = `<div class="ci-name">${escapeHtml(item.meta?.name||prod?.nombre||'')}</div>`;
+    if (Array.isArray(item.meta?.products) && item.meta.products.length) {
+      const lines = item.meta.products.map(x => `${escapeHtml(x.name || x.id)} — $${Number(x.price || 0).toFixed(2)}`);
+      nameHtml += `<div class="ci-sub" style="font-size:12px;color:var(--muted);margin-top:6px">${lines.join('<br>')}</div>`;
+    }
+
+    const priceHtml = promo ? `<span class="price-new">$${Number(unitPrice).toFixed(2)}</span> <span class="price-old">$${Number(livePriceBase).toFixed(2)}</span> <small style="color:var(--muted);margin-left:6px">(${escapeHtml(promo.name||'promo')})</small>` : `$${Number(unitPrice).toFixed(2)}`;
+    info.innerHTML = `${nameHtml}<div class="ci-price">${priceHtml}</div>`;
     const controls = document.createElement('div'); controls.className = 'ci-controls'; controls.innerHTML = `<div class="qty" role="group" aria-label="Cantidad"><button class="qty-dec" aria-label="Disminuir">−</button><div class="val" aria-live="polite">${item.qty}</div><button class="qty-inc" aria-label="Aumentar">+</button></div><button class="btn btn-ghost remove">Eliminar</button>`;
     row.appendChild(img); row.appendChild(info); row.appendChild(controls); container.appendChild(row);
     subtotal += Number(unitPrice || 0) * item.qty;
@@ -330,7 +676,19 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     controls.querySelector('.qty-dec').addEventListener('click', ()=> setCartItem(item.id, item.qty-1));
     controls.querySelector('.remove').addEventListener('click', ()=> removeFromCart(item.id));
   });
-  subtotalEl.textContent = `$${Number(subtotal).toFixed(2)}`; updateCartBadge(); }
+  // animate subtotal change
+  try{
+    const newVal = Number(subtotal).toFixed(2);
+    const prev = parseFloat(subtotalEl.dataset.prev || '0');
+    subtotalEl.dataset.prev = String(newVal);
+    subtotalEl.innerHTML = `Total: <span class="amount">$${newVal}</span>`;
+    const amt = subtotalEl.querySelector('.amount');
+    if (amt){
+      // pulse when value changes
+      if (Number(newVal) !== Number(prev)) { amt.classList.add('pulse'); setTimeout(()=>amt.classList.remove('pulse'), 280); }
+    }
+  }catch(e){ subtotalEl.textContent = `$${Number(subtotal).toFixed(2)}`; }
+  updateCartBadge(); }
 
 function openCart(prefillId){ const drawer = document.getElementById('cartDrawer'); drawer.setAttribute('aria-hidden','false'); drawer.classList.add('open'); renderCart(); const btn = document.getElementById('cartButton'); btn.setAttribute('aria-expanded','true'); setTimeout(()=>{ const focusTarget = prefillId ? document.querySelector(`.cart-item[data-pid="${prefillId}"] .qty .val`) : document.getElementById('cartItems'); if(focusTarget) focusTarget.focus(); }, 120);
 }
@@ -346,8 +704,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       // try to find the product image in the same card to animate from
       const card = add.closest && add.closest('.product-card');
       const img = card && card.querySelector('img');
-      addToCart(String(id), 1, img || null); 
-      openCart(String(id)); 
+      showQuantitySelector(String(id), img || null);
       return; 
     } 
   });
@@ -394,8 +751,9 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           alert('Pedido enviado — el panel de administración recibirá la orden.');
           clearCart(); closeCart();
         } else {
-          // graceful fallback: still clear locally but inform user
-          alert('No se pudo enviar la orden al servidor; la orden fue guardada localmente.');
+          // graceful fallback: keep el carrito (NO WhatsApp), mostrar modal con opciones al usuario
+          console.warn('Checkout failed — showing fallback modal and keeping cart locally.');
+          showOrderModal(payload);
         }
       } catch (err) {
         console.error('post-checkout-handling', err);
@@ -404,6 +762,81 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       }
     });
   }
+  /* helper: muestra modal accesible con resumen del pedido y opciones (copiar, descargar, reintentar) */
+  function showOrderModal(payload){
+    try{
+      if(document.getElementById('__order_modal')) return document.getElementById('__order_modal').classList.add('open');
+      const modal = document.createElement('div');
+      modal.id = '__order_modal';
+      modal.className = 'order-modal-overlay';
+      const itemsHtml = (payload.items || []).map(i=>`<li style="margin:8px 0"><strong>${escapeHtml(String(i.meta?.name||i.id))}</strong> — ${i.qty} × $${Number(i.meta?.price||0).toFixed(2)}</li>`).join('');
+      modal.innerHTML = `
+        <div class="order-modal" role="dialog" aria-modal="true" aria-label="Resumen del pedido">
+          <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
+            <h3 style="margin:0">Pedido (guardado localmente)</h3>
+            <button class="om-close" aria-label="Cerrar">✕</button>
+          </header>
+          <div style="max-height:52vh;overflow:auto;padding:6px 2px;margin-bottom:12px;color:var(--deep);">
+            <ul style="list-style:none;padding:0;margin:0 0 8px">${itemsHtml || '<li style="color:var(--muted)">(sin ítems)</li>'}</ul>
+            <div style="font-weight:800;margin-top:8px">Total: <span>$${Number(payload.total||0).toFixed(2)}</span></div>
+            <p style="color:var(--muted);margin-top:8px">No se pudo enviar la orden al servidor — puedes <strong>reintentar</strong>, <strong>copiar</strong> o <strong>descargar</strong> el pedido.</p>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
+            <button class="btn btn-ghost om-copy">Copiar pedido</button>
+            <button class="btn btn-ghost om-download">Descargar JSON</button>
+            <button class="btn btn-primary om-retry">Reintentar</button>
+          </div>
+        </div>`;
+      document.body.appendChild(modal);
+      // styles for modal (scoped minimal) — won't override global theme
+      const ss = document.createElement('style'); ss.id = '__order_modal_styles'; ss.textContent = `
+        .order-modal-overlay{ position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.45);z-index:1400;opacity:0;pointer-events:none;transition:opacity .18s ease}
+        .order-modal-overlay.open{opacity:1;pointer-events:auto}
+        .order-modal{width:520px;max-width:calc(100% - 36px);background:var(--surface);border-radius:14px;padding:18px;box-shadow:var(--shadow-lg);border:1px solid rgba(10,34,64,0.04);color:var(--deep)}
+        .order-modal .om-close{background:transparent;border:0;color:var(--muted);font-size:18px;cursor:pointer}
+        @media(max-width:640px){ .order-modal{width:calc(100% - 28px)} }
+      `; document.head.appendChild(ss);
+      requestAnimationFrame(()=> modal.classList.add('open'));
+      // bindings
+      modal.querySelector('.om-close').addEventListener('click', ()=> modal.remove());
+      modal.querySelector('.om-copy').addEventListener('click', ()=>{ copyOrderToClipboard(payload); });
+      modal.querySelector('.om-download').addEventListener('click', ()=>{ const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })); a.download = `pedido-${Date.now()}.json`; document.body.appendChild(a); a.click(); a.remove(); });
+      modal.querySelector('.om-retry').addEventListener('click', async (ev)=>{
+        ev.target.disabled = true;
+        const ok = await reAttemptOrder(payload);
+        ev.target.disabled = false;
+        if (ok) { modal.remove(); alert('Pedido enviado — el panel de administración recibirá la orden.'); clearCart(); closeCart(); }
+        else { alert('No se pudo enviar la orden. Puedes copiar o descargar el pedido y enviarlo manualmente.'); }
+      });
+      // focus
+      const focusable = modal.querySelector('.om-retry') || modal.querySelector('.om-copy');
+      if (focusable) focusable.focus();
+      // close on Esc
+      const onKey = (ev)=>{ if (ev.key === 'Escape') { modal.remove(); window.removeEventListener('keydown', onKey); } };
+      window.addEventListener('keydown', onKey);
+    }catch(err){ console.error('showOrderModal', err); alert('No se pudo mostrar el modal del pedido — revisa la consola.'); }
+  }
+
+  function copyOrderToClipboard(payload){
+    try{
+      const lines = (payload.items||[]).map(i=>`${i.qty} × ${i.meta?.name || i.id} — $${Number(i.meta?.price||0).toFixed(2)}`);
+      const txt = `Pedido:\n${lines.join('\n')}\n\nTotal: $${Number(payload.total||0).toFixed(2)}`;
+      navigator.clipboard?.writeText ? navigator.clipboard.writeText(txt) : (function(){ const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); })();
+      alert('Resumen del pedido copiado al portapapeles.');
+    }catch(e){ console.error('copyOrder', e); alert('No se pudo copiar el pedido automáticamente.'); }
+  }
+
+  async function reAttemptOrder(payload){
+    const tryUrls = ['/orders', (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/orders') : null].filter(Boolean);
+    for (const url of tryUrls){
+      try{
+        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), mode: 'cors' });
+        if (res.ok) return true;
+      }catch(_){}
+    }
+    return false;
+  }
+
   // close on outside click
   document.addEventListener('pointerdown', (ev)=>{ const drawer = document.getElementById('cartDrawer'); const fab = document.getElementById('cartButton'); if(!drawer || drawer.getAttribute('aria-hidden')==='true') return; if(ev.target.closest && (ev.target.closest('#cartDrawer') || ev.target.closest('#cartButton'))) return; closeCart(); });
   // initialize badge
@@ -449,6 +882,7 @@ function stopAutoRefresh() {
 
 function updateLastUpdated(local = false) {
   const el = document.getElementById('lastUpdated');
+  if (!el) return; // element removed — nothing to do
   const when = new Date();
   el.textContent = `Última actualización: ${when.toLocaleTimeString()} ${local ? '(local)' : ''}`;
 }
@@ -457,16 +891,25 @@ function updateLastUpdated(local = false) {
 (function bindAutoControls(){
   const toggle = document.getElementById('autoRefreshToggle');
   const modeEl = document.getElementById('autoMode');
+  const statusEl = document.getElementById('autoStatus');
   // restore
   const enabled = localStorage.getItem('catalog:auto:enabled');
   const mode = localStorage.getItem('catalog:auto:mode') || 'soft';
   toggle.checked = (enabled === null) ? true : (enabled === 'true');
   modeEl.textContent = mode;
+  // set visual status badge
+  if (statusEl) {
+    const on = toggle.checked;
+    statusEl.classList.remove('on','off');
+    statusEl.classList.add(on ? 'on' : 'off');
+    statusEl.innerHTML = `<span class="dot"></span> ${on ? 'Activado' : 'Desactivado'}`;
+  }
   // when user toggles auto-refresh on/off
   toggle.addEventListener('change', (e) => {
     const on = e.target.checked;
     localStorage.setItem('catalog:auto:enabled', String(on));
     if (on) startAutoRefresh(); else stopAutoRefresh();
+    if (statusEl) { statusEl.classList.remove('on','off'); statusEl.classList.add(on ? 'on' : 'off'); statusEl.innerHTML = `<span class="dot"></span> ${on ? 'Activado' : 'Desactivado'}`; }
   });
   // switch mode on double-click of the mode label (soft <-> full)
   modeEl.parentElement.addEventListener('dblclick', (ev) => {
@@ -486,6 +929,15 @@ if (localStorage.getItem('catalog:auto:enabled') === null) localStorage.setItem(
 startAutoRefresh();
 
 searchInput.addEventListener("input", () => { render({ animate: true }); });
+
+// wire clear button (if present)
+const clearBtn = document.querySelector('.search-clear');
+if (clearBtn) {
+  clearBtn.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    try { searchInput.value = ''; searchInput.focus(); render({ animate: true }); } catch (e) { console.error(e); }
+  });
+}
 
 filterButtons.forEach(btn => {
   btn.addEventListener("click", () => {
