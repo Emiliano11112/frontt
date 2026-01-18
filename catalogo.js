@@ -172,6 +172,19 @@ function renderSkeleton(count = 6) {
   }
   grid.appendChild(frag);
 
+  // Post-render defensive step: ensure images aren't hidden by inline styles or late CSS
+  try{
+    const imgs = document.querySelectorAll('#catalogGrid img, .promotions-row img');
+    imgs.forEach(img => {
+      try{
+        img.style.opacity = '1';
+        img.style.visibility = 'visible';
+        img.style.display = 'block';
+        img.style.transform = 'none';
+      }catch(e){}
+    });
+  }catch(e){/* ignore */}
+
   // Wire promotion card buttons (filter to promo products when clicked)
   try{
     document.querySelectorAll('.promotion-card .promo-view').forEach(btn => {
