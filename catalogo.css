@@ -347,6 +347,26 @@ body{
   #catalogGrid, .promotions-row{ z-index:0; }
 }
 
+/* Mobile: clean, readable card style that preserves brand aesthetics but removes
+   decorative overlays that could hide images. This is applied as a last-resort
+   mobile skin to ensure products are visible while keeping the original look. */
+@media (max-width:740px){
+  #catalogGrid{ display:block; padding:12px; max-width:640px; margin:8px auto; }
+  .promotions-row{ padding:6px 12px; display:flex; gap:10px; overflow-x:auto; }
+  .product-card{ display:block; width:100%; background:#fff; border-radius:14px; padding:10px; margin-bottom:14px; box-shadow:none; border:1px solid rgba(6,26,43,0.04); overflow:visible; }
+  .product-card .product-image{ height:160px; border-radius:12px; overflow:hidden; display:block; background:#fff; }
+  .product-card .product-image img{ width:100%; height:100%; object-fit:cover; display:block; border-radius:8px; opacity:1 !important; visibility:visible !important; }
+  .product-info{ padding:10px 6px 12px; }
+  .product-info h3{ font-size:15px; margin-bottom:6px; color:var(--deep); }
+  .product-info p{ font-size:13px; color:var(--muted); margin-bottom:8px; }
+  .card-actions{ display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .btn-add{ flex:0 0 auto; padding:10px 14px; border-radius:10px; font-weight:800 }
+  .price-badge, .product-card .price-bubble, .promotion-card .price-display{ position:absolute; right:14px; top:12px; z-index:1250; }
+  .product-card::before, .product-card::after{ display:none !important; }
+  .promotion-card{ min-width:220px; flex:0 0 auto; border-radius:12px; padding:12px; box-shadow:none; border:1px solid rgba(6,26,43,0.04); background:linear-gradient(180deg,#fff,#fffef8); }
+}
+}
+
 /* Extra aggressive mobile visibility fixes (debug & fix) */
 @media (max-width:740px){
   .product-card{ background: rgba(255,255,255,0.06) !important; box-shadow:none !important; border:1px solid rgba(10,34,64,0.04) !important; }
