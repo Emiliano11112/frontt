@@ -333,4 +333,11 @@ body{
   .promotion-card .product-thumb{flex:0 0 96px;height:96px}
 }
 
+/* Emergency visibility fixes for small screens where images were hidden */
+#catalogGrid, .promotions-row { position: relative; z-index: 0; }
+.product-image, .product-image img, .promotion-card img, .product-thumb img { opacity: 1 !important; visibility: visible !important; transform: none !important; display: block !important; }
+.product-image { z-index: 10; }
+.product-card::before, .product-card::after { z-index: 0 !important; pointer-events: none !important; }
+
+
 
