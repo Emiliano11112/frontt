@@ -1146,8 +1146,21 @@ function showToast(message, timeout = 3000){
     setTimeout(()=>{ try{ t.style.opacity='0'; t.style.transform='translateY(8px)'; setTimeout(()=>t.remove(), 280); }catch(e){} }, timeout);
   }catch(e){ console.warn('showToast failed', e); }
 }
+
+// Helper: fetch with AbortController-based timeout (used for auth requests)
+async function fetchWithTimeout(resource, options = {}, timeout = 10000){
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  options.signal = controller.signal;
+  try{
+    return await fetch(resource, options);
+  }finally{
+    clearTimeout(id);
+  }
+}
+
 function updateAuthUI(){ const btn = document.getElementById('authButton'); const token = getToken(); if (!btn) return; if (token){ const payload = parseJwt(token) || {}; const email = payload.sub || payload.email || 'Cuenta'; btn.textContent = `Hola ${email}`; btn.classList.add('logged'); } else { btn.textContent = 'Login'; btn.classList.remove('logged'); } }
-async function doRegister(){ const name=document.getElementById('regName').value.trim(); const email=document.getElementById('regEmail').value.trim(); const barrio=document.getElementById('regBarrio').value.trim(); const calle=document.getElementById('regCalle').value.trim(); const numero=document.getElementById('regNumero').value.trim(); const password=document.getElementById('regPassword').value; const err=document.getElementById('regError'); err.textContent=''; if(!name||!email||!password){ err.textContent='Nombre, email y contraseña son obligatorios'; return; } try{ const res=await fetch(AUTH_REGISTER,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({full_name:name,email,barrio,calle,numeracion:numero,password})}); if(res.status===400){ const js=await res.json().catch(()=>({})); err.textContent=js.detail||'Error'; return; } if(!res.ok){ err.textContent='Registro falló'; return; } await doLogin(email,password); closeAuthModal(); }catch(e){ err.textContent='Error de red'; } }
+async function doRegister(){ const name=document.getElementById('regName').value.trim(); const email=document.getElementById('regEmail').value.trim(); const barrio=document.getElementById('regBarrio').value.trim(); const calle=document.getElementById('regCalle').value.trim(); const numero=document.getElementById('regNumero').value.trim(); const password=document.getElementById('regPassword').value; const err=document.getElementById('regError'); err.textContent=''; if(!name||!email||!password){ err.textContent='Nombre, email y contraseña son obligatorios'; return; } try{ const res=await fetchWithTimeout(AUTH_REGISTER,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({full_name:name,email,barrio,calle,numeracion:numero,password})},10000); if(res.status===400){ const js=await res.json().catch(()=>({})); err.textContent=js.detail||'Error'; return; } if(!res.ok){ err.textContent='Registro falló'; return; } await doLogin(email,password); closeAuthModal(); }catch(e){ if (e && e.name === 'AbortError') err.textContent = 'Tiempo de espera agotado'; else err.textContent='No se pudo conectar con el servidor'; } }
 async function doLogin(emailArg,passwordArg){
   const email = emailArg || document.getElementById('loginEmail').value.trim();
   const password = passwordArg || document.getElementById('loginPassword').value;
@@ -1155,7 +1168,7 @@ async function doLogin(emailArg,passwordArg){
   if (!email || !password) { err.textContent = 'Email y contraseña son obligatorios'; return; }
   try {
     const form = new URLSearchParams(); form.append('username', email); form.append('password', password);
-    const res = await fetch(AUTH_TOKEN, { method: 'POST', body: form });
+    const res = await fetchWithTimeout(AUTH_TOKEN, { method: 'POST', body: form }, 10000);
     if (!res.ok) { const j = await res.json().catch(() => ({})); err.textContent = j.detail || 'Credenciales incorrectas'; return; }
     const data = await res.json();
     if (data && data.access_token) {
@@ -1169,7 +1182,7 @@ async function doLogin(emailArg,passwordArg){
       // mark that auth modal was shown this session (ensure consistent behavior)
       try { sessionStorage.setItem('catalog:auth_shown', '1'); } catch(e) {}
     }
-  } catch (e) { err.textContent = 'Error de red'; }
+  } catch (e) { if (e && e.name === 'AbortError') err.textContent = 'Tiempo de espera agotado'; else err.textContent = 'No se pudo conectar con el servidor'; }
 }
 function logout(){
   // remove token and update UI
@@ -1244,6 +1257,17 @@ document.addEventListener('DOMContentLoaded', ()=>{
       }
     }
   }catch(e){}
+
+  // Check backend health on load and notify user if unreachable
+  (async ()=>{
+    try{
+      const h = await fetchWithTimeout(API_ORIGIN + '/health', {}, 5000);
+      if (!h || !h.ok) throw new Error('unhealthy');
+    }catch(err){
+      console.warn('backend health check failed', err);
+      try{ showToast('No se puede conectar con el servidor. Algunas funciones pueden no funcionar.', 6000); }catch(e){}
+    }
+  })();
 });
 
 // Ensure fetchProducts includes Authorization header when token present
