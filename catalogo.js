@@ -1,5 +1,5 @@
 // API: prefer the real endpoint but tolerate variations (English/Spanish)
-const API_URL = "https://backend-0lcs.onrender.com/products";
+const API_URL = "https://backend-0lcs.onrender.com";
 const API_ORIGIN = new URL(API_URL).origin;
 // Auth endpoints
 const AUTH_REGISTER = `${API_ORIGIN}/auth/register`;
@@ -237,9 +237,9 @@ async function fetchProducts({ showSkeleton = true } = {}) {
     const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
     const apiOrigin = (typeof API_URL === 'string' && API_URL) ? (new URL(API_URL)).origin : null;
     if (pageOrigin && apiOrigin && pageOrigin !== apiOrigin) {
-      tryUrls = [API_URL, (pageOrigin + '/products'), '/products', 'products.json'];
+      tryUrls = [API_ORIGIN + '/products', (pageOrigin + '/products'), '/products', 'products.json'];
     } else {
-      tryUrls = ['/products', API_URL, 'products.json'];
+      tryUrls = ['/products', API_ORIGIN + '/products', 'products.json'];
     }
   } catch (e) {
     tryUrls = ['/products', API_URL, 'products.json'];
@@ -990,7 +990,16 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       try{
         const res = await fetch(url, { method: 'POST', headers: baseHeaders, body: JSON.stringify(payload), mode: 'cors' });
         if (res.ok) return true;
-      }catch(_){ }
+        // provide diagnostic information when a server returns a non-OK response
+        try{
+          const _body = await res.text();
+          console.error('Order POST failed', { url, status: res.status, statusText: res.statusText, body: _body });
+        }catch(e){
+          console.error('Order POST failed and body could not be read', { url, status: res.status, statusText: res.statusText });
+        }
+      }catch(err){
+        console.error('Order POST network error', url, err);
+      }
     }
     return false;
   }
@@ -1016,7 +1025,7 @@ function startAutoRefresh() {
   }
   countdown = AUTO_REFRESH_SECONDS;
   countdownEl.textContent = String(countdown);
-  // interval that performs refresh action
+  // interval that performs refresh action          
   autoTimer = setInterval(() => {
     if (mode === 'full') {
       location.reload();
