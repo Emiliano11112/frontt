@@ -814,10 +814,18 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       // Fallback to configured API origin if same-origin is unreachable.
       // Prefer the configured API origin first (ensures orders reach the backend),
       // then fall back to same-origin '/orders' as a last resort for local admin-hosted pages.
-      const tryUrls = [
-        (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/orders') : null,
-        '/orders'
-      ].filter(Boolean);
+      // Try location.origin (same host where page is served) first when available,
+      // then try configured API_ORIGIN, then fallback to relative '/orders'.
+      const tryUrls = [];
+      try {
+        if (location && location.protocol && location.protocol.startsWith('http') && location.origin) {
+          tryUrls.push(location.origin + '/orders');
+        }
+      } catch (e) {}
+      if (typeof API_ORIGIN === 'string' && API_ORIGIN) tryUrls.push(API_ORIGIN + '/orders');
+      tryUrls.push('/orders');
+      // remove falsy entries
+      for (let i = tryUrls.length - 1; i >= 0; i--) if (!tryUrls[i]) tryUrls.splice(i, 1);
 
       let succeeded = false;
       // Attach Authorization header when token present
@@ -937,7 +945,16 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
     }
 
     // Prefer the configured API origin first when re-attempting an order
-    const tryUrls = [ (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/orders') : null, '/orders' ].filter(Boolean);
+    // Try location.origin first when page is served over http(s), then API_ORIGIN, then '/orders'
+    const tryUrls = [];
+    try {
+      if (location && location.protocol && location.protocol.startsWith('http') && location.origin) {
+        tryUrls.push(location.origin + '/orders');
+      }
+    } catch (e) {}
+    if (typeof API_ORIGIN === 'string' && API_ORIGIN) tryUrls.push(API_ORIGIN + '/orders');
+    tryUrls.push('/orders');
+    for (let i = tryUrls.length - 1; i >= 0; i--) if (!tryUrls[i]) tryUrls.splice(i, 1);
     const authToken = getToken();
     const baseHeaders = { 'Content-Type': 'application/json' };
     if (authToken) baseHeaders['Authorization'] = `Bearer ${authToken}`;
