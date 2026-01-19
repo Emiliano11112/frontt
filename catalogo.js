@@ -852,6 +852,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       const authToken = getToken();
       const baseHeaders = { 'Content-Type': 'application/json' };
       if (authToken) baseHeaders['Authorization'] = `Bearer ${authToken}`;
+      try{ console.debug('[checkout] authToken present?', !!authToken, authToken ? ('***'+authToken.slice(-10)) : null, 'headers', baseHeaders); }catch(_){ }
 
       for (const url of tryUrls) {
         try {
@@ -949,9 +950,11 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
   async function reAttemptOrder(payload){
     // ensure user info included when reattempting
     const token = getToken();
+    try{ console.debug('[reAttemptOrder] token present?', !!token, token ? ('***'+token.slice(-10)) : null); }catch(_){ }
     if (token) {
       try {
         const profileRes = await fetch(`${API_ORIGIN}/auth/me`, { headers: { 'Authorization': `Bearer ${token}` }, mode: 'cors' });
+        try{ console.debug('[reAttemptOrder] /auth/me status', profileRes.status); }catch(_){ }
         if (profileRes.ok) {
           const profile = await profileRes.json();
           payload.user_id = payload.user_id || profile.id;
@@ -961,7 +964,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           payload.user_calle = payload.user_calle || profile.calle;
           payload.user_numeracion = payload.user_numeracion || profile.numeracion;
         }
-      } catch (e) { /* ignore */ }
+      } catch (e) { console.warn('reAttemptOrder: profile fetch failed', e); }
     }
 
     // Prefer the configured API origin first when re-attempting an order
