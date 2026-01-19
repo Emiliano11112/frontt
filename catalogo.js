@@ -233,21 +233,16 @@ async function fetchProducts({ showSkeleton = true } = {}) {
   // try multiple endpoints: prefer configured remote API when page is served from a different origin
   // (avoid triggering many 404s when the frontend is hosted as static site on another host)
   let tryUrls = [];
-  // Prefer the configured remote API first, then try same-origin endpoints and finally the static local file.
   try {
     const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
-    // Start with the canonical remote API URL
-    tryUrls = [API_URL];
-    // If the page is served from another origin, also try same-origin product endpoint
-    if (pageOrigin) {
-      tryUrls.push(pageOrigin + '/products');
+    const apiOrigin = (typeof API_URL === 'string' && API_URL) ? (new URL(API_URL)).origin : null;
+    if (pageOrigin && apiOrigin && pageOrigin !== apiOrigin) {
+      tryUrls = [API_URL, (pageOrigin + '/products'), '/products', 'products.json'];
+    } else {
+      tryUrls = ['/products', API_URL, 'products.json'];
     }
-    // Also try the relative endpoint (works when backend and frontend are same origin)
-    tryUrls.push('/products');
-    // Last-resort: static snapshot embedded in the site
-    tryUrls.push('products.json');
   } catch (e) {
-    tryUrls = [API_URL, '/products', 'products.json'];
+    tryUrls = ['/products', API_URL, 'products.json'];
   }
   let data = null;
   let used = null;
@@ -1043,28 +1038,7 @@ function stopAutoRefresh() {
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
 }
 
-// WebSocket to receive realtime product updates from the backend
-let wsProducts = null;
-let wsRetryDelay = 1000;
-function connectProductsWS(){
-  try{
-    const wsProto = API_ORIGIN && API_ORIGIN.startsWith('https') ? 'wss:' : 'ws:';
-    const wsUrl = wsProto + '//' + new URL(API_ORIGIN).host + '/ws/products';
-    wsProducts = new WebSocket(wsUrl);
-    wsProducts.addEventListener('open', () => { console.info('[catalogo] ws connected'); wsRetryDelay = 1000; });
-    wsProducts.addEventListener('message', (ev) => {
-      try{
-        const data = JSON.parse(ev.data);
-        // If backend notifies of product changes, re-fetch products quietly
-        if (data && (data.action === 'created' || data.action === 'updated' || data.action === 'deleted') && data.product) {
-          fetchProducts({ showSkeleton: false }).catch(()=>{});
-        }
-      }catch(e){ /* ignore parse errors */ }
-    });
-    wsProducts.addEventListener('close', () => { console.warn('[catalogo] ws closed, retrying in', wsRetryDelay); setTimeout(connectProductsWS, wsRetryDelay); wsRetryDelay = Math.min(30000, wsRetryDelay * 2); });
-    wsProducts.addEventListener('error', () => { try{ wsProducts.close(); }catch(_){} });
-  }catch(e){ setTimeout(connectProductsWS, 5000); }
-}
+
 
 function updateLastUpdated(local = false) {
   const el = document.getElementById('lastUpdated');
@@ -1287,8 +1261,6 @@ function init(){
     if (localStorage.getItem('catalog:auto:enabled') === null) localStorage.setItem('catalog:auto:enabled','true');
     // start auto-refresh if enabled
     startAutoRefresh();
-    // Connect websocket to receive product updates from backend (keeps UI fresh)
-    try{ connectProductsWS(); }catch(e){ console.warn('WS init failed', e); }
 
     if (searchInput) searchInput.addEventListener("input", () => { render({ animate: true }); });
 
