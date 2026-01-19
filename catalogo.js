@@ -230,8 +230,20 @@ function renderSkeleton(count = 6) {
 
 async function fetchProducts({ showSkeleton = true } = {}) {
   if (showSkeleton) renderSkeleton();
-  // try multiple endpoints: same-origin -> configured remote -> local static file
-  const tryUrls = ['/products', API_URL, 'products.json'];
+  // try multiple endpoints: prefer configured remote API when page is served from a different origin
+  // (avoid triggering many 404s when the frontend is hosted as static site on another host)
+  let tryUrls = [];
+  try {
+    const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
+    const apiOrigin = (typeof API_URL === 'string' && API_URL) ? (new URL(API_URL)).origin : null;
+    if (pageOrigin && apiOrigin && pageOrigin !== apiOrigin) {
+      tryUrls = [API_URL, (pageOrigin + '/products'), '/products', 'products.json'];
+    } else {
+      tryUrls = ['/products', API_URL, 'products.json'];
+    }
+  } catch (e) {
+    tryUrls = ['/products', API_URL, 'products.json'];
+  }
   let data = null;
   let used = null;
   for (const url of tryUrls) {
