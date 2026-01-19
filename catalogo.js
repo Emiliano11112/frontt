@@ -1109,6 +1109,26 @@ function parseJwt(token){
   }catch(e){ return null; }
 }
 
+// Quick server-side token validator for debugging
+async function debugWhoami(){
+  try{
+    const token = getToken();
+    if(!token) return { ok: false, error: 'no_local_token' };
+    const res = await fetch(API_ORIGIN + '/debug/whoami', { headers: { 'Authorization': `Bearer ${token}` }, mode: 'cors' });
+    const js = await res.json().catch(()=>null);
+    return js || { ok: false, error: 'no_response' };
+  }catch(e){ console.warn('debugWhoami failed', e); return { ok: false, error: String(e) }; }
+}
+
+// optional helper button shown only during debugging (not intrusive)
+try{
+  if (location && location.hostname && (location.hostname === 'localhost' || location.hostname === '127.0.0.1')){
+    const dbg = document.createElement('button'); dbg.style.position = 'fixed'; dbg.style.right = '12px'; dbg.style.bottom = '12px'; dbg.style.zIndex = 9999; dbg.textContent = 'Verificar token'; dbg.className = 'btn btn-outline'; dbg.onclick = async ()=>{ const r = await debugWhoami(); alert(JSON.stringify(r)); };
+    document.addEventListener('DOMContentLoaded', ()=>{ document.body.appendChild(dbg); });
+  }
+}catch(e){}
+
+
 // small toast helper
 function showToast(message, timeout = 3000){
   try{
@@ -1160,11 +1180,12 @@ async function doLogin(emailArg,passwordArg){
     if (data && data.access_token) {
       saveToken(data.access_token);
       updateAuthUI();
+      // perform quick token check against the server so we can surface any mismatch early
+      try{ debugWhoami().then(d => { try{ console.debug('[debugWhoami] result', d); if (d && d.ok && d.payload) { showToast(`Bienvenido, ${d.payload.full_name || d.payload.sub || email}`); } else { showToast('Bienvenido — pero el token no fue validado en el servidor', 'warning'); } }catch(_){}}).catch(e=>{ console.warn('debugWhoami failed', e); }); }catch(_){ }
       // derive display name from token if available
       let name = email;
       try { const p = parseJwt(data.access_token); if (p) name = p.full_name || p.name || p.sub || p.email || email; } catch (e) {}
       closeAuthModal();
-      showToast(`Bienvenido, ${name}`);
       // mark that auth modal was shown this session (ensure consistent behavior)
       try { sessionStorage.setItem('catalog:auth_shown', '1'); } catch(e) {}
     }
