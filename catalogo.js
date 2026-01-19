@@ -1143,7 +1143,18 @@ async function doLogin(emailArg,passwordArg){
     }
   } catch (e) { err.textContent = 'Error de red'; }
 }
-function logout(){ clearToken(); updateAuthUI(); }
+function logout(){
+  // remove token and update UI
+  clearToken();
+  try{ sessionStorage.removeItem('catalog:auth_shown'); }catch(e){}
+  // reset login/register form fields so user can re-login immediately
+  try{ const le=document.getElementById('loginEmail'); const lp=document.getElementById('loginPassword'); if(le) le.value=''; if(lp) lp.value=''; }catch(e){}
+  try{ const re=document.getElementById('regEmail'); const rn=document.getElementById('regName'); const rb=document.getElementById('regBarrio'); const rc=document.getElementById('regCalle'); const rnum=document.getElementById('regNumero'); const rp=document.getElementById('regPassword'); if(re) re.value=''; if(rn) rn.value=''; if(rb) rb.value=''; if(rc) rc.value=''; if(rnum) rnum.value=''; if(rp) rp.value=''; }catch(e){}
+  // ensure modal closed and UI refreshed
+  try{ if(typeof closeAuthModal==='function') closeAuthModal(); }catch(e){}
+  updateAuthUI();
+  try{ showToast('Sesión cerrada'); }catch(e){}
+}
 function _authOutsideClick(e){
   const m = document.getElementById('authModal');
   if (!m) return;
