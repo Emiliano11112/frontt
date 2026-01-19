@@ -812,15 +812,22 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
 
       // Try local (same-origin) orders endpoint first so orders reach the local admin panel during dev.
       // Fallback to configured API origin if same-origin is unreachable.
+      // Prefer the configured API origin first (ensures orders reach the backend),
+      // then fall back to same-origin '/orders' as a last resort for local admin-hosted pages.
       const tryUrls = [
-        '/orders',
-        (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/orders') : null
+        (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/orders') : null,
+        '/orders'
       ].filter(Boolean);
 
       let succeeded = false;
+      // Attach Authorization header when token present
+      const authToken = getToken();
+      const baseHeaders = { 'Content-Type': 'application/json' };
+      if (authToken) baseHeaders['Authorization'] = `Bearer ${authToken}`;
+
       for (const url of tryUrls) {
         try {
-          const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), mode: 'cors' });
+          const res = await fetch(url, { method: 'POST', headers: baseHeaders, body: JSON.stringify(payload), mode: 'cors' });
           if (!res.ok) throw new Error(`status:${res.status}`);
           succeeded = true;
           break;
@@ -929,12 +936,16 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       } catch (e) { /* ignore */ }
     }
 
-    const tryUrls = ['/orders', (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/orders') : null].filter(Boolean);
+    // Prefer the configured API origin first when re-attempting an order
+    const tryUrls = [ (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/orders') : null, '/orders' ].filter(Boolean);
+    const authToken = getToken();
+    const baseHeaders = { 'Content-Type': 'application/json' };
+    if (authToken) baseHeaders['Authorization'] = `Bearer ${authToken}`;
     for (const url of tryUrls){
       try{
-        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), mode: 'cors' });
+        const res = await fetch(url, { method: 'POST', headers: baseHeaders, body: JSON.stringify(payload), mode: 'cors' });
         if (res.ok) return true;
-      }catch(_){}
+      }catch(_){ }
     }
     return false;
   }
