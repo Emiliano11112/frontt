@@ -5,7 +5,21 @@ if(menuToggle){
 	menuToggle.addEventListener('click', () => {
 		nav.classList.toggle('open');
 		const expanded = menuToggle.getAttribute('aria-expanded') === 'true';
-		menuToggle.setAttribute('aria-expanded', String(!expanded));
+		const now = !expanded;
+		menuToggle.setAttribute('aria-expanded', String(now));
+		// Swap visual icon for close/open and prevent body scroll when open
+		menuToggle.textContent = now ? '✕' : '☰';
+		document.body.classList.toggle('nav-open', now);
+	});
+
+	// Ensure menu closes when resizing to desktop widths
+	window.addEventListener('resize', () => {
+		if (window.innerWidth > 900 && nav.classList.contains('open')) {
+			nav.classList.remove('open');
+			menuToggle.setAttribute('aria-expanded','false');
+			menuToggle.textContent = '☰';
+			document.body.classList.remove('nav-open');
+		}
 	});
 }
 
