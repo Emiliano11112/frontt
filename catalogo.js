@@ -1,6 +1,9 @@
 // API: prefer the real endpoint but tolerate variations (English/Spanish)
 const API_URL = "https://backend-0lcs.onrender.com/products";
 const API_ORIGIN = new URL(API_URL).origin;
+// Auth endpoints
+const AUTH_REGISTER = `${API_ORIGIN}/auth/register`;
+const AUTH_TOKEN = `${API_ORIGIN}/auth/token`;
 
 // DOM references will be initialized in `init()` to avoid race conditions
 let grid = null;
@@ -233,7 +236,10 @@ async function fetchProducts({ showSkeleton = true } = {}) {
   let used = null;
   for (const url of tryUrls) {
     try {
-      const res = await fetch(url, { mode: 'cors', cache: 'no-store' });
+      const headers = {};
+      const token = getToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(url, { mode: 'cors', cache: 'no-store', headers });
       if (!res.ok) continue;
       const json = await res.json();
       if (json && (Array.isArray(json) || Array.isArray(json.products) || Array.isArray(json.data))) {
@@ -768,9 +774,38 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
     checkout.textContent = checkout.textContent.trim() || 'Hacer pedido';
     checkout.setAttribute('aria-label', 'Hacer pedido');
     checkout.addEventListener('click', async () => {
-      const cart = readCart();
-      if (!cart || cart.length === 0) return alert('El carrito está vacío');
-      const payload = { items: cart, total: cart.reduce((s, i) => s + (Number(i.meta?.price || 0) * i.qty), 0) };
+        const cart = readCart();
+        if (!cart || cart.length === 0) return alert('El carrito está vacío');
+        const basePayload = { items: cart, total: cart.reduce((s, i) => s + (Number(i.meta?.price || 0) * i.qty), 0) };
+
+        // attach user info if logged in; validate presence of contact fields and confirm
+        const token = getToken();
+        if (token) {
+          try {
+            const profileRes = await fetch(`${API_ORIGIN}/auth/me`, { headers: { 'Authorization': `Bearer ${token}` }, mode: 'cors' });
+            if (profileRes.ok) {
+              const profile = await profileRes.json();
+              // If profile missing contact fields, ask user to confirm before proceeding
+              const missing = [];
+              if (!profile.user_full_name && !profile.full_name) missing.push('nombre');
+              if (!profile.email) missing.push('email');
+              if (!profile.barrio) missing.push('barrio');
+              if (!profile.calle) missing.push('calle');
+              if (!profile.numeracion) missing.push('numeración');
+              if (missing.length) {
+                const ok = confirm('Tu perfil está incompleto (faltan: ' + missing.join(', ') + '). ¿Deseas continuar y enviar el pedido igualmente?');
+                if (!ok) { try { document.getElementById('checkoutBtn').disabled = false; } catch(e){}; return; }
+              }
+              basePayload.user_id = profile.id;
+              basePayload.user_full_name = profile.full_name;
+              basePayload.user_email = profile.email;
+              basePayload.user_barrio = profile.barrio;
+              basePayload.user_calle = profile.calle;
+              basePayload.user_numeracion = profile.numeracion;
+            }
+          } catch (e) { /* ignore profile fetch errors */ }
+        }
+        const payload = basePayload;
 
       const btn = document.getElementById('checkoutBtn');
       btn.disabled = true;
@@ -877,6 +912,23 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
   }
 
   async function reAttemptOrder(payload){
+    // ensure user info included when reattempting
+    const token = getToken();
+    if (token) {
+      try {
+        const profileRes = await fetch(`${API_ORIGIN}/auth/me`, { headers: { 'Authorization': `Bearer ${token}` }, mode: 'cors' });
+        if (profileRes.ok) {
+          const profile = await profileRes.json();
+          payload.user_id = payload.user_id || profile.id;
+          payload.user_full_name = payload.user_full_name || profile.full_name;
+          payload.user_email = payload.user_email || profile.email;
+          payload.user_barrio = payload.user_barrio || profile.barrio;
+          payload.user_calle = payload.user_calle || profile.calle;
+          payload.user_numeracion = payload.user_numeracion || profile.numeracion;
+        }
+      } catch (e) { /* ignore */ }
+    }
+
     const tryUrls = ['/orders', (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/orders') : null].filter(Boolean);
     for (const url of tryUrls){
       try{
@@ -973,6 +1025,48 @@ function updateLastUpdated(local = false) {
 
 // wire clear button (if present)
 // small helper to avoid XSS when inserting strings into innerHTML
+// --- Auth helpers (login/register modal + token storage) ---
+function saveToken(token){
+  try{ localStorage.setItem('access_token', token); }catch(e){}
+}
+function getToken(){ try{ return localStorage.getItem('access_token'); }catch(e){ return null; } }
+function clearToken(){ try{ localStorage.removeItem('access_token'); }catch(e){} }
+function parseJwt(token){
+  try{
+    const b = token.split('.')[1];
+    const json = decodeURIComponent(atob(b).split('').map(function(c){ return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2); }).join(''));
+    return JSON.parse(json);
+  }catch(e){ return null; }
+}
+function updateAuthUI(){ const btn = document.getElementById('authButton'); const token = getToken(); if (!btn) return; if (token){ const payload = parseJwt(token) || {}; const email = payload.sub || payload.email || 'Cuenta'; btn.textContent = `Hola ${email}`; btn.classList.add('logged'); } else { btn.textContent = 'Login'; btn.classList.remove('logged'); } }
+async function doRegister(){ const name=document.getElementById('regName').value.trim(); const email=document.getElementById('regEmail').value.trim(); const barrio=document.getElementById('regBarrio').value.trim(); const calle=document.getElementById('regCalle').value.trim(); const numero=document.getElementById('regNumero').value.trim(); const password=document.getElementById('regPassword').value; const err=document.getElementById('regError'); err.textContent=''; if(!name||!email||!password){ err.textContent='Nombre, email y contraseña son obligatorios'; return; } try{ const res=await fetch(AUTH_REGISTER,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({full_name:name,email,barrio,calle,numeracion:numero,password})}); if(res.status===400){ const js=await res.json().catch(()=>({})); err.textContent=js.detail||'Error'; return; } if(!res.ok){ err.textContent='Registro falló'; return; } await doLogin(email,password); closeAuthModal(); }catch(e){ err.textContent='Error de red'; } }
+async function doLogin(emailArg,passwordArg){ const email=emailArg||document.getElementById('loginEmail').value.trim(); const password=passwordArg||document.getElementById('loginPassword').value; const err=document.getElementById('loginError'); err.textContent=''; if(!email||!password){ err.textContent='Email y contraseña son obligatorios'; return; } try{ const form=new URLSearchParams(); form.append('username',email); form.append('password',password); const res=await fetch(AUTH_TOKEN,{method:'POST',body:form}); if(!res.ok){ const j=await res.json().catch(()=>({})); err.textContent=j.detail||'Credenciales incorrectas'; return; } const data=await res.json(); if(data&&data.access_token){ saveToken(data.access_token); updateAuthUI(); closeAuthModal(); } }catch(e){ err.textContent='Error de red'; } }
+function logout(){ clearToken(); updateAuthUI(); }
+function openAuthModal(){ const m=document.getElementById('authModal'); if(!m) return; m.style.display='block'; m.setAttribute('aria-hidden','false'); }
+function closeAuthModal(){ const m=document.getElementById('authModal'); if(!m) return; m.style.display='none'; m.setAttribute('aria-hidden','true'); }
+
+// wire auth modal and button (DOMContentLoaded handled later)
+document.addEventListener('DOMContentLoaded', ()=>{
+  updateAuthUI();
+  const authBtn = document.getElementById('authButton');
+  if (authBtn) authBtn.addEventListener('click', ()=>{
+    const token = getToken();
+    if (token){ if (confirm('Cerrar sesión?')) { logout(); } return; }
+    openAuthModal();
+  });
+  const authClose = document.getElementById('authClose'); if (authClose) authClose.addEventListener('click', closeAuthModal);
+  const tabLogin = document.getElementById('tabLogin'); const tabRegister = document.getElementById('tabRegister');
+  if (tabLogin && tabRegister){
+    tabLogin.addEventListener('click', ()=>{ tabLogin.classList.add('active'); tabRegister.classList.remove('active'); document.getElementById('loginForm').style.display='block'; document.getElementById('registerForm').style.display='none'; });
+    tabRegister.addEventListener('click', ()=>{ tabRegister.classList.add('active'); tabLogin.classList.remove('active'); document.getElementById('loginForm').style.display='none'; document.getElementById('registerForm').style.display='block'; });
+  }
+  const doLoginBtn = document.getElementById('doLogin'); if (doLoginBtn) doLoginBtn.addEventListener('click', ()=>doLogin());
+  const doRegisterBtn = document.getElementById('doRegister'); if (doRegisterBtn) doRegisterBtn.addEventListener('click', ()=>doRegister());
+});
+
+// Ensure fetchProducts includes Authorization header when token present
+const _origFetchProducts = typeof fetchProducts === 'function' ? fetchProducts : null;
+
 // Initialize UI after DOM is ready. Defensive: ensures elements exist so mobile
 // browsers that load scripts early don't cause a hard error that stops rendering.
 function init(){
