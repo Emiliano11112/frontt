@@ -1038,12 +1038,89 @@ function parseJwt(token){
     return JSON.parse(json);
   }catch(e){ return null; }
 }
+
+// small toast helper
+function showToast(message, timeout = 3000){
+  try{
+    let container = document.getElementById('__toast_container');
+    if(!container){ container = document.createElement('div'); container.id='__toast_container'; container.style.position='fixed'; container.style.right='20px'; container.style.bottom='20px'; container.style.zIndex='3000'; container.style.display='flex'; container.style.flexDirection='column'; container.style.gap='8px'; document.body.appendChild(container); }
+    const t = document.createElement('div');
+    t.className = '__toast';
+    t.style.background = 'linear-gradient(90deg,var(--accent),var(--accent-2))';
+    t.style.color = '#fff';
+    t.style.padding = '10px 14px';
+    t.style.borderRadius = '10px';
+    t.style.boxShadow = '0 12px 36px rgba(2,6,23,0.18)';
+    t.style.fontWeight = '800';
+    t.style.minWidth = '180px';
+    t.style.maxWidth = '320px';
+    t.style.opacity = '0';
+    t.style.transform = 'translateY(8px)';
+    t.textContent = message;
+    container.appendChild(t);
+    requestAnimationFrame(()=>{ t.style.transition = 'all 260ms ease'; t.style.opacity = '1'; t.style.transform = 'translateY(0)'; });
+    setTimeout(()=>{ try{ t.style.opacity='0'; t.style.transform='translateY(8px)'; setTimeout(()=>t.remove(), 280); }catch(e){} }, timeout);
+  }catch(e){ console.warn('showToast failed', e); }
+}
 function updateAuthUI(){ const btn = document.getElementById('authButton'); const token = getToken(); if (!btn) return; if (token){ const payload = parseJwt(token) || {}; const email = payload.sub || payload.email || 'Cuenta'; btn.textContent = `Hola ${email}`; btn.classList.add('logged'); } else { btn.textContent = 'Login'; btn.classList.remove('logged'); } }
 async function doRegister(){ const name=document.getElementById('regName').value.trim(); const email=document.getElementById('regEmail').value.trim(); const barrio=document.getElementById('regBarrio').value.trim(); const calle=document.getElementById('regCalle').value.trim(); const numero=document.getElementById('regNumero').value.trim(); const password=document.getElementById('regPassword').value; const err=document.getElementById('regError'); err.textContent=''; if(!name||!email||!password){ err.textContent='Nombre, email y contraseña son obligatorios'; return; } try{ const res=await fetch(AUTH_REGISTER,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({full_name:name,email,barrio,calle,numeracion:numero,password})}); if(res.status===400){ const js=await res.json().catch(()=>({})); err.textContent=js.detail||'Error'; return; } if(!res.ok){ err.textContent='Registro falló'; return; } await doLogin(email,password); closeAuthModal(); }catch(e){ err.textContent='Error de red'; } }
-async function doLogin(emailArg,passwordArg){ const email=emailArg||document.getElementById('loginEmail').value.trim(); const password=passwordArg||document.getElementById('loginPassword').value; const err=document.getElementById('loginError'); err.textContent=''; if(!email||!password){ err.textContent='Email y contraseña son obligatorios'; return; } try{ const form=new URLSearchParams(); form.append('username',email); form.append('password',password); const res=await fetch(AUTH_TOKEN,{method:'POST',body:form}); if(!res.ok){ const j=await res.json().catch(()=>({})); err.textContent=j.detail||'Credenciales incorrectas'; return; } const data=await res.json(); if(data&&data.access_token){ saveToken(data.access_token); updateAuthUI(); closeAuthModal(); } }catch(e){ err.textContent='Error de red'; } }
+async function doLogin(emailArg,passwordArg){
+  const email = emailArg || document.getElementById('loginEmail').value.trim();
+  const password = passwordArg || document.getElementById('loginPassword').value;
+  const err = document.getElementById('loginError'); err.textContent = '';
+  if (!email || !password) { err.textContent = 'Email y contraseña son obligatorios'; return; }
+  try {
+    const form = new URLSearchParams(); form.append('username', email); form.append('password', password);
+    const res = await fetch(AUTH_TOKEN, { method: 'POST', body: form });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); err.textContent = j.detail || 'Credenciales incorrectas'; return; }
+    const data = await res.json();
+    if (data && data.access_token) {
+      saveToken(data.access_token);
+      updateAuthUI();
+      // derive display name from token if available
+      let name = email;
+      try { const p = parseJwt(data.access_token); if (p) name = p.full_name || p.name || p.sub || p.email || email; } catch (e) {}
+      closeAuthModal();
+      showToast(`Bienvenido, ${name}`);
+      // mark that auth modal was shown this session (ensure consistent behavior)
+      try { sessionStorage.setItem('catalog:auth_shown', '1'); } catch(e) {}
+    }
+  } catch (e) { err.textContent = 'Error de red'; }
+}
 function logout(){ clearToken(); updateAuthUI(); }
-function openAuthModal(){ const m=document.getElementById('authModal'); if(!m) return; m.style.display='block'; m.setAttribute('aria-hidden','false'); }
-function closeAuthModal(){ const m=document.getElementById('authModal'); if(!m) return; m.style.display='none'; m.setAttribute('aria-hidden','true'); }
+function _authOutsideClick(e){
+  const m = document.getElementById('authModal');
+  if (!m) return;
+  const content = m.querySelector('.modal-content');
+  if (!content) return;
+  if (!content.contains(e.target)) closeAuthModal();
+}
+
+function openAuthModal(){
+  const m = document.getElementById('authModal'); if(!m) return;
+  m.classList.add('open');
+  m.setAttribute('aria-hidden','false');
+  document.body.classList.add('modal-open');
+  // ensure login tab shown by default
+  const loginPanel = document.getElementById('loginForm');
+  const registerPanel = document.getElementById('registerForm');
+  const tabLogin = document.getElementById('tabLogin');
+  const tabRegister = document.getElementById('tabRegister');
+  if (tabLogin && tabRegister){ tabLogin.classList.add('active'); tabRegister.classList.remove('active'); }
+  if (loginPanel && registerPanel){ loginPanel.style.display = 'block'; registerPanel.style.display = 'none'; }
+  // focus first field
+  setTimeout(()=>{ try{ document.getElementById('loginEmail')?.focus(); }catch(e){} }, 120);
+  // close when clicking outside content
+  setTimeout(()=>{ document.addEventListener('pointerdown', _authOutsideClick); }, 40);
+}
+
+function closeAuthModal(){
+  const m = document.getElementById('authModal'); if(!m) return;
+  m.classList.remove('open');
+  m.setAttribute('aria-hidden','true');
+  document.body.classList.remove('modal-open');
+  try{ document.removeEventListener('pointerdown', _authOutsideClick); }catch(_){}
+}
 
 // wire auth modal and button (DOMContentLoaded handled later)
 document.addEventListener('DOMContentLoaded', ()=>{
@@ -1057,11 +1134,21 @@ document.addEventListener('DOMContentLoaded', ()=>{
   const authClose = document.getElementById('authClose'); if (authClose) authClose.addEventListener('click', closeAuthModal);
   const tabLogin = document.getElementById('tabLogin'); const tabRegister = document.getElementById('tabRegister');
   if (tabLogin && tabRegister){
-    tabLogin.addEventListener('click', ()=>{ tabLogin.classList.add('active'); tabRegister.classList.remove('active'); document.getElementById('loginForm').style.display='block'; document.getElementById('registerForm').style.display='none'; });
-    tabRegister.addEventListener('click', ()=>{ tabRegister.classList.add('active'); tabLogin.classList.remove('active'); document.getElementById('loginForm').style.display='none'; document.getElementById('registerForm').style.display='block'; });
+    tabLogin.addEventListener('click', ()=>{ tabLogin.classList.add('active'); tabRegister.classList.remove('active'); document.getElementById('loginForm').style.display='block'; document.getElementById('registerForm').style.display='none'; setTimeout(()=>document.getElementById('loginEmail')?.focus(),80); });
+    tabRegister.addEventListener('click', ()=>{ tabRegister.classList.add('active'); tabLogin.classList.remove('active'); document.getElementById('loginForm').style.display='none'; document.getElementById('registerForm').style.display='block'; setTimeout(()=>document.getElementById('regName')?.focus(),80); });
   }
   const doLoginBtn = document.getElementById('doLogin'); if (doLoginBtn) doLoginBtn.addEventListener('click', ()=>doLogin());
   const doRegisterBtn = document.getElementById('doRegister'); if (doRegisterBtn) doRegisterBtn.addEventListener('click', ()=>doRegister());
+  // Auto-open modal on entry if user not logged in (per request)
+  try{
+    if (!getToken()) {
+      // show modal only once per session
+      const shown = sessionStorage.getItem('catalog:auth_shown');
+      if (!shown) {
+        setTimeout(()=> { openAuthModal(); try{ sessionStorage.setItem('catalog:auth_shown','1'); }catch(e){} }, 600);
+      }
+    }
+  }catch(e){}
 });
 
 // Ensure fetchProducts includes Authorization header when token present

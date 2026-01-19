@@ -63,45 +63,37 @@
 <div id="authModal" class="modal" aria-hidden="true">
   <div class="modal-content">
     <button id="authClose" class="modal-close" aria-label="Cerrar">✕</button>
-    <div class="auth-tabs">
-      <button id="tabLogin" class="tab active">Iniciar sesión</button>
-      <button id="tabRegister" class="tab">Crear cuenta</button>
+    <div class="brand-hero">
+      <img src="images/distriar.png" alt="DistriAr logo">
+      <h2>DistriAr</h2>
+      <p>Distribuciones y logística local — pedidos rápidos y entregas seguras.</p>
+      <div class="slogan">Compra fácil · Entrega confiable</div>
     </div>
-    <div id="loginForm" class="auth-panel">
-      <label>Correo
-        <input id="loginEmail" type="email" autocomplete="username" required />
-      </label>
-      <label>Contraseña
-        <input id="loginPassword" type="password" autocomplete="current-password" required />
-      </label>
-      <div class="auth-actions">
-        <button id="doLogin" class="btn">Entrar</button>
+    <div class="auth-wrapper">
+      <div class="auth-tabs">
+        <button id="tabLogin" class="tab active">Iniciar sesión</button>
+        <button id="tabRegister" class="tab">Crear cuenta</button>
       </div>
-      <div id="loginError" class="form-error" aria-live="polite"></div>
-    </div>
-    <div id="registerForm" class="auth-panel" style="display:none;">
-      <label>Nombre completo
-        <input id="regName" type="text" required />
-      </label>
-      <label>Email
-        <input id="regEmail" type="email" required />
-      </label>
-      <label>Barrio
-        <input id="regBarrio" type="text" />
-      </label>
-      <label>Calle
-        <input id="regCalle" type="text" />
-      </label>
-      <label>Número
-        <input id="regNumero" type="text" />
-      </label>
-      <label>Contraseña
-        <input id="regPassword" type="password" required />
-      </label>
-      <div class="auth-actions">
-        <button id="doRegister" class="btn">Crear cuenta</button>
+      <div id="loginForm" class="auth-panel">
+        <input id="loginEmail" type="email" autocomplete="username" required placeholder="Correo electrónico" aria-label="Correo electrónico" />
+        <input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Contraseña" aria-label="Contraseña" />
+        <div class="auth-actions">
+          <button id="doLogin" class="btn btn-primary">Entrar</button>
+        </div>
+        <div id="loginError" class="form-error" aria-live="polite"></div>
       </div>
-      <div id="regError" class="form-error" aria-live="polite"></div>
+      <div id="registerForm" class="auth-panel" style="display:none;">
+        <input id="regName" type="text" required placeholder="Nombre completo" aria-label="Nombre completo" />
+        <input id="regEmail" type="email" required placeholder="Correo electrónico" aria-label="Correo electrónico" />
+        <input id="regBarrio" type="text" placeholder="Barrio" aria-label="Barrio" />
+        <input id="regCalle" type="text" placeholder="Calle" aria-label="Calle" />
+        <input id="regNumero" type="text" placeholder="Número" aria-label="Número" />
+        <input id="regPassword" type="password" required placeholder="Contraseña" aria-label="Contraseña" />
+        <div class="auth-actions">
+          <button id="doRegister" class="btn btn-primary">Crear cuenta</button>
+        </div>
+        <div id="regError" class="form-error" aria-live="polite"></div>
+      </div>
     </div>
   </div>
 </div>
