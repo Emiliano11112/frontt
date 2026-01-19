@@ -814,15 +814,23 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       // Fallback to configured API origin if same-origin is unreachable.
       // Prefer the configured API origin first (ensures orders reach the backend),
       // then fall back to same-origin '/orders' as a last resort for local admin-hosted pages.
-      // Try location.origin (same host where page is served) first when available,
-      // then try configured API_ORIGIN, then fallback to relative '/orders'.
+      // Prefer API_ORIGIN when it's different from the page origin (Netlify/static hosting),
+      // otherwise use the page origin. Always keep '/orders' as a last-resort fallback.
       const tryUrls = [];
       try {
-        if (location && location.protocol && location.protocol.startsWith('http') && location.origin) {
-          tryUrls.push(location.origin + '/orders');
+        const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
+        if (typeof API_ORIGIN === 'string' && API_ORIGIN) {
+          if (pageOrigin && pageOrigin !== API_ORIGIN) {
+            tryUrls.push(API_ORIGIN + '/orders');
+            tryUrls.push(pageOrigin + '/orders');
+          } else {
+            // API_ORIGIN equals page origin or pageOrigin not available
+            tryUrls.push((pageOrigin || API_ORIGIN) + '/orders');
+          }
+        } else if (pageOrigin) {
+          tryUrls.push(pageOrigin + '/orders');
         }
       } catch (e) {}
-      if (typeof API_ORIGIN === 'string' && API_ORIGIN) tryUrls.push(API_ORIGIN + '/orders');
       tryUrls.push('/orders');
       // remove falsy entries
       for (let i = tryUrls.length - 1; i >= 0; i--) if (!tryUrls[i]) tryUrls.splice(i, 1);
@@ -945,14 +953,22 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
     }
 
     // Prefer the configured API origin first when re-attempting an order
-    // Try location.origin first when page is served over http(s), then API_ORIGIN, then '/orders'
+    // Prefer API_ORIGIN when it's different from the page origin (Netlify/static hosting),
+    // otherwise use the page origin. Always keep '/orders' as a last-resort fallback.
     const tryUrls = [];
     try {
-      if (location && location.protocol && location.protocol.startsWith('http') && location.origin) {
-        tryUrls.push(location.origin + '/orders');
+      const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
+      if (typeof API_ORIGIN === 'string' && API_ORIGIN) {
+        if (pageOrigin && pageOrigin !== API_ORIGIN) {
+          tryUrls.push(API_ORIGIN + '/orders');
+          tryUrls.push(pageOrigin + '/orders');
+        } else {
+          tryUrls.push((pageOrigin || API_ORIGIN) + '/orders');
+        }
+      } else if (pageOrigin) {
+        tryUrls.push(pageOrigin + '/orders');
       }
     } catch (e) {}
-    if (typeof API_ORIGIN === 'string' && API_ORIGIN) tryUrls.push(API_ORIGIN + '/orders');
     tryUrls.push('/orders');
     for (let i = tryUrls.length - 1; i >= 0; i--) if (!tryUrls[i]) tryUrls.splice(i, 1);
     const authToken = getToken();
