@@ -817,6 +817,27 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
             }
           } catch (e) { /* ignore profile fetch errors */ }
         }
+      const btn = document.getElementById('checkoutBtn');
+
+        // If there's no user info attached (guest checkout), offer to login or collect minimal contact info
+        if (!basePayload.user_full_name && !basePayload.user_email) {
+          try {
+            const wantLogin = confirm('No estás logueado. ¿Iniciar sesión para adjuntar tus datos al pedido? (Aceptar = login, Cancelar = enviar como invitado)');
+            if (wantLogin) { openAuthModal(); try{ btn.disabled = false; }catch(_){ } return; }
+            // Collect minimal guest details (non-blocking prompts)
+            const gname = prompt('Nombre (opcional):', '') || '';
+            const gemail = prompt('Email (opcional):', '') || '';
+            const gbarrio = prompt('Barrio (opcional):', '') || '';
+            const gcalle = prompt('Calle (opcional):', '') || '';
+            const gnumero = prompt('Numeración (opcional):', '') || '';
+            if (gname) basePayload.user_full_name = gname;
+            if (gemail) basePayload.user_email = gemail;
+            if (gbarrio) basePayload.user_barrio = gbarrio;
+            if (gcalle) basePayload.user_calle = gcalle;
+            if (gnumero) basePayload.user_numeracion = gnumero;
+          } catch (e) { console.warn('guest info prompt failed', e); }
+        }
+
         const payload = basePayload;
 
       const btn = document.getElementById('checkoutBtn');
