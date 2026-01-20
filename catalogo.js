@@ -817,7 +817,8 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
             }
           } catch (e) { /* ignore profile fetch errors */ }
         }
-      const btn = document.getElementById('checkoutBtn');
+
+        // Proceed — checkout button reference created later
 
         // If there's no user info attached (guest checkout), offer to login or collect minimal contact info
         if (!basePayload.user_full_name && !basePayload.user_email) {
@@ -968,7 +969,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
     }catch(e){ console.error('copyOrder', e); alert('No se pudo copiar el pedido automáticamente.'); }
   }
 
-  async function reAttemptOrder(payload){
+  async function  reAttemptOrder(payload){
     // ensure user info included when reattempting
     const token = getToken();
     try{ console.debug('[reAttemptOrder] token present?', !!token, token ? ('***'+token.slice(-10)) : null); }catch(_){ }
