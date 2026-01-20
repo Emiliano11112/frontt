@@ -876,14 +876,16 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       if (authToken) baseHeaders['Authorization'] = `Bearer ${authToken}`;
       try{ console.debug('[checkout] authToken present?', !!authToken, authToken ? ('***'+authToken.slice(-10)) : null, 'headers', baseHeaders); }catch(_){ }
 
+      const _attemptErrors = [];
       for (const url of tryUrls) {
         try {
           const res = await fetch(url, { method: 'POST', headers: baseHeaders, body: JSON.stringify(payload), mode: 'cors' });
-          if (!res.ok) throw new Error(`status:${res.status}`);
+          if (!res.ok) { const txt = await res.text().catch(()=>null); _attemptErrors.push({ url, status: res.status, statusText: res.statusText, body: txt }); throw new Error(`status:${res.status}`); }
           succeeded = true;
           break;
         } catch (err) {
           console.warn('checkout attempt failed for', url, err);
+          try{ _attemptErrors.push({ url, error: String(err) }); }catch(_){ }
           // try next url
         }
       }
@@ -895,8 +897,11 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           clearCart(); closeCart();
         } else {
           // graceful fallback: keep el carrito (NO WhatsApp), mostrar modal con opciones al usuario
-          console.warn('Checkout failed — showing fallback modal and keeping cart locally.');
-          showOrderModal(payload);
+          console.warn('Checkout failed — showing fallback modal and keeping cart locally.', _attemptErrors);
+          try{ console.error('[checkout] attempts', _attemptErrors); }catch(_){ }
+          // show modal and persist the failed payload so the user can retry later
+          try{ showOrderModal(payload); saveFailedOrder(payload); }catch(e){ showOrderModal(payload); }
+          try{ showToast('No se pudo enviar el pedido. Se guardó localmente para reintento.', 5000); }catch(_){ }
         }
       } catch (err) {
         console.error('post-checkout-handling', err);
@@ -949,7 +954,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         const ok = await reAttemptOrder(payload);
         ev.target.disabled = false;
         if (ok) { modal.remove(); alert('Pedido enviado — el panel de administración recibirá la orden.'); clearCart(); closeCart(); }
-        else { alert('No se pudo enviar la orden. Puedes copiar o descargar el pedido y enviarlo manualmente.'); }
+        else { alert('No se pudo enviar la orden. Puedes copiar o descargar el pedido y enviarlo manualmente.'); saveFailedOrder(payload); }
       });
       // focus
       const focusable = modal.querySelector('.om-retry') || modal.querySelector('.om-copy');
@@ -1028,6 +1033,59 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
     }
     return false;
   }
+
+  // Persist failed orders locally so they can be retried across sessions
+  function saveFailedOrder(payload){
+    try{
+      const key = 'catalog:failed_orders_v1';
+      const existing = JSON.parse(localStorage.getItem(key) || '[]');
+      existing.push({ payload, ts: Date.now() });
+      localStorage.setItem(key, JSON.stringify(existing));
+      try{ showToast('Pedido guardado localmente para reintento', 4000); }catch(_){ }
+      updateRetryButton();
+    }catch(e){ console.warn('saveFailedOrder failed', e); }
+  }
+  function loadFailedOrders(){ try{ return JSON.parse(localStorage.getItem('catalog:failed_orders_v1') || '[]'); }catch(e){ return []; } }
+  function clearFailedOrders(){ try{ localStorage.removeItem('catalog:failed_orders_v1'); updateRetryButton(); }catch(e){} }
+
+  async function retryStoredOrders(){
+    try{
+      const list = loadFailedOrders();
+      if(!list || !list.length){ showToast('No hay pedidos guardados para reintentar'); return; }
+      let successCount = 0;
+      for(const rec of list.slice()){ // iterate over a copy
+        try{
+          const ok = await reAttemptOrder(rec.payload);
+          if(ok){ successCount++; }
+        }catch(e){ console.warn('retryStoredOrders item failed', e); }
+      }
+      if(successCount > 0){
+        // remove only those that were successfully sent: simplest approach — clear all if any succeeded
+        clearFailedOrders();
+        showToast(`Reintentos completados: ${successCount}`, 4000);
+        // give server a moment then refresh to let admin see them
+        setTimeout(()=> fetchProducts({ showSkeleton: false }), 800);
+      } else {
+        showToast('No se pudo enviar ninguno de los pedidos guardados', 4000);
+      }
+    }catch(e){ console.warn('retryStoredOrders failed', e); showToast('Reintento falló', 3000); }
+  }
+
+  // floating retry button
+  function ensureRetryButton(){
+    if(document.getElementById('__retry_failed_btn')) return;
+    const btn = document.createElement('button'); btn.id='__retry_failed_btn'; btn.className='btn'; btn.style.position='fixed'; btn.style.right='12px'; btn.style.bottom='72px'; btn.style.zIndex='4000'; btn.style.padding='10px 12px'; btn.style.borderRadius='10px'; btn.style.boxShadow='0 8px 24px rgba(2,6,23,0.08)'; btn.style.background='linear-gradient(90deg,var(--accent),var(--accent-2))'; btn.style.color='#fff'; btn.textContent='Reintentar pedidos'; btn.title='Reintentar pedidos guardados localmente'; btn.onclick = ()=>{ retryStoredOrders(); };
+    document.addEventListener('DOMContentLoaded', ()=>{ document.body.appendChild(btn); updateRetryButton(); });
+  }
+  function updateRetryButton(){
+    const btn = document.getElementById('__retry_failed_btn');
+    if(!btn) return;
+    const list = loadFailedOrders();
+    const c = (list && list.length) ? list.length : 0;
+    btn.style.display = c ? 'block' : 'none';
+    btn.textContent = c ? `Reintentar pedidos (${c})` : 'Reintentar pedidos';
+  }
+  ensureRetryButton();
 
   // close on outside click
   document.addEventListener('pointerdown', (ev)=>{ const drawer = document.getElementById('cartDrawer'); const fab = document.getElementById('cartButton'); if(!drawer || drawer.getAttribute('aria-hidden')==='true') return; if(ev.target.closest && (ev.target.closest('#cartDrawer') || ev.target.closest('#cartButton'))) return; closeCart(); });
