@@ -87,6 +87,25 @@ try{
 function loadAdminFilters(){
   try{ const raw = localStorage.getItem('admin_filters_v1') || '[]'; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; }catch(e){ return []; }
 }
+
+// Try to fetch filters from common locations (so catalog shows them even when admin runs on a different origin)
+async function fetchAndSyncFilters(){
+  const tryUrls = ['/filters.json','/admin/filters.json','/filters', `${API_ORIGIN}/filters`, `${API_ORIGIN}/admin/filters`];
+  for(const url of tryUrls){
+    try{
+      const res = await fetch(url, { cache: 'no-store' });
+      if(!res.ok) continue;
+      const data = await res.json();
+      if(Array.isArray(data) && data.length){
+        try{ localStorage.setItem('admin_filters_v1', JSON.stringify(data)); }catch(e){}
+        try{ renderFilterButtons(); }catch(e){}
+        console.log('[catalogo] fetched filters from', url);
+        return;
+      }
+    }catch(e){ /* ignore and try next */ }
+  }
+}
+
 function renderFilterButtons(){
   try{
     const container = document.querySelector('.filters');
@@ -108,6 +127,12 @@ function renderFilterButtons(){
   }catch(e){ console.warn('renderFilterButtons failed', e); }
 }
 try{ if(typeof BroadcastChannel !== 'undefined'){ const bc2 = new BroadcastChannel('filters_channel'); bc2.onmessage = (ev) => { try{ if(ev.data && ev.data.action === 'filters-updated'){ console.log('[catalogo] filters updated via BroadcastChannel'); renderFilterButtons(); } }catch(e){} }; } }catch(e){}
+
+// Listen for direct localStorage changes from other tabs
+window.addEventListener('storage', (ev)=>{ if(ev.key === 'admin_filters_v1'){ try{ renderFilterButtons(); }catch(e){} } });
+
+// Poll once at start and periodically as a fallback for cross-origin cases
+try{ fetchAndSyncFilters(); setInterval(fetchAndSyncFilters, 30000); }catch(e){}
 
 
 function getBestPromotionForProduct(product){
