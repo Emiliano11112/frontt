@@ -936,10 +936,14 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       document.body.appendChild(modal);
       // styles for modal (scoped minimal) — won't override global theme
       const ss = document.createElement('style'); ss.id = '__order_modal_styles'; ss.textContent = `
-        .order-modal-overlay{ position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.45);z-index:1400;opacity:0;pointer-events:none;transition:opacity .18s ease}
+        .order-modal-overlay{ position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.36);backdrop-filter:blur(3px);z-index:1400;opacity:0;pointer-events:none;transition:opacity .18s ease}
         .order-modal-overlay.open{opacity:1;pointer-events:auto}
-        .order-modal{width:520px;max-width:calc(100% - 36px);background:var(--surface);border-radius:14px;padding:18px;box-shadow:var(--shadow-lg);border:1px solid rgba(10,34,64,0.04);color:var(--deep)}
+        .order-modal{width:520px;max-width:calc(100% - 36px);background:linear-gradient(180deg, rgba(255,255,255,0.98), var(--surface));border-radius:14px;padding:18px;box-shadow:0 18px 48px rgba(2,6,23,0.12);border:1px solid rgba(10,34,64,0.04);color:var(--deep)}
+        .order-modal header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+        .order-modal h3{margin:0;font-size:18px}
         .order-modal .om-close{background:transparent;border:0;color:var(--muted);font-size:18px;cursor:pointer}
+        .order-modal .om-copy, .order-modal .om-download{background:transparent;border:1px solid rgba(0,0,0,0.06);padding:8px 12px;border-radius:10px}
+        .order-modal .om-retry{padding:10px 14px;border-radius:10px;background:linear-gradient(90deg,var(--accent),var(--accent-2));color:#fff;border:0}
         @media(max-width:640px){ .order-modal{width:calc(100% - 28px)} }
       `; document.head.appendChild(ss);
       requestAnimationFrame(()=> modal.classList.add('open'));
@@ -1231,65 +1235,87 @@ function showToast(message, timeout = 3000){
   }catch(e){ console.warn('showToast failed', e); }
 }
 
-// Modal / dialog helpers (reusable)
-function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', value: true, primary: true }], dismissible = true} = {}){
+// Modal / dialog helpers (reusable) — enhanced styles and variants
+function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', value: true, primary: true }], dismissible = true, type = ''} = {}){
   return new Promise((resolve) => {
     try{
       if (!document.getElementById('__global_dialog_styles')){
         const s = document.createElement('style'); s.id = '__global_dialog_styles'; s.textContent = `
-.__dialog_overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.45);z-index:3200;opacity:0;pointer-events:none;transition:opacity .18s ease}
+.__dialog_overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.36);backdrop-filter:blur(3px);z-index:3200;opacity:0;pointer-events:none;transition:opacity .18s ease}
 .__dialog_overlay.open{opacity:1;pointer-events:auto}
-.__dialog{width:520px;max-width:calc(100% - 36px);background:var(--surface);border-radius:12px;padding:16px;box-shadow:var(--shadow-lg);color:var(--deep);border:1px solid rgba(10,34,64,0.04)}
-.__dialog h3{margin:0 0 8px 0}
-.__dialog .dialog-body{max-height:60vh;overflow:auto}
-.__dialog .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
-@media(max-width:640px){ .__dialog{width:calc(100% - 28px)} }
+.__dialog{width:520px;max-width:calc(100% - 36px);background:linear-gradient(180deg, rgba(255,255,255,0.98), var(--surface));border-radius:14px;padding:16px;box-shadow:0 18px 48px rgba(2,6,23,0.16);color:var(--deep);border:1px solid rgba(10,34,64,0.06);transform:translateY(-6px);transition:transform 200ms ease, opacity 180ms ease}
+.__dialog.open{transform:none}
+.__dialog .dialog-header{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.__dialog .dialog-header .dialog-icon{width:44px;height:44px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;font-size:18px}
+.__dialog h3{margin:0;font-size:18px}
+.__dialog .dialog-body{max-height:60vh;overflow:auto;color:var(--muted);line-height:1.45}
+.__dialog .dialog-body p{margin:0}
+.__dialog .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.__dialog .actions .btn{min-width:92px;padding:9px 14px;border-radius:10px}
+.__dialog .btn.btn-primary{background:linear-gradient(90deg,var(--accent),var(--accent-2));color:#fff;border:0}
+.__dialog .btn.btn-ghost{background:transparent;border:1px solid rgba(0,0,0,0.06);color:var(--deep)}
+.__dialog--success .dialog-icon{background:linear-gradient(90deg,#dff7ec,#bff0d9); color:#0a6d3a}
+.__dialog--warning .dialog-icon{background:linear-gradient(90deg,#fff5e6,#ffebcc); color:#b86a00}
+.__dialog--danger .dialog-icon{background:linear-gradient(90deg,#ffecec,#ffd6d6); color:#9b1e1e}
+.__dialog--info .dialog-icon{background:linear-gradient(90deg,#eaf6ff,#dbefff);color:#05507a}
+.__dialog input[type="text"], .__dialog input[type="email"]{width:100%;padding:10px;border-radius:8px;border:1px solid #e6e9ef}
+@media(max-width:640px){ .__dialog{width:calc(100% - 32px)} }
 `;
         document.head.appendChild(s);
       }
+
+      // small map for emoji icons — keeps things fast and dependency-free
+      const iconMap = { info: 'ℹ️', success: '✔️', warning: '⚠️', danger: '✖️' };
+      const iconHtml = type ? `<span class="dialog-icon">${iconMap[type] || ''}</span>` : '';
+
       const overlay = document.createElement('div'); overlay.className = '__dialog_overlay'; overlay.id = '__dialog_overlay';
-      overlay.innerHTML = `<div class="__dialog" role="dialog" aria-modal="true" aria-label="${escapeHtml(title||'Dialog')}">
-        ${ title ? `<h3>${escapeHtml(title)}</h3>` : '' }
+      overlay.innerHTML = `<div class="__dialog ${ type ? `__dialog--${type}` : '' }" role="dialog" aria-modal="true" aria-label="${escapeHtml(title||'Dialog')}">
+        ${ title ? `<div class="dialog-header">${iconHtml}<h3>${escapeHtml(title)}</h3></div>` : '' }
         <div class="dialog-body">${ html ? html : `<p>${escapeHtml(message)}</p>` }</div>
         <div class="actions"></div>
       </div>`;
+
       document.body.appendChild(overlay);
+      const dialog = overlay.querySelector('.__dialog');
       const actions = overlay.querySelector('.actions');
       buttons.forEach(btn => {
         const b = document.createElement('button'); b.className = btn.primary ? 'btn btn-primary' : 'btn btn-ghost'; b.textContent = btn.label; b.addEventListener('click', () => { cleanup(); resolve(btn.value); });
         actions.appendChild(b);
       });
+
       function cleanup(){ try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ } }
       if (dismissible) overlay.addEventListener('click', (ev)=>{ if (!ev.target.closest('.__dialog')){ cleanup(); resolve(false); } });
       const onKey = (ev)=>{ if (ev.key === 'Escape'){ cleanup(); resolve(false); } };
       window.addEventListener('keydown', onKey);
       requestAnimationFrame(()=> overlay.classList.add('open'));
+      // animate dialog in
+      requestAnimationFrame(()=> dialog.classList.add('open'));
       const focusable = actions.querySelector('button'); if (focusable) focusable.focus();
     }catch(e){ console.error('showDialog failed', e); resolve(false); }
   });
 }
 
-function showAlert(message){ return showDialog({ message, buttons: [{ label: 'OK', value: true, primary: true }] }); }
-function showConfirm(message){ return showDialog({ message, buttons: [{ label: 'Cancelar', value: false }, { label: 'Aceptar', value: true, primary: true }] }); }
+function showAlert(message, type = 'info'){ return showDialog({ message, type, buttons: [{ label: 'OK', value: true, primary: true }] }); }
+function showConfirm(message, type = 'warning'){ return showDialog({ message, type, buttons: [{ label: 'Cancelar', value: false }, { label: 'Aceptar', value: true, primary: true }] }); }
 function showJsonModal(obj, title = 'Detalle'){
   const html = `<pre style="white-space:pre-wrap;max-height:48vh;overflow:auto">${escapeHtml(JSON.stringify(obj, null, 2))}</pre>`;
-  return showDialog({ title, html, buttons: [{ label: 'Cerrar', value: true, primary: true }] });
+  return showDialog({ title, html, buttons: [{ label: 'Cerrar', value: true, primary: true }], type: 'info' });
 }
 function showGuestModal(){
   return new Promise((resolve)=>{
     try{
-      // build a focused guest contact modal that reads inputs before removing from DOM
+      // build a nicer guest contact modal (styled) and read inputs before removing
       const overlay = document.createElement('div'); overlay.className='__dialog_overlay'; overlay.style.zIndex = 3300;
       overlay.innerHTML = `
-        <div class="__dialog" role="dialog" aria-modal="true" aria-label="Datos de contacto (invitado)">
-          <h3>Datos de contacto (invitado)</h3>
+        <div class="__dialog __dialog--info" role="dialog" aria-modal="true" aria-label="Datos de contacto (invitado)">
+          <div class="dialog-header"><span class="dialog-icon">ℹ️</span><h3>Datos de contacto (invitado)</h3></div>
           <div class="dialog-body">
-            <div style="display:flex;flex-direction:column;gap:8px">
-              <input id="__gname" placeholder="Nombre (opcional)" style="padding:8px;border-radius:8px;border:1px solid #ddd" />
-              <input id="__gemail" placeholder="Email (opcional)" style="padding:8px;border-radius:8px;border:1px solid #ddd" />
-              <input id="__gbarrio" placeholder="Barrio (opcional)" style="padding:8px;border-radius:8px;border:1px solid #ddd" />
-              <input id="__gcalle" placeholder="Calle (opcional)" style="padding:8px;border-radius:8px;border:1px solid #ddd" />
-              <input id="__gnumero" placeholder="Numeración (opcional)" style="padding:8px;border-radius:8px;border:1px solid #ddd" />
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <input id="__gname" type="text" placeholder="Nombre (opcional)" />
+              <input id="__gemail" type="email" placeholder="Email (opcional)" />
+              <input id="__gbarrio" type="text" placeholder="Barrio (opcional)" />
+              <input id="__gcalle" type="text" placeholder="Calle (opcional)" />
+              <input id="__gnumero" type="text" placeholder="Numeración (opcional)" />
             </div>
           </div>
           <div class="actions">
