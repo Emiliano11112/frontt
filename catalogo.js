@@ -454,8 +454,16 @@ function render({ animate = false } = {}) {
       (p.nombre || '').toLowerCase().includes(search) ||
       (p.descripcion || '').toLowerCase().includes(search);
     const pid = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '');
-    const assigned = (productCatMap && (productCatMap[pid] || productCatMap[String(p.nombre)])) || [];
-    const matchesFilter = currentFilter === "all" || (assigned && assigned.some(v => String(v || '').toLowerCase() === currentFilter.toLowerCase())) || (p.categoria || '').toLowerCase() === currentFilter.toLowerCase();
+
+    // Normalize assigned categories (ensure array, trim & lowercase values)
+    const assignedRaw = (productCatMap && (productCatMap[pid] || productCatMap[String(p.nombre)])) || [];
+    const assigned = Array.isArray(assignedRaw) ? assignedRaw.map(v => String(v || '').trim().toLowerCase()) : [String(assignedRaw || '').trim().toLowerCase()];
+
+    // Support comma-separated categories in product.categoria (e.g. "lacteos, fiambres")
+    const prodCats = (p.categoria || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+
+    const cur = (currentFilter || 'all').toLowerCase();
+    const matchesFilter = cur === 'all' || (assigned && assigned.includes(cur)) || prodCats.includes(cur);
     return matchesSearch && matchesFilter;
   });
 
