@@ -93,24 +93,35 @@ async function fetchAndSyncFilters(){
   const tryUrls = ['/filters.json','/admin/filters.json','/filters', `${API_ORIGIN}/filters`, `${API_ORIGIN}/admin/filters`];
   for(const url of tryUrls){
     try{
+      console.debug('[catalogo] fetchAndSyncFilters: trying', url);
       const res = await fetch(url, { cache: 'no-store' });
-      if(!res.ok) continue;
+      if(!res.ok){ console.debug('[catalogo] fetchAndSyncFilters: non-ok response from', url, res.status); continue; }
       const data = await res.json();
       if(Array.isArray(data) && data.length){
-        try{ localStorage.setItem('admin_filters_v1', JSON.stringify(data)); }catch(e){}
-        try{ renderFilterButtons(); }catch(e){}
+        console.debug('[catalogo] fetchAndSyncFilters: got', data.length, 'filters from', url);
+        try{ localStorage.setItem('admin_filters_v1', JSON.stringify(data)); }catch(e){ console.warn('[catalogo] fetchAndSyncFilters: failed to write localStorage', e); }
+        try{ renderFilterButtons(); }catch(e){ console.warn('[catalogo] fetchAndSyncFilters: renderFilterButtons failed', e); }
         console.log('[catalogo] fetched filters from', url);
         return;
+      } else {
+        console.debug('[catalogo] fetchAndSyncFilters: no filters at', url);
       }
-    }catch(e){ /* ignore and try next */ }
+    }catch(e){ console.debug('[catalogo] fetchAndSyncFilters: fetch error for', url, e); /* ignore and try next */ }
   }
+  console.debug('[catalogo] fetchAndSyncFilters: no filters found in any tryUrls');
 }
 
 function renderFilterButtons(){
   try{
     const container = document.querySelector('.filters');
-    if(!container) return;
+    if(!container){
+      console.debug('[catalogo] renderFilterButtons: .filters not found yet, retrying...');
+      // try again shortly (protect against scripts running before the DOM piece exists)
+      setTimeout(renderFilterButtons, 200);
+      return;
+    }
     const filters = loadAdminFilters();
+    console.debug('[catalogo] renderFilterButtons: found container, filtersCount=', (filters||[]).length);
     container.innerHTML = '';
     const allBtn = document.createElement('button'); allBtn.dataset.filter = 'all'; allBtn.textContent = 'Todos';
     allBtn.addEventListener('click', ()=>{ currentFilter = 'all'; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(b=>b.classList.remove('active')); allBtn.classList.add('active'); });
@@ -118,9 +129,25 @@ function renderFilterButtons(){
     if((filters || []).length === 0){
       // fallback default buttons
       const defaults = [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}];
-      defaults.forEach(d => { const b = document.createElement('button'); b.dataset.filter = d.v; b.textContent = d.t; b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); }); container.appendChild(b); });
+      defaults.forEach(d => {
+        const b = document.createElement('button');
+        b.dataset.filter = d.v; b.textContent = d.t;
+        b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
+        container.appendChild(b);
+      });
+      console.debug('[catalogo] renderFilterButtons: no admin filters, rendered defaults');
     } else {
-      for(const f of filters){ try{ const b = document.createElement('button'); b.dataset.filter = f.value || f.name.toLowerCase(); b.textContent = f.name; b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); }); if(currentFilter && currentFilter.toLowerCase() === (b.dataset.filter || '').toLowerCase()){ b.classList.add('active'); allBtn.classList.remove('active'); } container.appendChild(b); }catch(e){ } }
+      for(const f of filters){
+        try{
+          const b = document.createElement('button');
+          b.dataset.filter = f.value || f.name.toLowerCase();
+          b.textContent = f.name;
+          b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
+          if(currentFilter && currentFilter.toLowerCase() === (b.dataset.filter || '').toLowerCase()){ b.classList.add('active'); allBtn.classList.remove('active'); }
+          container.appendChild(b);
+        }catch(e){ console.warn('[catalogo] renderFilterButtons: failed creating button for filter', f, e); }
+      }
+      console.debug('[catalogo] renderFilterButtons: appended admin filters');
     }
     // mark 'Todos' active when currentFilter==all
     if(!currentFilter || currentFilter === 'all'){ Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); allBtn.classList.add('active'); }
