@@ -824,7 +824,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         if (!basePayload.user_full_name && !basePayload.user_email) {
           try {
             const wantLogin = await showConfirm('No estás logueado. ¿Iniciar sesión para adjuntar tus datos al pedido? (Aceptar = login, Cancelar = enviar como invitado)');
-            if (wantLogin) { openAuthModal(); try{ btn.disabled = false; }catch(_){ } return; }
+            if (wantLogin) { openAuthModal(); try{ checkout.disabled = false; }catch(_){ } return; }
             // Collect minimal guest details via modal
             const guestInfo = await showGuestModal();
             if (guestInfo) {
@@ -1229,6 +1229,95 @@ function showToast(message, timeout = 3000){
     requestAnimationFrame(()=>{ t.style.transition = 'all 260ms ease'; t.style.opacity = '1'; t.style.transform = 'translateY(0)'; });
     setTimeout(()=>{ try{ t.style.opacity='0'; t.style.transform='translateY(8px)'; setTimeout(()=>t.remove(), 280); }catch(e){} }, timeout);
   }catch(e){ console.warn('showToast failed', e); }
+}
+
+// Modal / dialog helpers (reusable)
+function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', value: true, primary: true }], dismissible = true} = {}){
+  return new Promise((resolve) => {
+    try{
+      if (!document.getElementById('__global_dialog_styles')){
+        const s = document.createElement('style'); s.id = '__global_dialog_styles'; s.textContent = `
+.__dialog_overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.45);z-index:3200;opacity:0;pointer-events:none;transition:opacity .18s ease}
+.__dialog_overlay.open{opacity:1;pointer-events:auto}
+.__dialog{width:520px;max-width:calc(100% - 36px);background:var(--surface);border-radius:12px;padding:16px;box-shadow:var(--shadow-lg);color:var(--deep);border:1px solid rgba(10,34,64,0.04)}
+.__dialog h3{margin:0 0 8px 0}
+.__dialog .dialog-body{max-height:60vh;overflow:auto}
+.__dialog .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+@media(max-width:640px){ .__dialog{width:calc(100% - 28px)} }
+`;
+        document.head.appendChild(s);
+      }
+      const overlay = document.createElement('div'); overlay.className = '__dialog_overlay'; overlay.id = '__dialog_overlay';
+      overlay.innerHTML = `<div class="__dialog" role="dialog" aria-modal="true" aria-label="${escapeHtml(title||'Dialog')}">
+        ${ title ? `<h3>${escapeHtml(title)}</h3>` : '' }
+        <div class="dialog-body">${ html ? html : `<p>${escapeHtml(message)}</p>` }</div>
+        <div class="actions"></div>
+      </div>`;
+      document.body.appendChild(overlay);
+      const actions = overlay.querySelector('.actions');
+      buttons.forEach(btn => {
+        const b = document.createElement('button'); b.className = btn.primary ? 'btn btn-primary' : 'btn btn-ghost'; b.textContent = btn.label; b.addEventListener('click', () => { cleanup(); resolve(btn.value); });
+        actions.appendChild(b);
+      });
+      function cleanup(){ try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ } }
+      if (dismissible) overlay.addEventListener('click', (ev)=>{ if (!ev.target.closest('.__dialog')){ cleanup(); resolve(false); } });
+      const onKey = (ev)=>{ if (ev.key === 'Escape'){ cleanup(); resolve(false); } };
+      window.addEventListener('keydown', onKey);
+      requestAnimationFrame(()=> overlay.classList.add('open'));
+      const focusable = actions.querySelector('button'); if (focusable) focusable.focus();
+    }catch(e){ console.error('showDialog failed', e); resolve(false); }
+  });
+}
+
+function showAlert(message){ return showDialog({ message, buttons: [{ label: 'OK', value: true, primary: true }] }); }
+function showConfirm(message){ return showDialog({ message, buttons: [{ label: 'Cancelar', value: false }, { label: 'Aceptar', value: true, primary: true }] }); }
+function showJsonModal(obj, title = 'Detalle'){
+  const html = `<pre style="white-space:pre-wrap;max-height:48vh;overflow:auto">${escapeHtml(JSON.stringify(obj, null, 2))}</pre>`;
+  return showDialog({ title, html, buttons: [{ label: 'Cerrar', value: true, primary: true }] });
+}
+function showGuestModal(){
+  return new Promise((resolve)=>{
+    try{
+      // build a focused guest contact modal that reads inputs before removing from DOM
+      const overlay = document.createElement('div'); overlay.className='__dialog_overlay'; overlay.style.zIndex = 3300;
+      overlay.innerHTML = `
+        <div class="__dialog" role="dialog" aria-modal="true" aria-label="Datos de contacto (invitado)">
+          <h3>Datos de contacto (invitado)</h3>
+          <div class="dialog-body">
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <input id="__gname" placeholder="Nombre (opcional)" style="padding:8px;border-radius:8px;border:1px solid #ddd" />
+              <input id="__gemail" placeholder="Email (opcional)" style="padding:8px;border-radius:8px;border:1px solid #ddd" />
+              <input id="__gbarrio" placeholder="Barrio (opcional)" style="padding:8px;border-radius:8px;border:1px solid #ddd" />
+              <input id="__gcalle" placeholder="Calle (opcional)" style="padding:8px;border-radius:8px;border:1px solid #ddd" />
+              <input id="__gnumero" placeholder="Numeración (opcional)" style="padding:8px;border-radius:8px;border:1px solid #ddd" />
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn btn-ghost" data-action="cancel">Cancelar</button>
+            <button class="btn btn-primary" data-action="save">Guardar</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const cancelBtn = overlay.querySelector('[data-action="cancel"]');
+      const saveBtn = overlay.querySelector('[data-action="save"]');
+      const cleanup = ()=>{ try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ } };
+      cancelBtn.addEventListener('click', ()=>{ cleanup(); resolve(null); });
+      saveBtn.addEventListener('click', ()=>{
+        const o = {
+          name: (document.getElementById('__gname')?.value || '').trim(),
+          email: (document.getElementById('__gemail')?.value || '').trim(),
+          barrio: (document.getElementById('__gbarrio')?.value || '').trim(),
+          calle: (document.getElementById('__gcalle')?.value || '').trim(),
+          numero: (document.getElementById('__gnumero')?.value || '').trim()
+        };
+        cleanup(); resolve(o);
+      });
+      const onKey = (ev)=>{ if (ev.key === 'Escape') { cleanup(); resolve(null); } };
+      window.addEventListener('keydown', onKey);
+      // focus first input
+      setTimeout(()=>{ try{ document.getElementById('__gname')?.focus(); }catch(_){ } }, 50);
+    }catch(e){ console.error('showGuestModal failed', e); resolve(null); }
+  });
 }
 
 // Helper: fetch with AbortController-based timeout (used for auth requests)
