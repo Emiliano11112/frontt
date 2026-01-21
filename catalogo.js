@@ -83,6 +83,33 @@ try{
   }
 }catch(e){/* ignore if BroadcastChannel unavailable */}
 
+// Listen for admin-managed filters (key: 'admin_filters_v1') via BroadcastChannel 'filters_channel'
+function loadAdminFilters(){
+  try{ const raw = localStorage.getItem('admin_filters_v1') || '[]'; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; }catch(e){ return []; }
+}
+function renderFilterButtons(){
+  try{
+    const container = document.querySelector('.filters');
+    if(!container) return;
+    const filters = loadAdminFilters();
+    container.innerHTML = '';
+    const allBtn = document.createElement('button'); allBtn.dataset.filter = 'all'; allBtn.textContent = 'Todos';
+    allBtn.addEventListener('click', ()=>{ currentFilter = 'all'; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(b=>b.classList.remove('active')); allBtn.classList.add('active'); });
+    container.appendChild(allBtn);
+    if((filters || []).length === 0){
+      // fallback default buttons
+      const defaults = [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}];
+      defaults.forEach(d => { const b = document.createElement('button'); b.dataset.filter = d.v; b.textContent = d.t; b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); }); container.appendChild(b); });
+    } else {
+      for(const f of filters){ try{ const b = document.createElement('button'); b.dataset.filter = f.value || f.name.toLowerCase(); b.textContent = f.name; b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); }); if(currentFilter && currentFilter.toLowerCase() === (b.dataset.filter || '').toLowerCase()){ b.classList.add('active'); allBtn.classList.remove('active'); } container.appendChild(b); }catch(e){ } }
+    }
+    // mark 'Todos' active when currentFilter==all
+    if(!currentFilter || currentFilter === 'all'){ Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); allBtn.classList.add('active'); }
+  }catch(e){ console.warn('renderFilterButtons failed', e); }
+}
+try{ if(typeof BroadcastChannel !== 'undefined'){ const bc2 = new BroadcastChannel('filters_channel'); bc2.onmessage = (ev) => { try{ if(ev.data && ev.data.action === 'filters-updated'){ console.log('[catalogo] filters updated via BroadcastChannel'); renderFilterButtons(); } }catch(e){} }; } }catch(e){}
+
+
 function getBestPromotionForProduct(product){
   if (!promotions || promotions.length===0) return null;
   // allow passing either a product object or an id/string
@@ -1538,7 +1565,8 @@ function init(){
   try{
     grid = document.getElementById("catalogGrid") || (function(){ const s = document.createElement('section'); s.id='catalogGrid'; document.body.appendChild(s); return s;} )();
     searchInput = document.getElementById("searchInput") || (function(){ const i = document.createElement('input'); i.id='searchInput'; i.type='search'; document.body.insertBefore(i, grid); return i;} )();
-    filterButtons = document.querySelectorAll(".filters button") || [];
+    // Render dynamic filter buttons (admin-managed) or fallback to default inline ones
+    try{ renderFilterButtons(); }catch(e){ console.warn('initial renderFilterButtons failed', e); }
 
     // initial load
     try{ fetchProducts(); }catch(e){ console.error('fetchProducts init failed', e); showMessage('No se pudieron cargar productos', 'error'); }
@@ -1555,17 +1583,6 @@ function init(){
       clearBtn.addEventListener('click', (ev) => {
         ev.preventDefault();
         try { searchInput.value = ''; searchInput.focus(); render({ animate: true }); } catch (e) { console.error(e); }
-      });
-    }
-
-    if (filterButtons && filterButtons.forEach) {
-      filterButtons.forEach(btn => {
-        btn.addEventListener("click", () => {
-          filterButtons.forEach(b => b.classList.remove("active"));
-          btn.classList.add("active");
-          currentFilter = btn.dataset.filter;
-          render({ animate: true });
-        });
       });
     }
   }catch(err){ console.error('init failed', err); }
