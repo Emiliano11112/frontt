@@ -128,14 +128,20 @@ async function fetchAndSyncFilters(){
         try{ localStorage.setItem('admin_filters_v1', JSON.stringify(data)); }catch(e){ console.warn('[catalogo] fetchAndSyncFilters: failed to write localStorage', e); }
         try{ renderFilterButtons(); }catch(e){ console.warn('[catalogo] fetchAndSyncFilters: renderFilterButtons failed', e); }
         console.log('[catalogo] fetched filters from', url);
-        return;
+        return data;
       } else {
         console.debug('[catalogo] fetchAndSyncFilters: no filters at', url);
       }
     }catch(e){ console.debug('[catalogo] fetchAndSyncFilters: fetch error for', url, e); /* ignore and try next */ }
   }
   console.debug('[catalogo] fetchAndSyncFilters: no filters found in any tryUrls');
-}
+  // fallback to local storage cached copy (if any)
+  try{
+    const cached = JSON.parse(localStorage.getItem('admin_filters_v1') || '[]');
+    if (Array.isArray(cached) && cached.length) return cached;
+  }catch(e){ /* ignore */ }
+  return [];
+} 
 
 function renderFilterButtons(){
   try{
@@ -158,22 +164,37 @@ function renderFilterButtons(){
     container.appendChild(allBtn);
 
     // Manage filters button (opens modal to choose which filters to apply)
-    const manageBtn = document.createElement('button'); manageBtn.className = '__manage_filters_btn'; manageBtn.type = 'button'; manageBtn.textContent = 'Ver filtros';
+    const manageBtn = document.createElement('button');
+    manageBtn.className = '__manage_filters_btn btn btn-outline';
+    manageBtn.type = 'button';
+    manageBtn.setAttribute('aria-haspopup','dialog');
+    const activeCount = (active && active.length) ? active.length : 0;
+    manageBtn.innerHTML = `Ver filtros <span class="__manage_count" aria-hidden="true">${activeCount}</span>`;
+    manageBtn.title = 'Administrar filtros';
     manageBtn.addEventListener('click', ()=>{ showFilterManagerModal(); });
     container.appendChild(manageBtn);
 
     // compute full list of filters: admin filters or fallbacks
-    const listToShow = (filters && filters.length) ? filters.map(f => ({ value: String(f.value || f.name || '').toLowerCase(), name: String(f.name || f.value || '') })) : [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}].map(d=>({ value: d.v, name: d.t }));
+    const allFilters = (filters && filters.length) ? filters.map(f => ({ value: String(f.value || f.name || '').toLowerCase(), name: String(f.name || f.value || '') })) : [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}].map(d=>({ value: d.v, name: d.t }));
 
-    // build buttons for all filters (don't hide/show them)
+    // Show only the filters the user selected in the manager; if none selected, show none (only 'Todos' and 'Ver filtros' remain)
+    const activeFilters = loadActiveFilters();
+    let listToShow = [];
+    if (Array.isArray(activeFilters) && activeFilters.length > 0) {
+      listToShow = allFilters.filter(f => activeFilters.includes(String(f.value).toLowerCase()));
+    } else {
+      listToShow = [];
+    }
+
+    // build buttons for selected filters only
     for(const f of (listToShow || [])){
       try{
         const b = document.createElement('button');
         b.dataset.filter = f.value || String(f.name || '').toLowerCase();
         b.textContent = f.name || f.value;
         b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; saveActiveFilters([String(b.dataset.filter).toLowerCase()]); render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
-        // mark active if currentFilter matches or if activeFilters include it
-        if ((active && active.includes(String(b.dataset.filter).toLowerCase())) || (currentFilter && currentFilter.toLowerCase() === (b.dataset.filter || '').toLowerCase())){ b.classList.add('active'); allBtn.classList.remove('active'); }
+        // mark active if currentFilter matches
+        if (currentFilter && currentFilter.toLowerCase() === (b.dataset.filter || '').toLowerCase()){ b.classList.add('active'); allBtn.classList.remove('active'); }
         container.appendChild(b);
       }catch(e){ console.warn('[catalogo] renderFilterButtons: failed creating button for filter', f, e); }
     }
@@ -202,8 +223,11 @@ function loadActiveFilters(){ try{ const raw = localStorage.getItem('catalog:act
 function saveActiveFilters(arr){ try{ localStorage.setItem('catalog:active_filters_v1', JSON.stringify(Array.isArray(arr) ? arr.map(v=>String(v).toLowerCase()) : [])); }catch(e){} }
 
 // Modal to manage which filters are visible (responsive + accessible)
-function showFilterManagerModal(){
+async function showFilterManagerModal(){
   try{
+    // ensure we have the latest filters from backend before showing
+    try{ await fetchAndSyncFilters(); }catch(e){ /* ignore fetch errors, fallback to local */ }
+
     if(document.getElementById('__filters_modal')) return document.getElementById('__filters_modal').classList.add('open');
     const filters = loadAdminFilters();
     const defaults = [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}];
@@ -221,7 +245,7 @@ function showFilterManagerModal(){
           <button class="fm-close" aria-label="Cerrar">✕</button>
         </header>
         <div class="filters-list">
-          ${all.map(f=>`<label class="f-item"><input type="checkbox" value="${escapeHtml(f.value)}" ${active.includes(String(f.value).toLowerCase()) ? 'checked' : ''}><div style="flex:1">${escapeHtml(f.name)}</div></label>`).join('')}
+          ${all.length ? all.map(f=>`<label class="f-item"><input type="checkbox" value="${escapeHtml(f.value)}" ${active.includes(String(f.value).toLowerCase()) ? 'checked' : ''}><div style="flex:1">${escapeHtml(f.name)}</div></label>`).join('') : `<div style="color:var(--muted);padding:12px">No hay filtros disponibles desde el panel de administración.</div>`}
         </div>
         <div class="filters-actions">
           <button class="btn fm-select-all">Seleccionar todo</button>
@@ -263,7 +287,7 @@ function showFilterManagerModal(){
     overlay.querySelector('.fm-close').addEventListener('click', ()=> overlay.remove());
     overlay.querySelector('.fm-cancel').addEventListener('click', ()=> overlay.remove());
     overlay.querySelector('.fm-select-all').addEventListener('click', ()=>{ overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = true); });
-    overlay.querySelector('.fm-reset').addEventListener('click', ()=>{ saveActiveFilters([]); overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = false); showToast('Configuración de filtros restaurada (ninguno seleccionado)'); });
+    overlay.querySelector('.fm-reset').addEventListener('click', ()=>{ saveActiveFilters([]); overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = false); showToast('Configuración de filtros restaurada (ninguno seleccionado)'); if (overlay.querySelector('.fm-save')) overlay.querySelector('.fm-save').disabled = false; });
 
     overlay.querySelector('.fm-save').addEventListener('click', ()=>{
       try{
@@ -278,13 +302,19 @@ function showFilterManagerModal(){
       }catch(e){ console.warn('save filters failed', e); }
     });
 
+    // if no filters, disable select/save actions
+    if (!all.length) {
+      try{ overlay.querySelector('.fm-select-all').disabled = true; overlay.querySelector('.fm-save').disabled = true; }catch(_){ }
+    }
+
     // close on Esc
     const onKey = (ev)=>{ if (ev.key === 'Escape') { overlay.remove(); window.removeEventListener('keydown', onKey); } };
     window.addEventListener('keydown', onKey);
 
   }catch(e){ console.warn('showFilterManagerModal failed', e); }
-}
-try{ if(typeof BroadcastChannel !== 'undefined'){ const bc2 = new BroadcastChannel('filters_channel'); bc2.onmessage = (ev) => { try{ if(ev.data && ev.data.action === 'filters-updated'){ console.log('[catalogo] filters updated via BroadcastChannel'); renderFilterButtons(); } }catch(e){} };
+} 
+try{ if(typeof BroadcastChannel !== 'undefined'){ const bc2 = new BroadcastChannel('filters_channel'); bc2.onmessage = (ev) => { try{ if(ev.data && ev.data.action === 'filters-updated'){ console.log('[catalogo] filters updated via BroadcastChannel'); // fetch latest then refresh UI and modal if open
+              fetchAndSyncFilters().then((data)=>{ try{ renderFilterButtons(); }catch(_){} try{ refreshFilterModalContents(); }catch(_){ } }).catch(()=>{ try{ renderFilterButtons(); }catch(_){ } }); } }catch(e){} };
     // also listen for product categories updates
     const bcpc = new BroadcastChannel('product_categories_channel'); bcpc.onmessage = (ev) => { try{ if(ev.data && ev.data.action === 'product-categories-updated'){ console.log('[catalogo] product-categories updated via BroadcastChannel'); fetchAndSyncProductCategories().then(()=> render({ animate: true })).catch(()=> render({ animate: true })); } }catch(e){} } } }catch(e){}
 
