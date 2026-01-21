@@ -779,7 +779,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
 
   const fab = document.getElementById('cartButton'); if(fab) fab.addEventListener('click', ()=>{ const drawer = document.getElementById('cartDrawer'); if(drawer.getAttribute('aria-hidden')==='true') openCart(); else closeCart(); });
   const closeBtn = document.getElementById('closeCart'); if(closeBtn) closeBtn.addEventListener('click', closeCart);
-  const clearBtn = document.getElementById('clearCart'); if(clearBtn) clearBtn.addEventListener('click', ()=>{ if(confirm('Vaciar el carrito?')) clearCart(); });
+  const clearBtn = document.getElementById('clearCart'); if(clearBtn) clearBtn.addEventListener('click', async ()=>{ const ok = await showConfirm('Vaciar el carrito?'); if (ok) clearCart(); });
   const checkout = document.getElementById('checkoutBtn');
   if (checkout) {
     // ensure label matches requested copy
@@ -787,7 +787,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
     checkout.setAttribute('aria-label', 'Hacer pedido');
     checkout.addEventListener('click', async () => {
         const cart = readCart();
-        if (!cart || cart.length === 0) return alert('El carrito está vacío');
+        if (!cart || cart.length === 0) return showAlert('El carrito está vacío');
         const basePayload = { items: cart, total: cart.reduce((s, i) => s + (Number(i.meta?.price || 0) * i.qty), 0) };
 
         // attach user info if logged in; validate presence of contact fields and confirm
@@ -805,7 +805,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
               if (!profile.calle) missing.push('calle');
               if (!profile.numeracion) missing.push('numeración');
               if (missing.length) {
-                const ok = confirm('Tu perfil está incompleto (faltan: ' + missing.join(', ') + '). ¿Deseas continuar y enviar el pedido igualmente?');
+                const ok = await showConfirm('Tu perfil está incompleto (faltan: ' + missing.join(', ') + '). ¿Deseas continuar y enviar el pedido igualmente?');
                 if (!ok) { try { document.getElementById('checkoutBtn').disabled = false; } catch(e){}; return; }
               }
               basePayload.user_id = profile.id;
@@ -823,19 +823,17 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         // If there's no user info attached (guest checkout), offer to login or collect minimal contact info
         if (!basePayload.user_full_name && !basePayload.user_email) {
           try {
-            const wantLogin = confirm('No estás logueado. ¿Iniciar sesión para adjuntar tus datos al pedido? (Aceptar = login, Cancelar = enviar como invitado)');
+            const wantLogin = await showConfirm('No estás logueado. ¿Iniciar sesión para adjuntar tus datos al pedido? (Aceptar = login, Cancelar = enviar como invitado)');
             if (wantLogin) { openAuthModal(); try{ btn.disabled = false; }catch(_){ } return; }
-            // Collect minimal guest details (non-blocking prompts)
-            const gname = prompt('Nombre (opcional):', '') || '';
-            const gemail = prompt('Email (opcional):', '') || '';
-            const gbarrio = prompt('Barrio (opcional):', '') || '';
-            const gcalle = prompt('Calle (opcional):', '') || '';
-            const gnumero = prompt('Numeración (opcional):', '') || '';
-            if (gname) basePayload.user_full_name = gname;
-            if (gemail) basePayload.user_email = gemail;
-            if (gbarrio) basePayload.user_barrio = gbarrio;
-            if (gcalle) basePayload.user_calle = gcalle;
-            if (gnumero) basePayload.user_numeracion = gnumero;
+            // Collect minimal guest details via modal
+            const guestInfo = await showGuestModal();
+            if (guestInfo) {
+              if (guestInfo.name) basePayload.user_full_name = guestInfo.name;
+              if (guestInfo.email) basePayload.user_email = guestInfo.email;
+              if (guestInfo.barrio) basePayload.user_barrio = guestInfo.barrio;
+              if (guestInfo.calle) basePayload.user_calle = guestInfo.calle;
+              if (guestInfo.numero) basePayload.user_numeracion = guestInfo.numero;
+            }
           } catch (e) { console.warn('guest info prompt failed', e); }
         }
 
@@ -893,7 +891,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       try {
         if (succeeded) {
           // confirm visually and clear
-          alert('Pedido enviado — el panel de administración recibirá la orden.');
+          await showAlert('Pedido enviado — el panel de administración recibirá la orden.');
           clearCart(); closeCart();
         } else {
           // graceful fallback: keep el carrito (NO WhatsApp), mostrar modal con opciones al usuario
@@ -953,8 +951,8 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         ev.target.disabled = true;
         const ok = await reAttemptOrder(payload);
         ev.target.disabled = false;
-        if (ok) { modal.remove(); alert('Pedido enviado — el panel de administración recibirá la orden.'); clearCart(); closeCart(); }
-        else { alert('No se pudo enviar la orden. Puedes copiar o descargar el pedido y enviarlo manualmente.'); saveFailedOrder(payload); }
+        if (ok) { modal.remove(); await showAlert('Pedido enviado — el panel de administración recibirá la orden.'); clearCart(); closeCart(); }
+        else { await showAlert('No se pudo enviar la orden. Puedes copiar o descargar el pedido y enviarlo manualmente.'); saveFailedOrder(payload); }
       });
       // focus
       const focusable = modal.querySelector('.om-retry') || modal.querySelector('.om-copy');
@@ -962,7 +960,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       // close on Esc
       const onKey = (ev)=>{ if (ev.key === 'Escape') { modal.remove(); window.removeEventListener('keydown', onKey); } };
       window.addEventListener('keydown', onKey);
-    }catch(err){ console.error('showOrderModal', err); alert('No se pudo mostrar el modal del pedido — revisa la consola.'); }
+    }catch(err){ console.error('showOrderModal', err); showAlert('No se pudo mostrar el modal del pedido — revisa la consola.'); }
   }
 
   function copyOrderToClipboard(payload){
@@ -970,8 +968,8 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       const lines = (payload.items||[]).map(i=>`${i.qty} × ${i.meta?.name || i.id} — $${Number(i.meta?.price||0).toFixed(2)}`);
       const txt = `Pedido:\n${lines.join('\n')}\n\nTotal: $${Number(payload.total||0).toFixed(2)}`;
       navigator.clipboard?.writeText ? navigator.clipboard.writeText(txt) : (function(){ const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); })();
-      alert('Resumen del pedido copiado al portapapeles.');
-    }catch(e){ console.error('copyOrder', e); alert('No se pudo copiar el pedido automáticamente.'); }
+      showToast('Resumen del pedido copiado al portapapeles.');
+    }catch(e){ console.error('copyOrder', e); showAlert('No se pudo copiar el pedido automáticamente.'); }
   }
 
   async function  reAttemptOrder(payload){
@@ -1203,7 +1201,7 @@ async function debugWhoami(){
 // optional helper button shown only during debugging (not intrusive)
 try{
   if (location && location.hostname && (location.hostname === 'localhost' || location.hostname === '127.0.0.1')){
-    const dbg = document.createElement('button'); dbg.style.position = 'fixed'; dbg.style.right = '12px'; dbg.style.bottom = '12px'; dbg.style.zIndex = 9999; dbg.textContent = 'Verificar token'; dbg.className = 'btn btn-outline'; dbg.onclick = async ()=>{ const r = await debugWhoami(); alert(JSON.stringify(r)); };
+    const dbg = document.createElement('button'); dbg.style.position = 'fixed'; dbg.style.right = '12px'; dbg.style.bottom = '12px'; dbg.style.zIndex = 9999; dbg.textContent = 'Verificar token'; dbg.className = 'btn btn-outline'; dbg.onclick = async ()=>{ const r = await debugWhoami(); showJsonModal(r, 'Verificar token'); };
     document.addEventListener('DOMContentLoaded', ()=>{ document.body.appendChild(dbg); });
   }
 }catch(e){}
@@ -1321,9 +1319,9 @@ function closeAuthModal(){
 document.addEventListener('DOMContentLoaded', ()=>{
   updateAuthUI();
   const authBtn = document.getElementById('authButton');
-  if (authBtn) authBtn.addEventListener('click', ()=>{
+  if (authBtn) authBtn.addEventListener('click', async ()=>{
     const token = getToken();
-    if (token){ if (confirm('Cerrar sesión?')) { logout(); } return; }
+    if (token){ if (await showConfirm('Cerrar sesión?')) { logout(); } return; }
     openAuthModal();
   });
   const authClose = document.getElementById('authClose'); if (authClose) authClose.addEventListener('click', closeAuthModal);
