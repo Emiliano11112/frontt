@@ -149,35 +149,124 @@ function renderFilterButtons(){
     const filters = loadAdminFilters();
     console.debug('[catalogo] renderFilterButtons: found container, filtersCount=', (filters||[]).length);
     container.innerHTML = '';
+
+    // helper to read which filters the user has chosen to show
+    const visible = loadVisibleFilters();
+
     const allBtn = document.createElement('button'); allBtn.dataset.filter = 'all'; allBtn.textContent = 'Todos';
     allBtn.addEventListener('click', ()=>{ currentFilter = 'all'; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(b=>b.classList.remove('active')); allBtn.classList.add('active'); });
     container.appendChild(allBtn);
-    if((filters || []).length === 0){
-      // fallback default buttons
-      const defaults = [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}];
-      defaults.forEach(d => {
-        const b = document.createElement('button');
-        b.dataset.filter = d.v; b.textContent = d.t;
-        b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
-        container.appendChild(b);
-      });
-      console.debug('[catalogo] renderFilterButtons: no admin filters, rendered defaults');
-    } else {
-      for(const f of filters){
-        try{
-          const b = document.createElement('button');
-          b.dataset.filter = f.value || f.name.toLowerCase();
-          b.textContent = f.name;
-          b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
-          if(currentFilter && currentFilter.toLowerCase() === (b.dataset.filter || '').toLowerCase()){ b.classList.add('active'); allBtn.classList.remove('active'); }
-          container.appendChild(b);
-        }catch(e){ console.warn('[catalogo] renderFilterButtons: failed creating button for filter', f, e); }
-      }
-      console.debug('[catalogo] renderFilterButtons: appended admin filters');
+
+    // Manage filters button (opens modal to choose visible filters)
+    const manageBtn = document.createElement('button'); manageBtn.className = '__manage_filters_btn'; manageBtn.type = 'button'; manageBtn.textContent = 'Ver filtros';
+    manageBtn.addEventListener('click', ()=>{ showFilterManagerModal(); });
+    container.appendChild(manageBtn);
+
+    // compute list to show: admin filters if present, otherwise defaults
+    let listToShow = (filters && filters.length) ? filters.map(f => ({ value: String(f.value || f.name || '').toLowerCase(), name: String(f.name || f.value || '') })) : [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}].map(d=>({ value: d.v, name: d.t }));
+
+    // if user has saved visibility prefs, filter the list to only those selected (if user selected none, show none)
+    if (Array.isArray(visible) && visible.length > 0) {
+      listToShow = listToShow.filter(f => visible.includes(String(f.value).toLowerCase()));
     }
+
+    // build buttons for visible filters
+    for(const f of (listToShow || [])){
+      try{
+        const b = document.createElement('button');
+        b.dataset.filter = f.value || String(f.name || '').toLowerCase();
+        b.textContent = f.name || f.value;
+        b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
+        if(currentFilter && currentFilter.toLowerCase() === (b.dataset.filter || '').toLowerCase()){ b.classList.add('active'); allBtn.classList.remove('active'); }
+        container.appendChild(b);
+      }catch(e){ console.warn('[catalogo] renderFilterButtons: failed creating button for filter', f, e); }
+    }
+
     // mark 'Todos' active when currentFilter==all
     if(!currentFilter || currentFilter === 'all'){ Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); allBtn.classList.add('active'); }
+
+    // small responsive hint for mobile: make manage button visible and easy to tap
+    try{
+      manageBtn.style.marginLeft = '8px';
+      manageBtn.style.padding = '8px 10px';
+      manageBtn.style.borderRadius = '10px';
+      manageBtn.style.border = '1px solid rgba(0,0,0,0.06)';
+      manageBtn.style.background = 'transparent';
+      manageBtn.style.fontWeight = '700';
+    }catch(_){ }
   }catch(e){ console.warn('renderFilterButtons failed', e); }
+}
+
+// visible filters persistence helpers
+function loadVisibleFilters(){ try{ const raw = localStorage.getItem('catalog:visible_filters_v1'); if(!raw) return []; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed.map(v=>String(v).toLowerCase()) : []; }catch(e){ return []; } }
+function saveVisibleFilters(arr){ try{ localStorage.setItem('catalog:visible_filters_v1', JSON.stringify(Array.isArray(arr) ? arr : [])); }catch(e){} }
+
+// Modal to manage which filters are visible (responsive + accessible)
+function showFilterManagerModal(){
+  try{
+    if(document.getElementById('__filters_modal')) return document.getElementById('__filters_modal').classList.add('open');
+    const filters = loadAdminFilters();
+    const defaults = [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}];
+    const all = (filters && filters.length) ? filters.map(f=>({ value: String(f.value||f.name||'').toLowerCase(), name: String(f.name||f.value||'') })) : defaults.map(d=>({ value: d.v, name: d.t }));
+    const visible = loadVisibleFilters();
+
+    const overlay = document.createElement('div'); overlay.id='__filters_modal'; overlay.className='filters-overlay';
+    overlay.innerHTML = `
+      <div class="filters-modal" role="dialog" aria-modal="true" aria-label="Administrar filtros">
+        <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
+          <h3 style="margin:0">Administrar filtros</h3>
+          <button class="fm-close" aria-label="Cerrar">✕</button>
+        </header>
+        <div class="filters-list" style="max-height:56vh;overflow:auto;padding:6px 2px;margin-bottom:12px">
+          ${all.map(f=>`<label style="display:flex;align-items:center;gap:10px;margin:8px 0"><input type="checkbox" value="${escapeHtml(f.value)}" ${visible.length===0 || visible.includes(String(f.value).toLowerCase()) ? 'checked' : ''}> ${escapeHtml(f.name)}</label>`).join('')}
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
+          <button class="btn fm-select-all">Seleccionar todo</button>
+          <button class="btn fm-reset">Restaurar por defecto</button>
+          <button class="btn btn-ghost fm-cancel">Cancelar</button>
+          <button class="btn btn-primary fm-save">Guardar</button>
+        </div>
+      </div>`;
+
+    // inject minimal styles (scoped)
+    if(!document.getElementById('__filters_modal_styles')){
+      const ss = document.createElement('style'); ss.id='__filters_modal_styles'; ss.textContent = `
+        .filters-overlay{ position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.36);backdrop-filter:blur(3px);z-index:2200;opacity:0;pointer-events:none;transition:opacity .18s ease}
+        .filters-overlay.open{opacity:1;pointer-events:auto}
+        .filters-modal{width:520px;max-width:calc(100% - 36px);background:linear-gradient(180deg, rgba(255,255,255,0.98), var(--surface));border-radius:14px;padding:18px;box-shadow:0 18px 48px rgba(2,6,23,0.12);border:1px solid rgba(10,34,64,0.04);color:var(--deep)}
+        .filters-modal h3{margin:0;font-size:18px}
+        .filters-modal .fm-close{background:transparent;border:0;color:var(--muted);font-size:18px;cursor:pointer}
+        .filters-modal .btn{padding:8px 12px;border-radius:10px}
+        @media(max-width:640px){ .filters-overlay{align-items:flex-end} .filters-modal{width:100%;height:100%;max-width:none;border-radius:0;padding:18px;box-shadow:none} }
+      `; document.head.appendChild(ss);
+    }
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(()=> overlay.classList.add('open'));
+
+    // bindings
+    const modal = overlay.querySelector('.filters-modal');
+    overlay.querySelector('.fm-close').addEventListener('click', ()=> overlay.remove());
+    overlay.querySelector('.fm-cancel').addEventListener('click', ()=> overlay.remove());
+    overlay.querySelector('.fm-select-all').addEventListener('click', ()=>{ overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = true); });
+    overlay.querySelector('.fm-reset').addEventListener('click', ()=>{ saveVisibleFilters([]); overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = true); showToast('Configuración de filtros restaurada'); });
+
+    overlay.querySelector('.fm-save').addEventListener('click', ()=>{
+      try{
+        const checked = Array.from(overlay.querySelectorAll('.filters-list input[type=checkbox]:checked')).map(i=>String(i.value).toLowerCase());
+        saveVisibleFilters(checked);
+        renderFilterButtons();
+        render({ animate: true });
+        overlay.remove();
+        showToast('Filtros actualizados', 2500);
+      }catch(e){ console.warn('save filters failed', e); }
+    });
+
+    // close on Esc
+    const onKey = (ev)=>{ if (ev.key === 'Escape') { overlay.remove(); window.removeEventListener('keydown', onKey); } };
+    window.addEventListener('keydown', onKey);
+
+  }catch(e){ console.warn('showFilterManagerModal failed', e); }
 }
 try{ if(typeof BroadcastChannel !== 'undefined'){ const bc2 = new BroadcastChannel('filters_channel'); bc2.onmessage = (ev) => { try{ if(ev.data && ev.data.action === 'filters-updated'){ console.log('[catalogo] filters updated via BroadcastChannel'); renderFilterButtons(); } }catch(e){} };
     // also listen for product categories updates
@@ -457,7 +546,18 @@ function render({ animate = false } = {}) {
 
     // Normalize assigned categories (ensure array, trim & lowercase values)
     const assignedRaw = (productCatMap && (productCatMap[pid] || productCatMap[String(p.nombre)])) || [];
-    const assigned = Array.isArray(assignedRaw) ? assignedRaw.map(v => String(v || '').trim().toLowerCase()) : [String(assignedRaw || '').trim().toLowerCase()];
+    // Accept arrays, comma-separated strings or index-keyed objects (robust normalization)
+    let assignedArr = [];
+    if (Array.isArray(assignedRaw)) {
+      assignedArr = assignedRaw;
+    } else if (typeof assignedRaw === 'string') {
+      assignedArr = assignedRaw.split(',').map(s => s.trim()).filter(Boolean);
+    } else if (assignedRaw && typeof assignedRaw === 'object') {
+      assignedArr = Object.values(assignedRaw).flat().map(v => String(v || '').trim()).filter(Boolean);
+    } else {
+      assignedArr = [];
+    }
+    const assigned = assignedArr.map(v => String(v || '').trim().toLowerCase());
 
     // Support comma-separated categories in product.categoria (e.g. "lacteos, fiambres")
     const prodCats = (p.categoria || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
@@ -1224,6 +1324,17 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
   function saveFailedOrder(payload){
     try{
       const key = 'catalog:failed_orders_v1';
+      // ensure guest contact details are attached when available so the saved payload is complete
+      try{
+        const g = JSON.parse(localStorage.getItem('catalog:guest_info_v1') || 'null');
+        if (g){
+          payload.user_full_name = payload.user_full_name || g.name;
+          payload.user_email = payload.user_email || g.email;
+          payload.user_barrio = payload.user_barrio || g.barrio;
+          payload.user_calle = payload.user_calle || g.calle;
+          payload.user_numeracion = payload.user_numeracion || g.numero;
+        }
+      }catch(e){}
       const existing = JSON.parse(localStorage.getItem(key) || '[]');
       existing.push({ payload, ts: Date.now() });
       localStorage.setItem(key, JSON.stringify(existing));
@@ -1508,6 +1619,22 @@ function showGuestModal(){
           </div>
         </div>`;
       document.body.appendChild(overlay);
+      // Prefill inputs from last guest info if available so data survives refresh/rerender
+      try{
+        const last = JSON.parse(localStorage.getItem('catalog:guest_info_v1') || 'null');
+        if (last){
+          setTimeout(()=>{
+            try{
+              if (last.name) document.getElementById('__gname').value = last.name;
+              if (last.email) document.getElementById('__gemail').value = last.email;
+              if (last.barrio) document.getElementById('__gbarrio').value = last.barrio;
+              if (last.calle) document.getElementById('__gcalle').value = last.calle;
+              if (last.numero) document.getElementById('__gnumero').value = last.numero;
+            }catch(_){ }
+          }, 50);
+        }
+      }catch(e){}
+
       const cancelBtn = overlay.querySelector('[data-action="cancel"]');
       const saveBtn = overlay.querySelector('[data-action="save"]');
       const cleanup = ()=>{ try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ } };
@@ -1520,6 +1647,8 @@ function showGuestModal(){
           calle: (document.getElementById('__gcalle')?.value || '').trim(),
           numero: (document.getElementById('__gnumero')?.value || '').trim()
         };
+        // persist guest info for future attempts / across reloads
+        try{ localStorage.setItem('catalog:guest_info_v1', JSON.stringify(o)); }catch(e){}
         cleanup(); resolve(o);
       });
       const onKey = (ev)=>{ if (ev.key === 'Escape') { cleanup(); resolve(null); } };
