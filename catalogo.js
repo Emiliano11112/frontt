@@ -720,30 +720,68 @@ function clearCart(){ writeCart([]); renderCart(); }
 function pulseCard(productId){ const sel = `[data-pid="${productId}"]`; const card = document.querySelector(sel); if(!card) return; card.classList.add('added'); setTimeout(()=>card.classList.remove('added'), 600); }
 
 function renderCart(){ const container = document.getElementById('cartItems'); const subtotalEl = document.getElementById('cartSubtotal'); const cart = readCart(); container.innerHTML = '';
-  if(cart.length===0){ container.innerHTML = '<div class="cart-empty">Tu carrito está vacío</div>'; subtotalEl.textContent = '$0.00'; updateCartBadge(); return; }
-  let subtotal = 0; cart.forEach(item=>{ const row = document.createElement('div'); row.className = 'cart-item'; row.dataset.pid = item.id; const img = document.createElement('div'); img.className = 'ci-image'; img.innerHTML = `<img src="${item.meta?.image || 'images/placeholder.png'}" alt="${escapeHtml(item.meta?.name||'')}">`; const info = document.createElement('div'); info.className = 'ci-info';
+  // inject cart styles once
+  if (!document.getElementById('__cart_styles')){
+    const s = document.createElement('style'); s.id = '__cart_styles'; s.textContent = `
+      #cartDrawer .cart-empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:26px;text-align:center;color:var(--muted)}
+      .cart-empty .ce-cta{margin-top:8px}
+      .cart-item{display:flex;gap:12px;align-items:center;padding:12px;border-radius:12px;background:linear-gradient(180deg,rgba(255,255,255,0.98),rgba(250,250,250,0.98));border:1px solid rgba(0,0,0,0.04);margin-bottom:10px;box-shadow:0 6px 18px rgba(2,6,23,0.04)}
+      .ci-image img{width:72px;height:72px;border-radius:10px;object-fit:cover}
+      .ci-info{flex:1;display:flex;flex-direction:column;gap:6px}
+      .ci-name{font-weight:800;color:var(--deep);font-size:14px}
+      .ci-sub{font-size:12px;color:var(--muted)}
+      .ci-price{margin-top:6px}
+      .ci-price .price-new{color:var(--accent);font-weight:900}
+      .ci-price .price-old{color:var(--muted);text-decoration:line-through;margin-left:8px;font-size:12px}
+      .ci-controls{display:flex;gap:10px;align-items:center}
+      .qty{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid rgba(0,0,0,0.06);padding:6px 8px;border-radius:999px}
+      .qty button{border:0;background:transparent;color:var(--accent);font-weight:800;padding:6px;width:28px;height:28px;border-radius:50%;cursor:pointer}
+      .qty .val{min-width:26px;text-align:center;font-weight:700;color:var(--deep)}
+      .btn.remove{background:transparent;border:1px solid rgba(0,0,0,0.06);padding:8px 10px;border-radius:8px;color:var(--muted)}
+      #cartSubtotal{display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid rgba(0,0,0,0.04);margin-top:12px;font-weight:800}
+      #cartDrawer .cart-footer{display:flex;gap:8px;justify-content:space-between;align-items:center;margin-top:12px}
+      #cartDrawer .cart-actions{display:flex;gap:8px}
+      #clearCart,#checkoutBtn{border-radius:10px;padding:8px 12px}
+      #clearCart{background:transparent;border:1px solid rgba(0,0,0,0.06)}
+      #checkoutBtn{background:linear-gradient(90deg,var(--accent),var(--accent-2));color:#fff;border:0}
+      @media(max-width:480px){ .ci-image img{width:56px;height:56px} }
+    `; document.head.appendChild(s);
+  }
+
+  if(cart.length===0){ container.innerHTML = `<div class="cart-empty"><div style="font-size:36px;opacity:0.9">🛒</div><div style="font-weight:800">Tu carrito está vacío</div><div style="color:var(--muted)">Agregá productos para comenzar</div><div class="ce-cta"><button class="btn btn-primary" onclick="closeCart()">Seguir comprando</button></div></div>`; subtotalEl.textContent = '$0.00'; updateCartBadge(); return; }
+
+  let subtotal = 0; cart.forEach(item=>{
+    const row = document.createElement('div'); row.className = 'cart-item'; row.dataset.pid = item.id;
+    const img = document.createElement('div'); img.className = 'ci-image'; img.innerHTML = `<img src="${item.meta?.image || 'images/placeholder.png'}" alt="${escapeHtml(item.meta?.name||'')}">`;
+    const info = document.createElement('div'); info.className = 'ci-info';
+
     // prefer live product data (to reflect promotions), fallback to stored meta
     const prod = products.find(x => String(x.id ?? x._id) === String(item.id));
     const livePriceBase = prod ? (prod.precio ?? prod.price ?? item.meta?.price ?? 0) : (item.meta?.price ?? 0);
     const promo = getBestPromotionForProduct(prod || item);
     const unitPrice = promo ? getDiscountedPrice(livePriceBase, promo) : livePriceBase;
+
     // build name and price HTML, support promo-summary items that include multiple products
     let nameHtml = `<div class="ci-name">${escapeHtml(item.meta?.name||prod?.nombre||'')}</div>`;
     if (Array.isArray(item.meta?.products) && item.meta.products.length) {
       const lines = item.meta.products.map(x => `${escapeHtml(x.name || x.id)} — $${Number(x.price || 0).toFixed(2)}`);
-      nameHtml += `<div class="ci-sub" style="font-size:12px;color:var(--muted);margin-top:6px">${lines.join('<br>')}</div>`;
+      nameHtml += `<div class="ci-sub">${lines.join('<br>')}</div>`;
     }
 
-    const priceHtml = promo ? `<span class="price-new">$${Number(unitPrice).toFixed(2)}</span> <span class="price-old">$${Number(livePriceBase).toFixed(2)}</span> <small style="color:var(--muted);margin-left:6px">(${escapeHtml(promo.name||'promo')})</small>` : `$${Number(unitPrice).toFixed(2)}`;
+    const priceHtml = promo ? `<span class="price-new">$${Number(unitPrice).toFixed(2)}</span> <span class="price-old">$${Number(livePriceBase).toFixed(2)}</span> <small style="color:var(--muted);margin-left:6px">(${escapeHtml(promo.name||'promo')})</small>` : `<span class="price-new">$${Number(unitPrice).toFixed(2)}</span>`;
     info.innerHTML = `${nameHtml}<div class="ci-price">${priceHtml}</div>`;
-    const controls = document.createElement('div'); controls.className = 'ci-controls'; controls.innerHTML = `<div class="qty" role="group" aria-label="Cantidad"><button class="qty-dec" aria-label="Disminuir">−</button><div class="val" aria-live="polite">${item.qty}</div><button class="qty-inc" aria-label="Aumentar">+</button></div><button class="btn btn-ghost remove">Eliminar</button>`;
+
+    const controls = document.createElement('div'); controls.className = 'ci-controls'; controls.innerHTML = `<div class="qty" role="group" aria-label="Cantidad"><button class="qty-dec" aria-label="Disminuir">−</button><div class="val" aria-live="polite">${item.qty}</div><button class="qty-inc" aria-label="Aumentar">+</button></div><button class="btn remove">Eliminar</button>`;
+
     row.appendChild(img); row.appendChild(info); row.appendChild(controls); container.appendChild(row);
     subtotal += Number(unitPrice || 0) * item.qty;
+
     // bindings
     controls.querySelector('.qty-inc').addEventListener('click', ()=> setCartItem(item.id, item.qty+1));
     controls.querySelector('.qty-dec').addEventListener('click', ()=> setCartItem(item.id, item.qty-1));
     controls.querySelector('.remove').addEventListener('click', ()=> removeFromCart(item.id));
   });
+
   // animate subtotal change
   try{
     const newVal = Number(subtotal).toFixed(2);
@@ -756,6 +794,12 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
       if (Number(newVal) !== Number(prev)) { amt.classList.add('pulse'); setTimeout(()=>amt.classList.remove('pulse'), 280); }
     }
   }catch(e){ subtotalEl.textContent = `$${Number(subtotal).toFixed(2)}`; }
+
+  // move actions into footer area if present
+  try{
+    const footer = document.getElementById('cartFooter'); if(footer){ footer.innerHTML = `<div class="cart-footer"><div id="cartSubtotal">Subtotal</div><div class="cart-actions"><button id="clearCart" class="btn">Vaciar</button><button id="checkoutBtn" class="btn btn-primary">Hacer pedido</button></div></div>`; document.getElementById('cartSubtotal').innerHTML = `Subtotal: <strong>$${Number(subtotal).toFixed(2)}</strong>`; }
+  }catch(e){ }
+
   updateCartBadge(); }
 
 function openCart(prefillId){ const drawer = document.getElementById('cartDrawer'); drawer.setAttribute('aria-hidden','false'); drawer.classList.add('open'); renderCart(); const btn = document.getElementById('cartButton'); btn.setAttribute('aria-expanded','true'); setTimeout(()=>{ const focusTarget = prefillId ? document.querySelector(`.cart-item[data-pid="${prefillId}"] .qty .val`) : document.getElementById('cartItems'); if(focusTarget) focusTarget.focus(); }, 120);
