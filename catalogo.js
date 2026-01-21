@@ -150,40 +150,40 @@ function renderFilterButtons(){
     console.debug('[catalogo] renderFilterButtons: found container, filtersCount=', (filters||[]).length);
     container.innerHTML = '';
 
-    // helper to read which filters the user has chosen to show
-    const visible = loadVisibleFilters();
+    // active filters (selected to filter products). Keep UI buttons always visible; modal controls selection
+    const active = loadActiveFilters();
 
     const allBtn = document.createElement('button'); allBtn.dataset.filter = 'all'; allBtn.textContent = 'Todos';
-    allBtn.addEventListener('click', ()=>{ currentFilter = 'all'; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(b=>b.classList.remove('active')); allBtn.classList.add('active'); });
+    allBtn.addEventListener('click', ()=>{ currentFilter = 'all'; saveActiveFilters([]); render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(b=>b.classList.remove('active')); allBtn.classList.add('active'); });
     container.appendChild(allBtn);
 
-    // Manage filters button (opens modal to choose visible filters)
+    // Manage filters button (opens modal to choose which filters to apply)
     const manageBtn = document.createElement('button'); manageBtn.className = '__manage_filters_btn'; manageBtn.type = 'button'; manageBtn.textContent = 'Ver filtros';
     manageBtn.addEventListener('click', ()=>{ showFilterManagerModal(); });
     container.appendChild(manageBtn);
 
-    // compute list to show: admin filters if present, otherwise defaults
-    let listToShow = (filters && filters.length) ? filters.map(f => ({ value: String(f.value || f.name || '').toLowerCase(), name: String(f.name || f.value || '') })) : [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}].map(d=>({ value: d.v, name: d.t }));
+    // compute full list of filters: admin filters or fallbacks
+    const listToShow = (filters && filters.length) ? filters.map(f => ({ value: String(f.value || f.name || '').toLowerCase(), name: String(f.name || f.value || '') })) : [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}].map(d=>({ value: d.v, name: d.t }));
 
-    // if user has saved visibility prefs, filter the list to only those selected (if user selected none, show none)
-    if (Array.isArray(visible) && visible.length > 0) {
-      listToShow = listToShow.filter(f => visible.includes(String(f.value).toLowerCase()));
-    }
-
-    // build buttons for visible filters
+    // build buttons for all filters (don't hide/show them)
     for(const f of (listToShow || [])){
       try{
         const b = document.createElement('button');
         b.dataset.filter = f.value || String(f.name || '').toLowerCase();
         b.textContent = f.name || f.value;
-        b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
-        if(currentFilter && currentFilter.toLowerCase() === (b.dataset.filter || '').toLowerCase()){ b.classList.add('active'); allBtn.classList.remove('active'); }
+        b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; saveActiveFilters([String(b.dataset.filter).toLowerCase()]); render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
+        // mark active if currentFilter matches or if activeFilters include it
+        if ((active && active.includes(String(b.dataset.filter).toLowerCase())) || (currentFilter && currentFilter.toLowerCase() === (b.dataset.filter || '').toLowerCase())){ b.classList.add('active'); allBtn.classList.remove('active'); }
         container.appendChild(b);
       }catch(e){ console.warn('[catalogo] renderFilterButtons: failed creating button for filter', f, e); }
     }
 
-    // mark 'Todos' active when currentFilter==all
-    if(!currentFilter || currentFilter === 'all'){ Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); allBtn.classList.add('active'); }
+    // mark 'Todos' active when there is no specific current filter and there are no active filters
+    const _act = loadActiveFilters();
+    if((!currentFilter || currentFilter === 'all') && !(_act && _act.length)){
+      Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active'));
+      allBtn.classList.add('active');
+    }
 
     // small responsive hint for mobile: make manage button visible and easy to tap
     try{
@@ -197,9 +197,9 @@ function renderFilterButtons(){
   }catch(e){ console.warn('renderFilterButtons failed', e); }
 }
 
-// visible filters persistence helpers
-function loadVisibleFilters(){ try{ const raw = localStorage.getItem('catalog:visible_filters_v1'); if(!raw) return []; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed.map(v=>String(v).toLowerCase()) : []; }catch(e){ return []; } }
-function saveVisibleFilters(arr){ try{ localStorage.setItem('catalog:visible_filters_v1', JSON.stringify(Array.isArray(arr) ? arr : [])); }catch(e){} }
+// active filters persistence helpers (which filters are applied when saving from modal)
+function loadActiveFilters(){ try{ const raw = localStorage.getItem('catalog:active_filters_v1'); if(!raw) return []; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed.map(v=>String(v).toLowerCase()) : []; }catch(e){ return []; } }
+function saveActiveFilters(arr){ try{ localStorage.setItem('catalog:active_filters_v1', JSON.stringify(Array.isArray(arr) ? arr.map(v=>String(v).toLowerCase()) : [])); }catch(e){} }
 
 // Modal to manage which filters are visible (responsive + accessible)
 function showFilterManagerModal(){
@@ -208,36 +208,50 @@ function showFilterManagerModal(){
     const filters = loadAdminFilters();
     const defaults = [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}];
     const all = (filters && filters.length) ? filters.map(f=>({ value: String(f.value||f.name||'').toLowerCase(), name: String(f.name||f.value||'') })) : defaults.map(d=>({ value: d.v, name: d.t }));
-    const visible = loadVisibleFilters();
+    const active = loadActiveFilters();
 
     const overlay = document.createElement('div'); overlay.id='__filters_modal'; overlay.className='filters-overlay';
     overlay.innerHTML = `
       <div class="filters-modal" role="dialog" aria-modal="true" aria-label="Administrar filtros">
-        <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
-          <h3 style="margin:0">Administrar filtros</h3>
+        <header>
+          <div style="display:flex;flex-direction:column">
+            <h3 style="margin:0">Administrar filtros</h3>
+            <div class="subtitle">Seleccioná uno o varios filtros para aplicar a la vista de productos.</div>
+          </div>
           <button class="fm-close" aria-label="Cerrar">✕</button>
         </header>
-        <div class="filters-list" style="max-height:56vh;overflow:auto;padding:6px 2px;margin-bottom:12px">
-          ${all.map(f=>`<label style="display:flex;align-items:center;gap:10px;margin:8px 0"><input type="checkbox" value="${escapeHtml(f.value)}" ${visible.length===0 || visible.includes(String(f.value).toLowerCase()) ? 'checked' : ''}> ${escapeHtml(f.name)}</label>`).join('')}
+        <div class="filters-list">
+          ${all.map(f=>`<label class="f-item"><input type="checkbox" value="${escapeHtml(f.value)}" ${active.includes(String(f.value).toLowerCase()) ? 'checked' : ''}><div style="flex:1">${escapeHtml(f.name)}</div></label>`).join('')}
         </div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
+        <div class="filters-actions">
           <button class="btn fm-select-all">Seleccionar todo</button>
-          <button class="btn fm-reset">Restaurar por defecto</button>
+          <button class="btn btn-ghost fm-reset">Restaurar (ninguno)</button>
           <button class="btn btn-ghost fm-cancel">Cancelar</button>
-          <button class="btn btn-primary fm-save">Guardar</button>
+          <button class="btn btn-primary fm-save">Aplicar</button>
         </div>
       </div>`;
 
-    // inject minimal styles (scoped)
+    // inject improved, professional styles (scoped)
     if(!document.getElementById('__filters_modal_styles')){
       const ss = document.createElement('style'); ss.id='__filters_modal_styles'; ss.textContent = `
-        .filters-overlay{ position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.36);backdrop-filter:blur(3px);z-index:2200;opacity:0;pointer-events:none;transition:opacity .18s ease}
+        .filters-overlay{ position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.45);backdrop-filter:blur(4px);z-index:2400;opacity:0;pointer-events:none;transition:opacity .22s ease}
         .filters-overlay.open{opacity:1;pointer-events:auto}
-        .filters-modal{width:520px;max-width:calc(100% - 36px);background:linear-gradient(180deg, rgba(255,255,255,0.98), var(--surface));border-radius:14px;padding:18px;box-shadow:0 18px 48px rgba(2,6,23,0.12);border:1px solid rgba(10,34,64,0.04);color:var(--deep)}
-        .filters-modal h3{margin:0;font-size:18px}
-        .filters-modal .fm-close{background:transparent;border:0;color:var(--muted);font-size:18px;cursor:pointer}
-        .filters-modal .btn{padding:8px 12px;border-radius:10px}
-        @media(max-width:640px){ .filters-overlay{align-items:flex-end} .filters-modal{width:100%;height:100%;max-width:none;border-radius:0;padding:18px;box-shadow:none} }
+        .filters-modal{width:640px;max-width:calc(100% - 48px);background:linear-gradient(180deg, #fff, #fcfcfd);border-radius:12px;padding:18px;box-shadow:0 24px 64px rgba(3,10,40,0.12);border:1px solid rgba(10,34,64,0.06);color:var(--deep);transition:transform .18s ease;transform:translateY(0)}
+        .filters-modal{display:flex;flex-direction:column;gap:12px}
+        .filters-modal header{display:flex;align-items:center;justify-content:space-between}
+        .filters-modal .subtitle{color:var(--muted);font-size:13px}
+        .filters-list{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:6px 2px;margin:0}
+        .filters-list .f-item{display:flex;align-items:center;gap:12px;padding:12px;border-radius:10px;border:1px solid rgba(6,26,43,0.04);background:linear-gradient(180deg,#fff,#fbfbfd);cursor:pointer}
+        .filters-list .f-item:hover{box-shadow:0 8px 20px rgba(2,6,23,0.05);transform:translateY(-2px)}
+        .filters-list input[type=checkbox]{accent-color:var(--accent);width:18px;height:18px}
+        .filters-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}
+        .filters-actions .btn{padding:10px 14px;border-radius:10px}
+        .filters-actions .btn-ghost{background:transparent;border:1px solid rgba(10,34,64,0.06)}
+        /* mobile bottom-sheet */
+        @media(max-width:720px){ .filters-overlay{align-items:flex-end} .filters-modal{width:100%;height:56vh;max-width:none;border-radius:12px 12px 0 0;padding:18px;box-shadow:0 -18px 38px rgba(3,10,40,0.12);border-top:1px solid rgba(10,34,64,0.06);} .filters-list{grid-template-columns:repeat(1,1fr);max-height:42vh;overflow:auto} }
+        /* manage button badge */
+        .__manage_filters_btn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border-radius:10px;border:1px solid rgba(10,34,64,0.06);background:transparent}
+        .__manage_filters_btn .__manage_count{background:var(--accent);color:#fff;padding:2px 8px;border-radius:999px;font-weight:700;font-size:12px}
       `; document.head.appendChild(ss);
     }
 
@@ -249,16 +263,18 @@ function showFilterManagerModal(){
     overlay.querySelector('.fm-close').addEventListener('click', ()=> overlay.remove());
     overlay.querySelector('.fm-cancel').addEventListener('click', ()=> overlay.remove());
     overlay.querySelector('.fm-select-all').addEventListener('click', ()=>{ overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = true); });
-    overlay.querySelector('.fm-reset').addEventListener('click', ()=>{ saveVisibleFilters([]); overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = true); showToast('Configuración de filtros restaurada'); });
+    overlay.querySelector('.fm-reset').addEventListener('click', ()=>{ saveActiveFilters([]); overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = false); showToast('Configuración de filtros restaurada (ninguno seleccionado)'); });
 
     overlay.querySelector('.fm-save').addEventListener('click', ()=>{
       try{
         const checked = Array.from(overlay.querySelectorAll('.filters-list input[type=checkbox]:checked')).map(i=>String(i.value).toLowerCase());
-        saveVisibleFilters(checked);
+        saveActiveFilters(checked);
+        // set currentFilter to the single selection for button highlighting if only one chosen
+        currentFilter = (checked && checked.length === 1) ? checked[0] : 'all';
         renderFilterButtons();
         render({ animate: true });
         overlay.remove();
-        showToast('Filtros actualizados', 2500);
+        showToast('Filtros aplicados', 2500);
       }catch(e){ console.warn('save filters failed', e); }
     });
 
@@ -562,8 +578,9 @@ function render({ animate = false } = {}) {
     // Support comma-separated categories in product.categoria (e.g. "lacteos, fiambres")
     const prodCats = (p.categoria || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-    const cur = (currentFilter || 'all').toLowerCase();
-    const matchesFilter = cur === 'all' || (assigned && assigned.includes(cur)) || prodCats.includes(cur);
+    const activeFilters = loadActiveFilters();
+    // If no active filters selected, treat as no filtering (show all). Otherwise match any selected filter.
+    const matchesFilter = (!activeFilters || activeFilters.length === 0) || activeFilters.some(fv => ((assigned && assigned.includes(fv)) || prodCats.includes(fv)));
     return matchesSearch && matchesFilter;
   });
 
