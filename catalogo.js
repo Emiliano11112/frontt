@@ -88,6 +88,32 @@ function loadAdminFilters(){
   try{ const raw = localStorage.getItem('admin_filters_v1') || '[]'; const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; }catch(e){ return []; }
 }
 
+// Product categories mapping (productKey -> [filterValue,...])
+function loadProductCategories(){
+  try{ const raw = localStorage.getItem('admin_product_categories_v1') || '{}'; const parsed = JSON.parse(raw); return (parsed && typeof parsed === 'object') ? parsed : {}; }catch(e){ return {}; }
+}
+
+async function fetchAndSyncProductCategories(){
+  const tryUrls = ['/product-categories.json', `/admin/product-categories.json`, `${API_ORIGIN}/product-categories.json`, `${API_ORIGIN}/product-categories`];
+  for(const url of tryUrls){
+    try{
+      console.debug('[catalogo] fetchAndSyncProductCategories: trying', url);
+      const res = await fetch(url, { cache: 'no-store' });
+      if(!res.ok){ console.debug('[catalogo] fetchAndSyncProductCategories: non-ok response from', url, res.status); continue; }
+      const data = await res.json();
+      if(data && typeof data === 'object'){
+        try{ localStorage.setItem('admin_product_categories_v1', JSON.stringify(data)); }catch(e){ console.warn('[catalogo] fetchAndSyncProductCategories: failed to write localStorage', e); }
+        try{ render({ animate: true }); }catch(e){}
+        console.log('[catalogo] fetched product-categories from', url);
+        return;
+      } else {
+        console.debug('[catalogo] fetchAndSyncProductCategories: no mapping at', url);
+      }
+    }catch(e){ console.debug('[catalogo] fetchAndSyncProductCategories: fetch error for', url, e); /* ignore and try next */ }
+  }
+  console.debug('[catalogo] fetchAndSyncProductCategories: no mapping found in any tryUrls');
+}
+
 // Try to fetch filters from common locations (so catalog shows them even when admin runs on a different origin)
 async function fetchAndSyncFilters(){
   const tryUrls = ['/filters.json','/admin/filters.json','/filters', `${API_ORIGIN}/filters.json`, `${API_ORIGIN}/filters`, `${API_ORIGIN}/admin/filters`];
@@ -153,13 +179,17 @@ function renderFilterButtons(){
     if(!currentFilter || currentFilter === 'all'){ Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); allBtn.classList.add('active'); }
   }catch(e){ console.warn('renderFilterButtons failed', e); }
 }
-try{ if(typeof BroadcastChannel !== 'undefined'){ const bc2 = new BroadcastChannel('filters_channel'); bc2.onmessage = (ev) => { try{ if(ev.data && ev.data.action === 'filters-updated'){ console.log('[catalogo] filters updated via BroadcastChannel'); renderFilterButtons(); } }catch(e){} }; } }catch(e){}
+try{ if(typeof BroadcastChannel !== 'undefined'){ const bc2 = new BroadcastChannel('filters_channel'); bc2.onmessage = (ev) => { try{ if(ev.data && ev.data.action === 'filters-updated'){ console.log('[catalogo] filters updated via BroadcastChannel'); renderFilterButtons(); } }catch(e){} };
+    // also listen for product categories updates
+    const bcpc = new BroadcastChannel('product_categories_channel'); bcpc.onmessage = (ev) => { try{ if(ev.data && ev.data.action === 'product-categories-updated'){ console.log('[catalogo] product-categories updated via BroadcastChannel'); fetchAndSyncProductCategories().then(()=> render({ animate: true })).catch(()=> render({ animate: true })); } }catch(e){} } } }catch(e){}
 
 // Listen for direct localStorage changes from other tabs
 window.addEventListener('storage', (ev)=>{ if(ev.key === 'admin_filters_v1'){ try{ renderFilterButtons(); }catch(e){} } });
 
 // Poll once at start and periodically as a fallback for cross-origin cases
 try{ fetchAndSyncFilters(); setInterval(fetchAndSyncFilters, 30000); }catch(e){}
+// Poll product-categories as well
+try{ fetchAndSyncProductCategories(); setInterval(fetchAndSyncProductCategories, 30000); }catch(e){}
 
 
 function getBestPromotionForProduct(product){
@@ -418,12 +448,14 @@ function render({ animate = false } = {}) {
   }
   grid.style.minHeight = grid.style.minHeight || '200px';
   const search = (searchInput.value || '').toLowerCase();
+  const productCatMap = loadProductCategories();
   const filtered = products.filter(p => {
     const matchesSearch =
       (p.nombre || '').toLowerCase().includes(search) ||
       (p.descripcion || '').toLowerCase().includes(search);
-    const matchesFilter =
-      currentFilter === "all" || (p.categoria || '').toLowerCase() === currentFilter.toLowerCase();
+    const pid = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '');
+    const assigned = (productCatMap && (productCatMap[pid] || productCatMap[String(p.nombre)])) || [];
+    const matchesFilter = currentFilter === "all" || (assigned && assigned.some(v => String(v || '').toLowerCase() === currentFilter.toLowerCase())) || (p.categoria || '').toLowerCase() === currentFilter.toLowerCase();
     return matchesSearch && matchesFilter;
   });
 
@@ -532,6 +564,11 @@ function render({ animate = false } = {}) {
       } catch (e) { promoRibbon = '' }
     }
 
+    // product categories assigned by admin
+    const pid2 = pid;
+    const assignedCats = (productCatMap && (productCatMap[pid2] || productCatMap[String(p.nombre)])) || [];
+    const catsHtml = (assignedCats && assignedCats.length) ? `<div class="product-meta">${assignedCats.map(c => `<span class="pc-tag">${escapeHtml(c)}</span>`).join(' ')}</div>` : '';
+
     card.innerHTML = `
       <div class="product-image">
         ${promo && promoRibbon ? `<div class="promo-ribbon">${promoRibbon}</div>` : ''}
@@ -539,6 +576,7 @@ function render({ animate = false } = {}) {
         <img src="${imgSrc}" alt="${escapeHtml(p.nombre)}" loading="lazy" fetchpriority="low">
       </div>
       <div class="product-info">
+        ${catsHtml}
         <h3>${escapeHtml(p.nombre)} ${isNew ? `<span class="new-badge">Nuevo</span>` : ''}</h3>
         <p>${escapeHtml(p.descripcion)}</p>
         <div class="price">${discounted ? `<span class="price-new">$${Number(discounted).toFixed(2)}</span> <span class="price-old">$${Number(p.precio).toFixed(2)}</span>` : `$${Number(p.precio).toFixed(2)}`}</div>
