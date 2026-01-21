@@ -1415,6 +1415,33 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
     }catch(e){ console.warn('retryStoredOrders failed', e); showToast('Reintento falló', 3000); }
   }
 
+  // Try to sync locally-stored failed orders directly to the server backup endpoint.
+  // This is best-effort and runs automatically on page load so client queues are
+  // persisted into the DB as soon as connectivity exists, protecting them across
+  // backend deploys.
+  async function syncFailedOrdersToServer(){
+    try{
+      const list = loadFailedOrders();
+      if(!list || !list.length) return;
+      // Extract payloads and POST as array to /backup-orders (server will persist each)
+      const payloads = list.map(r => r.payload);
+      try{
+        const resp = await fetch((typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/backup-orders') : '/backup-orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloads), mode: 'cors' });
+        if(resp.ok){
+          // remove local cache on success
+          clearFailedOrders();
+          showToast('Pedidos guardados en el servidor', 3000);
+          setTimeout(()=> fetchProducts({ showSkeleton: false }), 800);
+        } else {
+          console.warn('syncFailedOrdersToServer: server rejected backup', resp.status);
+        }
+      }catch(e){ console.warn('syncFailedOrdersToServer network error', e); }
+    }catch(e){ console.warn('syncFailedOrdersToServer failed', e); }
+  }
+
+  // Ensure we attempt an automatic sync when the page becomes active
+  document.addEventListener('DOMContentLoaded', ()=>{ try{ syncFailedOrdersToServer(); }catch(e){} });
+
   // floating retry button
   function ensureRetryButton(){
     if(document.getElementById('__retry_failed_btn')) return;
