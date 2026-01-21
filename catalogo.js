@@ -90,7 +90,7 @@ function loadAdminFilters(){
 
 // Try to fetch filters from common locations (so catalog shows them even when admin runs on a different origin)
 async function fetchAndSyncFilters(){
-  const tryUrls = ['/filters.json','/admin/filters.json','/filters', `${API_ORIGIN}/filters`, `${API_ORIGIN}/admin/filters`];
+  const tryUrls = ['/filters.json','/admin/filters.json','/filters', `${API_ORIGIN}/filters.json`, `${API_ORIGIN}/filters`, `${API_ORIGIN}/admin/filters`];
   for(const url of tryUrls){
     try{
       console.debug('[catalogo] fetchAndSyncFilters: trying', url);
@@ -1619,39 +1619,6 @@ function init(){
     searchInput = document.getElementById("searchInput") || (function(){ const i = document.createElement('input'); i.id='searchInput'; i.type='search'; document.body.insertBefore(i, grid); return i;} )();
     // Render dynamic filter buttons (admin-managed) or fallback to default inline ones
     try{ renderFilterButtons(); }catch(e){ console.warn('initial renderFilterButtons failed', e); }
-
-    // --- Debug helper: visible button to inspect admin filters and force sync ---
-    try{
-      const dbgId = '__filters_debug_btn';
-      if(!document.getElementById(dbgId)){
-        const btn = document.createElement('button');
-        btn.id = dbgId;
-        btn.title = 'Ver filtros admin / Forzar sincronización';
-        btn.textContent = 'Debug filtros';
-        btn.style.position = 'fixed'; btn.style.right = '12px'; btn.style.bottom = '72px'; btn.style.zIndex = 1600; btn.style.background = '#ff7a45'; btn.style.color = '#fff'; btn.style.border = 'none'; btn.style.padding = '8px 10px'; btn.style.borderRadius = '22px'; btn.style.boxShadow = '0 8px 18px rgba(0,0,0,0.12)'; btn.style.cursor = 'pointer';
-        btn.addEventListener('click', async (ev)=>{
-          ev.preventDefault();
-          try{
-            console.group('[catalogo][debug] admin_filters_v1');
-            const raw = localStorage.getItem('admin_filters_v1');
-            console.log('localStorage admin_filters_v1:', raw);
-            let parsed = null;
-            try{ parsed = JSON.parse(raw||'[]'); }catch(e){ console.warn('parse failed', e); }
-            console.log('parsed:', parsed);
-            console.groupEnd();
-            // Show a readable overlay for users
-            showOverlayError('admin_filters_v1: ' + (raw ? raw.substring(0,2000) : 'null') );
-            // try to force fetch remote locations once
-            await fetchAndSyncFilters();
-            // re-render to pick up any new values
-            try{ renderFilterButtons(); }catch(e){ console.warn('render after fetch failed', e); }
-            showOverlayError('Sincronización completada. Revisa la consola y los botones de filtro.');
-          }catch(e){ console.error('debug filters click failed', e); showOverlayError('Error debug: '+String(e)); }
-        });
-        document.body.appendChild(btn);
-      }
-    }catch(e){ console.warn('[catalogo] debug button init failed', e); }
-    // --- end debug helper ---
 
     // initial load
     try{ fetchProducts(); }catch(e){ console.error('fetchProducts init failed', e); showMessage('No se pudieron cargar productos', 'error'); }
