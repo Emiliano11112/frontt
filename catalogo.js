@@ -1168,7 +1168,18 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           } catch (e) { console.warn('guest info prompt failed', e); }
         }
 
-        const payload = basePayload;
+        // Ensure items are sent as a clean JSON array of simple objects
+        // and attach a token preview snapshot so the backend can persist contact info.
+        const payload = Object.assign({}, basePayload);
+        try{
+          payload.items = (basePayload.items || []).map(it => ({ id: (it && (it.id || it._id)) ? (it.id || it._id) : (it && it.id) ? it.id : '', qty: Number(it.qty || 1), meta: it.meta || it.meta || (it.meta || it) }));
+        }catch(e){ payload.items = basePayload.items || []; }
+        try{
+          // If logged-in, include a lightweight preview from the profile we fetched above
+          if (basePayload.user_full_name || basePayload.user_email) {
+            payload._token_preview = payload._token_preview || { name: basePayload.user_full_name || null, email: basePayload.user_email || null };
+          }
+        }catch(e){}
 
       const btn = document.getElementById('checkoutBtn');
       btn.disabled = true;
