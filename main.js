@@ -7,20 +7,88 @@ document.addEventListener('DOMContentLoaded', function() {
 	const rightBtn = document.querySelector('.promo-arrow-right');
 	let promoImages = [];
 	let current = 0;
+	let autoplayTimer = null;
+	let refreshTimer = null;
+
+	function renderIndicators(){
+		const container = carousel.parentElement.querySelector('.promo-indicators');
+		if(!container) return;
+		container.innerHTML = '';
+		for(let i=0;i<promoImages.length;i++){
+			const btn = document.createElement('button');
+			btn.className = 'promo-indicator';
+			btn.setAttribute('aria-label', `Ir a imagen ${i+1}`);
+			btn.dataset.index = String(i);
+			btn.type = 'button';
+			btn.addEventListener('click', () => { current = i; renderImage(current); startAutoplay(); });
+			container.appendChild(btn);
+		}
+		updateIndicators(current);
+	}
+
+	function updateIndicators(activeIdx){
+		const container = carousel.parentElement.querySelector('.promo-indicators');
+		if(!container) return;
+		const nodes = container.querySelectorAll('.promo-indicator');
+		nodes.forEach((n, idx) => {
+			n.classList.toggle('active', idx === activeIdx);
+			if(idx === activeIdx){ n.setAttribute('aria-current','true'); } else { n.removeAttribute('aria-current'); }
+		});
+	}
 
 	// Cambia esta URL por la del endpoint real del backend
 	const PROMOS_API = '/api/promos';
+
+	function sanitizePromoItems(items){
+		if(!Array.isArray(items)) return [];
+		return items.map(i => ({ url: i && i.url ? i.url : '', name: i && i.name ? i.name : '', alt: (i && i.alt) || (i && i.name) || '' }));
+	}
 
 	function renderImage(idx) {
 		if (!promoImages.length) {
 			carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imágenes promocionales</div>';
 			return;
 		}
-		carousel.innerHTML = '';
-		const img = document.createElement('img');
-		img.src = promoImages[idx].url;
-		img.alt = promoImages[idx].alt || 'Imagen promocional';
-		carousel.appendChild(img);
+		// Crossfade animation: insert new img and fade out the old one
+		// Use two fixed image elements (front/back) to avoid DOM accumulation and visual glitches
+		if (!promoImages.length) {
+			// remove any imgs and show placeholder
+			const existing = carousel.querySelectorAll('img');
+			existing.forEach(n => n.parentNode && n.parentNode.removeChild(n));
+			carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imágenes promocionales</div>';
+			return;
+		}
+		// ensure two image slots exist
+		let slotA = carousel.querySelector('.promo-slot-A');
+		let slotB = carousel.querySelector('.promo-slot-B');
+		if(!slotA){ slotA = document.createElement('img'); slotA.className = 'promo-img promo-slot-A'; slotA.style.zIndex = 1; carousel.appendChild(slotA); }
+		if(!slotB){ slotB = document.createElement('img'); slotB.className = 'promo-img promo-slot-B'; slotB.style.zIndex = 0; carousel.appendChild(slotB); }
+		// track active slot on the carousel element
+		if(typeof carousel._activeSlot === 'undefined') carousel._activeSlot = 0; // 0 -> A visible, 1 -> B visible
+		const activeSlot = carousel._activeSlot;
+		const activeImg = activeSlot === 0 ? slotA : slotB;
+		const nextImg = activeSlot === 0 ? slotB : slotA;
+		// prepare next image
+		nextImg.src = promoImages[idx].url;
+		nextImg.alt = promoImages[idx].alt || 'Imagen promocional';
+		nextImg.classList.remove('visible','exiting');
+		nextImg.style.zIndex = 2;
+		// force reflow then make it visible
+		void nextImg.offsetWidth;
+		nextImg.classList.add('visible');
+		// hide active image
+		activeImg.classList.remove('visible');
+		activeImg.classList.add('exiting');
+		activeImg.style.zIndex = 1;
+		// cleanup exiting class after transition
+		const FADE_MS = 600;
+		const onCleanup = () => { activeImg.classList.remove('exiting'); };
+		activeImg.addEventListener('transitionend', function handler(){ activeImg.removeEventListener('transitionend', handler); onCleanup(); });
+		setTimeout(onCleanup, FADE_MS + 80);
+		// flip active slot
+		carousel._activeSlot = 1 - activeSlot;
+		// update indicators to reflect current
+		try{ updateIndicators(current); }catch(_){ }
 	}
 
 	function showPrev() {
@@ -37,40 +105,75 @@ document.addEventListener('DOMContentLoaded', function() {
 	leftBtn && leftBtn.addEventListener('click', showPrev);
 	rightBtn && rightBtn.addEventListener('click', showNext);
 
-	// Cargar imágenes desde el backend
-	// Primero intentamos la ruta relativa (cuando backend y frontend comparten origen).
-	fetch(PROMOS_API)
-		.then(res => res.json())
-		.then(data => {
-			if (Array.isArray(data) && data.length > 0) {
-				promoImages = data;
-				current = 0;
-				renderImage(current);
-				return;
+	// Encapsular fetch+render en una función para reuso (autorefresh)
+	async function loadPromos(){
+		try{
+			const resp = await fetch(PROMOS_API);
+			if(resp.ok){
+				const data = await resp.json();
+				if(Array.isArray(data) && data.length>0){
+					promoImages = sanitizePromoItems(data);
+					if(!promoImages.length){ carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imágenes promocionales</div>'; return; }
+					if(current >= promoImages.length) current = 0;
+					renderIndicators();
+					renderImage(current);
+					// arrancar autoplay luego de cargar imágenes
+					startAutoplay();
+					return;
+				}
 			}
-			// fallback: intentar petición directa al backend si la relativa no devolvió promos
-			return fetch('https://backend-0lcs.onrender.com/api/promos').then(r => r.json()).then(d2 => {
-				promoImages = (d2 || []).map(i => {
-					// convertir rutas relativas del backend a absolutas
-					if (i && i.url && i.url.startsWith('/')) i.url = 'https://backend-0lcs.onrender.com' + i.url;
-					return i;
-				});
-				current = 0;
-				renderImage(current);
-			}).catch(() => {
-				carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imágenes promocionales</div>';
-			});
-		})
-		.catch(() => {
-			// Si la petición relativa falla (CORS o 404), intentar backend directo
-			fetch('https://backend-0lcs.onrender.com/api/promos')
-				.then(r => r.json())
-				.then(d2 => {
-					promoImages = (d2 || []).map(i => { if (i && i.url && i.url.startsWith('/')) i.url = 'https://backend-0lcs.onrender.com' + i.url; return i; });
-					current = 0; renderImage(current);
-				})
-				.catch(() => { carousel.innerHTML = '<div style="text-align:center;width:100%">No se pudieron cargar las imágenes</div>'; });
-		});
+		}catch(e){ /* ignore and fallback */ }
+		// fallback to explicit backend origin
+		try{
+			const r2 = await fetch('https://backend-0lcs.onrender.com/api/promos');
+			if(r2.ok){
+				let d2 = await r2.json();
+				if(Array.isArray(d2) && d2.length>0){
+					d2 = d2.map(i => { if (i && i.url && i.url.startsWith('/')) i.url = 'https://backend-0lcs.onrender.com' + i.url; return i; });
+					promoImages = sanitizePromoItems(d2);
+					if(!promoImages.length){ carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imágenes promocionales</div>'; return; }
+					if(current >= promoImages.length) current = 0;
+					renderIndicators();
+					renderImage(current);
+					// arrancar autoplay luego de cargar imágenes
+					startAutoplay();
+					return;
+				}
+			}
+		}catch(e){ /* final fallback */ }
+		carousel.innerHTML = '<div style="text-align:center;width:100%">No se pudieron cargar las imágenes</div>';
+	}
+
+	// iniciar carga inicial
+	loadPromos();
+
+	// autoplay cada 10s
+	function startAutoplay(){
+		stopAutoplay();
+		if(promoImages && promoImages.length>1){
+			autoplayTimer = setInterval(() => { showNext(); }, 10000);
+		}
+	}
+	function stopAutoplay(){ if(autoplayTimer){ clearInterval(autoplayTimer); autoplayTimer = null; } }
+
+	// refrescar la lista cada 30s
+	function startRefresh(){
+		stopRefresh();
+		refreshTimer = setInterval(async () => {
+			const prevLen = promoImages.length;
+			await loadPromos();
+			// reiniciar autoplay si cambió el número de imágenes
+			if(promoImages.length !== prevLen){ startAutoplay(); }
+		}, 30000);
+	}
+	function stopRefresh(){ if(refreshTimer){ clearInterval(refreshTimer); refreshTimer = null; } }
+
+	// arrancar timers
+	startAutoplay();
+	startRefresh();
+
+	// limpiar al salir
+	window.addEventListener('beforeunload', () => { stopAutoplay(); stopRefresh(); });
 });
 // Mobile menu toggle
 const menuToggle = document.querySelector('.menu-toggle');
