@@ -1,3 +1,38 @@
+/* Logo principal home */
+.main-logo {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 38px 0 38px 0;
+  padding: 32px 0;
+  background: linear-gradient(135deg, #fff 60%, #f8f7ff 100%);
+  border-radius: 32px;
+  box-shadow: 0 8px 40px rgba(10,34,64,0.10);
+  position: relative;
+  transition: box-shadow 0.3s;
+}
+.main-logo:hover {
+  box-shadow: 0 16px 60px rgba(242,107,56,0.13);
+}
+.main-logo img {
+  max-width: 320px;
+  width: 100%;
+  height: auto;
+  filter: drop-shadow(0 2px 16px rgba(10,34,64,0.08));
+  transition: transform 0.3s;
+}
+.main-logo img:hover {
+  transform: scale(1.04) rotate(-2deg);
+}
+@media (max-width: 700px) {
+  .main-logo {
+    padding: 18px 0;
+    margin: 22px 0 22px 0;
+  }
+  .main-logo img {
+    max-width: 180px;
+  }
+}
 /* Carrusel de imágenes promocionales */
 .promo-section {
   background: linear-gradient(90deg, #f8f7ff 60%, #fff 100%);
@@ -183,6 +218,8 @@ img{max-width:100%;height:auto;display:block}
 .contact-info{position:relative}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .form-group.full{grid-column:1/-1}
+/* Hidden catalog button — visually hidden but left in DOM for scripts */
+#vcatalogooculta{display:none !important}
 .form-input,.form-select,.form-textarea{width:100%;padding:10px;border-radius:10px;border:1px solid rgba(10,34,64,0.06);background:#fff}
 .form-note{font-size:13px;color:rgba(10,34,64,0.6);grid-column:1/-1;margin-top:8px}
 .form-footer{display:flex;justify-content:flex-end;grid-column:1/-1;margin-top:12px}

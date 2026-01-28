@@ -1,6 +1,8 @@
 // Carrusel de imágenes promocionales dinámico
 document.addEventListener('DOMContentLoaded', function() {
 	const carousel = document.querySelector('.promo-carousel');
+	// If the page doesn't include the promo carousel, skip promo initialization
+	if(!carousel){ console.debug('[promos] .promo-carousel not found — skipping promos init'); return; }
 	const leftBtn = document.querySelector('.promo-arrow-left');
 	const rightBtn = document.querySelector('.promo-arrow-right');
 	let promoImages = [];
@@ -36,15 +38,38 @@ document.addEventListener('DOMContentLoaded', function() {
 	rightBtn && rightBtn.addEventListener('click', showNext);
 
 	// Cargar imágenes desde el backend
+	// Primero intentamos la ruta relativa (cuando backend y frontend comparten origen).
 	fetch(PROMOS_API)
 		.then(res => res.json())
 		.then(data => {
-			promoImages = data;
-			current = 0;
-			renderImage(current);
+			if (Array.isArray(data) && data.length > 0) {
+				promoImages = data;
+				current = 0;
+				renderImage(current);
+				return;
+			}
+			// fallback: intentar petición directa al backend si la relativa no devolvió promos
+			return fetch('https://backend-0lcs.onrender.com/api/promos').then(r => r.json()).then(d2 => {
+				promoImages = (d2 || []).map(i => {
+					// convertir rutas relativas del backend a absolutas
+					if (i && i.url && i.url.startsWith('/')) i.url = 'https://backend-0lcs.onrender.com' + i.url;
+					return i;
+				});
+				current = 0;
+				renderImage(current);
+			}).catch(() => {
+				carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imágenes promocionales</div>';
+			});
 		})
 		.catch(() => {
-			carousel.innerHTML = '<div style="text-align:center;width:100%">No se pudieron cargar las imágenes</div>';
+			// Si la petición relativa falla (CORS o 404), intentar backend directo
+			fetch('https://backend-0lcs.onrender.com/api/promos')
+				.then(r => r.json())
+				.then(d2 => {
+					promoImages = (d2 || []).map(i => { if (i && i.url && i.url.startsWith('/')) i.url = 'https://backend-0lcs.onrender.com' + i.url; return i; });
+					current = 0; renderImage(current);
+				})
+				.catch(() => { carousel.innerHTML = '<div style="text-align:center;width:100%">No se pudieron cargar las imágenes</div>'; });
 		});
 });
 // Mobile menu toggle
