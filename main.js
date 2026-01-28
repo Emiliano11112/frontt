@@ -1,3 +1,52 @@
+// Carrusel de imágenes promocionales dinámico
+document.addEventListener('DOMContentLoaded', function() {
+	const carousel = document.querySelector('.promo-carousel');
+	const leftBtn = document.querySelector('.promo-arrow-left');
+	const rightBtn = document.querySelector('.promo-arrow-right');
+	let promoImages = [];
+	let current = 0;
+
+	// Cambia esta URL por la del endpoint real del backend
+	const PROMOS_API = '/api/promos';
+
+	function renderImage(idx) {
+		if (!promoImages.length) {
+			carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imágenes promocionales</div>';
+			return;
+		}
+		carousel.innerHTML = '';
+		const img = document.createElement('img');
+		img.src = promoImages[idx].url;
+		img.alt = promoImages[idx].alt || 'Imagen promocional';
+		carousel.appendChild(img);
+	}
+
+	function showPrev() {
+		if (!promoImages.length) return;
+		current = (current - 1 + promoImages.length) % promoImages.length;
+		renderImage(current);
+	}
+	function showNext() {
+		if (!promoImages.length) return;
+		current = (current + 1) % promoImages.length;
+		renderImage(current);
+	}
+
+	leftBtn && leftBtn.addEventListener('click', showPrev);
+	rightBtn && rightBtn.addEventListener('click', showNext);
+
+	// Cargar imágenes desde el backend
+	fetch(PROMOS_API)
+		.then(res => res.json())
+		.then(data => {
+			promoImages = data;
+			current = 0;
+			renderImage(current);
+		})
+		.catch(() => {
+			carousel.innerHTML = '<div style="text-align:center;width:100%">No se pudieron cargar las imágenes</div>';
+		});
+});
 // Mobile menu toggle
 const menuToggle = document.querySelector('.menu-toggle');
 const nav = document.querySelector('.nav');
