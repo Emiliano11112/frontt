@@ -50,8 +50,10 @@ async function fetchConsumos(){
 
 async function fetchPromotions(){
   const tryUrls = [
+    '/api/promos',
     '/promotions',
     '/promociones',
+    `${API_ORIGIN}/api/promos`,
     `${API_ORIGIN}/promotions`,
     `${API_ORIGIN}/promociones`,
     'promotions.json',
