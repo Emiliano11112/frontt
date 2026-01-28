@@ -24,6 +24,29 @@ const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').match
 
 // promotions support
 let promotions = [];
+// consumos (admin-managed immediate-consumption discounts)
+let consumos = [];
+
+async function fetchConsumos(){
+  const tryUrls = [
+    '/api/consumos',
+    '/consumos',
+    `${API_ORIGIN}/consumos`,
+    'consumos.json'
+  ];
+  for (const url of tryUrls){
+    try{
+      const res = await fetch(url, { cache: 'no-store' });
+      if(!res.ok) continue;
+      const data = await res.json();
+      if (Array.isArray(data)) { consumos = data; return consumos; }
+      // tolerate wrapped responses
+      if (data && Array.isArray(data.consumos)) { consumos = data.consumos; return consumos; }
+    }catch(e){ /* try next */ }
+  }
+  consumos = [];
+  return consumos;
+}
 
 async function fetchPromotions(){
   const tryUrls = [
@@ -82,6 +105,24 @@ try{
     };
   }
 }catch(e){/* ignore if BroadcastChannel unavailable */}
+
+// Listen for consumos updates from admin (optional live-refresh)
+try{
+  if (typeof BroadcastChannel !== 'undefined'){
+    const bcCons = new BroadcastChannel('consumos_channel');
+    bcCons.onmessage = (ev) => {
+      try{
+        if (!ev.data) return;
+        if (ev.data.action === 'consumos-updated'){
+          // admin may post { action: 'consumos-updated', consumos }
+          if (Array.isArray(ev.data.consumos)) consumos = ev.data.consumos;
+          else fetchConsumos().then(()=>{ try{ render({ animate: true }); }catch(_){} });
+          try{ render({ animate: true }); }catch(_){}
+        }
+      }catch(e){}
+    };
+  }
+}catch(e){/* ignore */}
 
 // Listen for admin-managed filters (key: 'admin_filters_v1') via BroadcastChannel 'filters_channel'
 function loadAdminFilters(){
@@ -514,6 +555,7 @@ async function fetchProducts({ showSkeleton = true } = {}) {
         const local = JSON.parse(cached);
         products = local.map(normalize);
         await fetchPromotions();
+        await fetchConsumos();
         render({ animate: true });
         showMessage('Mostrando catálogo desde caché local (offline).', 'info');
         return;
@@ -526,6 +568,7 @@ async function fetchProducts({ showSkeleton = true } = {}) {
       productsSource = 'local';
       products = local.map(normalize);
       await fetchPromotions();
+      await fetchConsumos();
       render({ animate: true });
       updateLastUpdated(true);
       return;
@@ -540,6 +583,7 @@ async function fetchProducts({ showSkeleton = true } = {}) {
   products = data.map(normalize);
   try { localStorage.setItem('catalog:products_cache_v1', JSON.stringify(data)); localStorage.setItem('catalog:products_cache_ts', String(Date.now())); } catch (e) { /* ignore */ }
   await fetchPromotions();
+  await fetchConsumos();
   render({ animate: true });
   updateLastUpdated();
 }
@@ -702,7 +746,19 @@ function render({ animate = false } = {}) {
 
     // check promotion for this product
     const promo = getBestPromotionForProduct(p);
-    const discounted = promo ? getDiscountedPrice(Number(p.precio ?? p.price ?? 0), promo) : null;
+    // check admin-managed consumos (immediate consumption discounts)
+    const consumo = (Array.isArray(consumos) && consumos.length) ? consumos.find(c => {
+      try{ const cid = String(c.id); if (cid && cid === String(p.id ?? p._id ?? p.nombre)) return true; }catch(_){}
+      try{ if (String(c.id) === String(p.nombre || p.name || '')) return true; }catch(_){}
+      return false;
+    }) : null;
+    const basePrice = Number(p.precio ?? p.price ?? 0);
+    const discountedPromo = promo ? getDiscountedPrice(basePrice, promo) : null;
+    const discountedConsumo = consumo ? Math.max(0, +(basePrice * (1 - (Number(consumo.discount ?? consumo.value ?? 0) / 100))).toFixed(2)) : null;
+    // choose the best (lowest) final price for the customer when multiple discounts exist
+    let discounted = null;
+    if (discountedPromo !== null && discountedConsumo !== null) discounted = Math.min(discountedPromo, discountedConsumo);
+    else discounted = discountedPromo !== null ? discountedPromo : discountedConsumo;
     const isNew = p.created_at ? (Date.now() - new Date(p.created_at).getTime()) < (1000 * 60 * 60 * 24 * 7) : false;
 
     // build promo ribbon label robustly (supports fractional percent values)
@@ -724,9 +780,12 @@ function render({ animate = false } = {}) {
     const assignedCats = (productCatMap && (productCatMap[pid2] || productCatMap[String(p.nombre)])) || [];
     const catsHtml = (assignedCats && assignedCats.length) ? `<div class="product-meta">${assignedCats.map(c => `<span class="pc-tag">${escapeHtml(c)}</span>`).join(' ')}</div>` : '';
 
+    const consumoRibbon = consumo ? `-${Math.round(Number(consumo.discount ?? consumo.value ?? 0))}%` : '';
+
     card.innerHTML = `
       <div class="product-image">
         ${promo && promoRibbon ? `<div class="promo-ribbon">${promoRibbon}</div>` : ''}
+        ${consumo ? `<div class="consumo-ribbon">${escapeHtml(consumoRibbon)}</div>` : ''}
         <div class="price-badge">${discounted ? `<span class="price-new">$${Number(discounted).toFixed(2)}</span><span class="price-old">$${Number(p.precio).toFixed(2)}</span>` : `$${Number(p.precio).toFixed(2)}`}</div>
         <img src="${imgSrc}" alt="${escapeHtml(p.nombre)}" loading="lazy" fetchpriority="low">
       </div>

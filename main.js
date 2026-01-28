@@ -156,6 +156,12 @@ document.addEventListener('DOMContentLoaded', function() {
 	}
 	function stopAutoplay(){ if(autoplayTimer){ clearInterval(autoplayTimer); autoplayTimer = null; } }
 
+	// pause autoplay on hover or focus for better UX
+	carousel.addEventListener('mouseenter', () => { stopAutoplay(); });
+	carousel.addEventListener('mouseleave', () => { startAutoplay(); });
+	carousel.addEventListener('focusin', () => { stopAutoplay(); });
+	carousel.addEventListener('focusout', () => { startAutoplay(); });
+
 	// refrescar la lista cada 30s
 	function startRefresh(){
 		stopRefresh();
@@ -212,6 +218,52 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
 			if (nav.classList.contains('open')) nav.classList.remove('open');
 		}
 	});
+});
+
+// Ensure mailto links reliably open (fallback if another handler prevents default)
+document.addEventListener('click', (e) => {
+	const mail = e.target && e.target.closest ? e.target.closest('a[href^="mailto:"]') : null;
+	if (!mail) return;
+	// Prefer opening Gmail web composer with prefilled subject/body so users can attach their CV easily.
+	// Note: attaching files via URL is not possible for security reasons — users must attach manually.
+	try {
+		e.preventDefault();
+		e.stopPropagation();
+		const href = mail.getAttribute('href') || '';
+		// parse mailto:to?subject=...&body=...
+		let to = '';
+		let params = '';
+		if (href.startsWith('mailto:')){
+			const rest = href.slice(7);
+			const parts = rest.split('?');
+			to = parts[0] || '';
+			params = parts[1] || '';
+		}
+		const usp = new URLSearchParams(params);
+		const subject = usp.get('subject') || '';
+		const body = usp.get('body') || '';
+		const professionalBody = (
+			(body ? body + '\n\n' : '') +
+			'Estimado/a equipo de DistriAr,\n\n' +
+			'Adjunto mi currículum vitae para postularme a oportunidades laborales en su empresa.\n' +
+			'Quedo a disposición para brindar más información y coordinar una entrevista si así lo consideran oportuno.\n\n' +
+			'Atentamente,\n' +
+			'[Nombre y Apellido]\n' +
+			'[Teléfono]'
+		);
+		const gmailUrl = 'https://mail.google.com/mail/?view=cm&fs=1' +
+			(to ? '&to=' + encodeURIComponent(to) : '') +
+			(subject ? '&su=' + encodeURIComponent(subject) : '') +
+			'&body=' + encodeURIComponent(professionalBody + '\n\nPor favor adjunte su CV a este correo antes de enviarlo.');
+		// Open Gmail composer in a new tab/window. If popup blocked, fallback to mailto navigation.
+		const w = window.open(gmailUrl, '_blank');
+		if (!w) {
+			window.location.href = href; // fallback to default mail client
+		}
+	} catch (err) {
+		// fallback: navigate to mailto if anything fails
+		try { window.location.href = mail.href; } catch(e){}
+	}
 });
 
 // Simple contact form handler
