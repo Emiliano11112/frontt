@@ -882,7 +882,14 @@ function render({ animate = false } = {}) {
           if (name) { img.src = `uploads/${name}`; return; }
         }
         // 4) try loading from `images/` fallback
-        if (tries === 3) { img.src = `images/${img.getAttribute('alt') ? img.getAttribute('alt').replace(/[^a-z0-9\.\-]/gi,'').toLowerCase()+'.png' : 'placeholder.png'}`; return; }
+        if (tries === 3) {
+          try {
+            const alt = img.getAttribute('alt') || '';
+            const safeName = alt ? (alt.replace(/[^a-z0-9.\-]/gi, '').toLowerCase() + '.png') : 'placeholder.png';
+            img.src = 'images/' + safeName;
+          } catch(e) { img.src = 'images/placeholder.png'; }
+          return;
+        }
       } catch (err) { /* ignore */ }
       // final fallback
       img.src = 'images/placeholder.png';
@@ -1592,13 +1599,13 @@ function startAutoRefresh() {
   const enabled = localStorage.getItem('catalog:auto:enabled') !== 'false';
   const countdownEl = document.getElementById('refreshCountdown');
   const modeEl = document.getElementById('autoMode');
-  modeEl.textContent = mode;
+  if (modeEl) modeEl.textContent = mode;
   if (!enabled) {
-    countdownEl.textContent = '—';
+    if (countdownEl) countdownEl.textContent = '—';
     return;
   }
   countdown = AUTO_REFRESH_SECONDS;
-  countdownEl.textContent = String(countdown);
+  if (countdownEl) countdownEl.textContent = String(countdown);
   // interval that performs refresh action          
   autoTimer = setInterval(() => {
     if (mode === 'full') {
@@ -1612,7 +1619,7 @@ function startAutoRefresh() {
   countdownTimer = setInterval(() => {
     countdown -= 1;
     if (countdown <= 0) countdown = AUTO_REFRESH_SECONDS;
-    countdownEl.textContent = String(countdown);
+    if (countdownEl) countdownEl.textContent = String(countdown);
   }, 1000);
 }
 
@@ -1690,6 +1697,41 @@ function updateLastUpdated(local = false) {
     }
   }catch(e){ console.warn('[catalogo] bindAutoControls failed', e); }
 })();
+
+// --- Backend connectivity check ---
+async function checkBackendConnectivity(){
+  const probeUrls = [
+    `${API_ORIGIN}/api/uploads`,
+    `${API_ORIGIN}/api/promos`,
+    `${API_ORIGIN}/api/consumos`,
+  ];
+  let ok = false;
+  for(const u of probeUrls){
+    try{
+      const controller = new AbortController();
+      const id = setTimeout(()=>controller.abort(), 3000);
+      const res = await fetch(u, { method: 'GET', mode: 'cors', signal: controller.signal });
+      clearTimeout(id);
+      if (res && res.ok){ ok = true; break; }
+    }catch(e){}
+  }
+  if (!ok){
+    console.warn('[catalogo] backend appears unreachable at', API_ORIGIN);
+    // show a non-intrusive banner so the user knows filters/promotions may not load
+    try{
+      if (!document.getElementById('__backend_status')){
+        const b = document.createElement('div'); b.id='__backend_status'; b.style.position='fixed'; b.style.top='72px'; b.style.left='50%'; b.style.transform='translateX(-50%)'; b.style.zIndex='3500'; b.style.background='linear-gradient(90deg,#fff7ed,#fff)'; b.style.border='1px solid rgba(242,107,56,0.12)'; b.style.padding='8px 12px'; b.style.borderRadius='8px'; b.style.boxShadow='0 10px 30px rgba(2,6,23,0.06)'; b.textContent='Advertencia: no se pudo conectar al backend — algunas funciones (filtros, promos) pueden no funcionar.'; document.body.appendChild(b);
+      }
+    }catch(e){/* ignore DOM errors */}
+  } else {
+    console.debug('[catalogo] backend connectivity OK:', API_ORIGIN);
+    const el = document.getElementById('__backend_status'); if (el) el.remove();
+  }
+  return ok;
+}
+
+// run a connectivity check after init
+document.addEventListener('DOMContentLoaded', ()=>{ try{ setTimeout(()=> checkBackendConnectivity(), 800); }catch(e){} });
 
 // wire clear button (if present)
 // small helper to avoid XSS when inserting strings into innerHTML
