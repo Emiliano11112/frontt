@@ -278,6 +278,16 @@ async function showFilterManagerModal(){
     const active = loadActiveFilters();
 
     const overlay = document.createElement('div'); overlay.id='__filters_modal'; overlay.className='filters-overlay';
+    const itemsHtml = (function(){
+      if (all.length) {
+        return all.map(function(f){
+          const checked = active.includes(String(f.value).toLowerCase()) ? 'checked' : '';
+          return '<label class="f-item"><input type="checkbox" value="' + escapeHtml(f.value) + '" ' + checked + '><div style="flex:1">' + escapeHtml(f.name) + '</div></label>';
+        }).join('');
+      }
+      return '<div style="color:var(--muted);padding:12px">No hay filtros disponibles desde el panel de administración.</div>';
+    })();
+
     overlay.innerHTML = `
       <div class="filters-modal" role="dialog" aria-modal="true" aria-label="Administrar filtros">
         <header>
@@ -288,7 +298,7 @@ async function showFilterManagerModal(){
           <button class="fm-close" aria-label="Cerrar">✕</button>
         </header>
         <div class="filters-list">
-          ${all.length ? all.map(f=>`<label class="f-item"><input type="checkbox" value="${escapeHtml(f.value)}" ${active.includes(String(f.value).toLowerCase()) ? 'checked' : ''}><div style="flex:1">${escapeHtml(f.name)}</div></label>`).join('') : `<div style="color:var(--muted);padding:12px">No hay filtros disponibles desde el panel de administración.</div>`}
+          ${itemsHtml}
         </div>
         <div class="filters-actions">
           <button class="btn fm-select-all">Seleccionar todo</button>
@@ -422,13 +432,27 @@ function normalize(p) {
   let image = p.imagen || p.image || p.image_url || p.imageUrl || null;
   // Si la ruta es relativa (empieza por '/') no anteponer el origen remoto cuando los
   // datos proceden del `products.json` local — así los assets locales se resuelven correctamente
-  if (image && image.startsWith('/')) {
-    if (productsSource === 'api') {
-      image = API_ORIGIN + image;
-    } else {
-      // mantener ruta relativa para que el servidor local la sirva
-      image = image;
-    }
+  if (image) {
+    // Normalize local uploads path so it resolves correctly when the page
+    // is served from `/frontend/` (dev server) or from site root.
+    // If image refers to uploads, prefer absolute root `/uploads/...` so it
+    // doesn't become relative to `/frontend/` and 404.
+    try{
+      const imgStr = String(image || '');
+      if (!imgStr) image = imgStr;
+      else if (imgStr.match(/^\/?uploads\//i)) {
+        // ensure absolute root path
+        image = '/' + imgStr.replace(/^\//, '');
+      } else if (imgStr.startsWith('/') && productsSource === 'api') {
+        image = API_ORIGIN + imgStr;
+      } else if (imgStr.startsWith('/') && productsSource !== 'api') {
+        // keep absolute root as-is (will point to project root)
+        image = imgStr;
+      } else {
+        // leave as relative path for other assets
+        image = imgStr;
+      }
+    }catch(e){ /* ignore normalization errors */ }
   }
   return { ...p, nombre: name, descripcion: description, categoria: category, precio: price, imagen: image };
 } 
@@ -517,20 +541,47 @@ function renderSkeleton(count = 6) {
 
 async function fetchProducts({ showSkeleton = true } = {}) {
   if (showSkeleton) renderSkeleton();
+  // quick probe: avoid long waits trying remote API when backend is down
+  let backendLikelyUp = true;
+  try {
+    const probeUrl = (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/health') : '/health';
+    const pr = await fetchWithTimeout(probeUrl, {}, 1200).catch(()=>null);
+    backendLikelyUp = !!(pr && pr.ok);
+  } catch (e) { backendLikelyUp = false; }
   // try multiple endpoints: prefer configured remote API when page is served from a different origin
   // (avoid triggering many 404s when the frontend is hosted as static site on another host)
   let tryUrls = [];
   try {
     const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
     const apiOrigin = (typeof API_URL === 'string' && API_URL) ? (new URL(API_URL)).origin : null;
+    // broaden attempted endpoints to common API paths (api, api/v1, spanish plural)
     if (pageOrigin && apiOrigin && pageOrigin !== apiOrigin) {
-      tryUrls = [API_ORIGIN + '/products', (pageOrigin + '/products'), '/products', 'products.json'];
+      if (backendLikelyUp) {
+        tryUrls = [
+          apiOrigin + '/products',
+          apiOrigin + '/api/products',
+          apiOrigin + '/api/v1/products',
+          apiOrigin + '/productos',
+          apiOrigin + '/api/productos',
+          pageOrigin + '/products',
+          '/products',
+          'products.json'
+        ];
+      } else {
+        // backend down - prefer same-origin and local copies
+        tryUrls = [ pageOrigin + '/products', '/products', 'products.json' ];
+      }
     } else {
-      tryUrls = ['/products', API_ORIGIN + '/products', 'products.json'];
+      if (backendLikelyUp && apiOrigin) {
+        tryUrls = [ '/products', apiOrigin + '/products', apiOrigin + '/api/products', apiOrigin + '/api/v1/products', 'products.json' ];
+      } else {
+        tryUrls = [ '/products', 'products.json' ];
+      }
     }
   } catch (e) {
-    tryUrls = ['/products', API_URL, 'products.json'];
+    tryUrls = ['/products', API_ORIGIN + '/products', API_ORIGIN + '/api/products', 'products.json'];
   }
+  try{ console.debug('[catalogo] fetchProducts tryUrls:', tryUrls); }catch(_){ }
   let data = null;
   let used = null;
   for (const url of tryUrls) {
@@ -722,7 +773,7 @@ function render({ animate = false } = {}) {
               <h3 class="product-title">${escapeHtml(c.name || 'Consumo inmediato')}</h3>
               <div class="product-sub">${escapeHtml(c.description || match.descripcion || '')}</div>
               <div class="price-display">${escapeHtml(label)}</div>
-              <div class="product-actions"><button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String(match.id ?? match._id ?? match.nombre || match.name || ''))}">Agregar</button></div>
+              <div class="product-actions"><button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id ?? match.nombre) || match.name || ''))}">Agregar</button></div>
             </div>`;
           cFrag.appendChild(card);
         }catch(e){ /* ignore individual consumo errors */ }
@@ -847,7 +898,11 @@ function render({ animate = false } = {}) {
     // product categories assigned by admin
     const pid2 = pid;
     const assignedCats = (productCatMap && (productCatMap[pid2] || productCatMap[String(p.nombre)])) || [];
-    const catsHtml = (assignedCats && assignedCats.length) ? `<div class="product-meta">${assignedCats.map(c => `<span class="pc-tag">${escapeHtml(c)}</span>`).join(' ')}</div>` : '';
+    let catsHtml = '';
+    if (assignedCats && assignedCats.length) {
+      const spans = assignedCats.map(function(c){ return '<span class="pc-tag">' + escapeHtml(c) + '</span>'; }).join(' ');
+      catsHtml = '<div class="product-meta">' + spans + '</div>';
+    }
 
     const consumoRibbon = consumo ? `-${Math.round(Number(consumo.discount ?? consumo.value ?? 0))}%` : '';
 
@@ -1833,12 +1888,13 @@ function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', v
 
       // small map for emoji icons — keeps things fast and dependency-free
       const iconMap = { info: 'ℹ️', success: '✔️', warning: '⚠️', danger: '✖️' };
-      const iconHtml = type ? `<span class="dialog-icon">${iconMap[type] || ''}</span>` : '';
+      const iconHtml = type ? ('<span class="dialog-icon">' + (iconMap[type] || '') + '</span>') : '';
 
       const overlay = document.createElement('div'); overlay.className = '__dialog_overlay'; overlay.id = '__dialog_overlay';
-      overlay.innerHTML = `<div class="__dialog ${ type ? `__dialog--${type}` : '' }" role="dialog" aria-modal="true" aria-label="${escapeHtml(title||'Dialog')}">
-        ${ title ? `<div class="dialog-header">${iconHtml}<h3>${escapeHtml(title)}</h3></div>` : '' }
-        <div class="dialog-body">${ html ? html : `<p>${escapeHtml(message)}</p>` }</div>
+      const headerHtml = title ? ('<div class="dialog-header">' + iconHtml + '<h3>' + escapeHtml(title) + '</h3></div>') : '';
+      const bodyHtml = html ? String(html) : ('<p>' + escapeHtml(message) + '</p>');
+      overlay.innerHTML = `<div class="__dialog ${ type ? ('__dialog--' + type) : '' }" role="dialog" aria-modal="true" aria-label="${escapeHtml(title||'Dialog')}">` + headerHtml + `
+        <div class="dialog-body">` + bodyHtml + `</div>
         <div class="actions"></div>
       </div>`;
 
