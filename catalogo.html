@@ -43,20 +43,16 @@
     <button data-filter="complementos">Complementos</button>
   </div>
 
-  <!-- Auto-refresh control -->
+  <!-- Auto-refresh control (toggle removed; auto-refresh runs automatically) -->
   <div class="auto-refresh" aria-hidden="false">
     <div class="auto-controls">
-      <label class="switch">
-        <input id="autoRefreshToggle" type="checkbox" checked>
-        <span class="slider"></span>
-      </label>
       <div class="auto-info">
         <div class="mode">Auto‑refresh <span id="autoMode">soft</span></div>
         <div class="countdown">Actualiza en <span id="refreshCountdown">30</span>s</div>
       </div>
-      </div>
-      <div id="autoStatus" class="auto-status" aria-live="polite">Activado</div>
     </div>
+    <div id="autoStatus" class="auto-status" aria-live="polite">Activado</div>
+  </div>
 </section>
 
 <!-- Auth Modal -->

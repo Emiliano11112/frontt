@@ -1630,38 +1630,65 @@ function updateLastUpdated(local = false) {
   el.textContent = `Última actualización: ${when.toLocaleTimeString()} ${local ? '(local)' : ''}`;
 }
 
-// UI bindings for auto-refresh control
+// UI bindings for auto-refresh control — resilient when the visible toggle is removed
 (function bindAutoControls(){
   const toggle = document.getElementById('autoRefreshToggle');
   const modeEl = document.getElementById('autoMode');
   const statusEl = document.getElementById('autoStatus');
-  // restore
-  const enabled = localStorage.getItem('catalog:auto:enabled');
-  const mode = localStorage.getItem('catalog:auto:mode') || 'soft';
-  toggle.checked = (enabled === null) ? true : (enabled === 'true');
-  modeEl.textContent = mode;
-  // set visual status badge
-  if (statusEl) {
-    const on = toggle.checked;
-    statusEl.classList.remove('on','off');
-    statusEl.classList.add(on ? 'on' : 'off');
-    statusEl.innerHTML = `<span class="dot"></span> ${on ? 'Activado' : 'Desactivado'}`;
+  // read stored values
+  const storedEnabled = localStorage.getItem('catalog:auto:enabled');
+  const storedMode = localStorage.getItem('catalog:auto:mode') || 'soft';
+
+  // ensure UI reflects mode
+  if (modeEl) modeEl.textContent = storedMode;
+
+  // If the toggle UI was removed, keep auto-refresh running by default
+  if (!toggle) {
+    const enabled = (storedEnabled === null) ? true : (storedEnabled === 'true');
+    if (statusEl) {
+      statusEl.classList.remove('on','off');
+      statusEl.classList.add(enabled ? 'on' : 'off');
+      statusEl.innerHTML = `<span class="dot"></span> ${enabled ? 'Activado' : 'Desactivado'}`;
+    }
+    if (enabled) startAutoRefresh();
+    // allow double-click on the mode label to toggle between 'soft' and 'full' modes
+    if (modeEl && modeEl.parentElement) {
+      modeEl.parentElement.addEventListener('dblclick', (ev) => {
+        const next = (localStorage.getItem('catalog:auto:mode') || 'soft') === 'soft' ? 'full' : 'soft';
+        localStorage.setItem('catalog:auto:mode', next);
+        modeEl.textContent = next;
+        if (localStorage.getItem('catalog:auto:enabled') !== 'false') startAutoRefresh();
+      });
+    }
+    return;
   }
-  // when user toggles auto-refresh on/off
-  toggle.addEventListener('change', (e) => {
-    const on = e.target.checked;
-    localStorage.setItem('catalog:auto:enabled', String(on));
-    if (on) startAutoRefresh(); else stopAutoRefresh();
-    if (statusEl) { statusEl.classList.remove('on','off'); statusEl.classList.add(on ? 'on' : 'off'); statusEl.innerHTML = `<span class="dot"></span> ${on ? 'Activado' : 'Desactivado'}`; }
-  });
-  // switch mode on double-click of the mode label (soft <-> full)
-  modeEl.parentElement.addEventListener('dblclick', (ev) => {
-    const next = (localStorage.getItem('catalog:auto:mode') || 'soft') === 'soft' ? 'full' : 'soft';
-    localStorage.setItem('catalog:auto:mode', next);
-    modeEl.textContent = next;
-    // immediate feedback: restart with new mode
-    if (toggle.checked) startAutoRefresh();
-  });
+
+  // Legacy path: toggle exists — keep original behavior but defensive
+  try{
+    const enabled = (storedEnabled === null) ? true : (storedEnabled === 'true');
+    toggle.checked = enabled;
+    if (modeEl) modeEl.textContent = storedMode;
+    if (statusEl) {
+      const on = toggle.checked;
+      statusEl.classList.remove('on','off');
+      statusEl.classList.add(on ? 'on' : 'off');
+      statusEl.innerHTML = `<span class="dot"></span> ${on ? 'Activado' : 'Desactivado'}`;
+    }
+    toggle.addEventListener('change', (e) => {
+      const on = e.target.checked;
+      localStorage.setItem('catalog:auto:enabled', String(on));
+      if (on) startAutoRefresh(); else stopAutoRefresh();
+      if (statusEl) { statusEl.classList.remove('on','off'); statusEl.classList.add(on ? 'on' : 'off'); statusEl.innerHTML = `<span class="dot"></span> ${on ? 'Activado' : 'Desactivado'}`; }
+    });
+    if (modeEl && modeEl.parentElement) {
+      modeEl.parentElement.addEventListener('dblclick', (ev) => {
+        const next = (localStorage.getItem('catalog:auto:mode') || 'soft') === 'soft' ? 'full' : 'soft';
+        localStorage.setItem('catalog:auto:mode', next);
+        modeEl.textContent = next;
+        if (toggle.checked) startAutoRefresh();
+      });
+    }
+  }catch(e){ console.warn('[catalogo] bindAutoControls failed', e); }
 })();
 
 // wire clear button (if present)
