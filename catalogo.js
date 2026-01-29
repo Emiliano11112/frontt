@@ -680,6 +680,54 @@ function render({ animate = false } = {}) {
     return;
   }
 
+  // Render Consumiciones Inmediatas section: products explicitly marked in `consumos`
+  // Build a quick lookup of consumo ids (strings) for robust matching
+  const consumoIds = new Set((Array.isArray(consumos) ? consumos.map(c => String(c.id)) : []));
+  // Products that are consumos (preserve original order)
+  const consumosProducts = filtered.filter(p => consumoIds.has(String(p.id ?? p._id ?? p.nombre ?? p.name ?? '')));
+  // Remove consumos products from the main filtered list so they show ONLY in the consumos section
+  const mainProducts = filtered.filter(p => !consumoIds.has(String(p.id ?? p._id ?? p.nombre ?? p.name ?? '')));
+
+  // Render consumos section above the main product grid when present
+  const consumosSectionId = 'consumosSection';
+  let consumosSection = document.getElementById(consumosSectionId);
+  if (!consumosSection) {
+    consumosSection = document.createElement('section');
+    consumosSection.id = consumosSectionId;
+    consumosSection.className = 'consumos-section';
+    // Insert consumos section before promosRow so it's prominent
+    try{ promosRow.parentNode.insertBefore(consumosSection, promosRow); }catch(e){ document.body.insertBefore(consumosSection, promosRow); }
+  }
+  if (consumosProducts.length) {
+    const csFrag = document.createDocumentFragment();
+    consumosSection.innerHTML = `<div class="container"><h2>Consumiciones inmediatas</h2><div class="consumos-grid"></div></div>`;
+    const gridEl = consumosSection.querySelector('.consumos-grid');
+    for (const p of consumosProducts) {
+      try{
+        const cid = String(p.id ?? p._id ?? p.nombre ?? p.name || '');
+        const consumoMeta = (Array.isArray(consumos) ? consumos.find(c=> String(c.id) === cid || String(c.id) === String(p.nombre || p.name || '')) : null) || null;
+        const basePrice = Number(p.precio ?? p.price ?? 0);
+        const finalPrice = consumoMeta ? Math.max(0, +(basePrice * (1 - (Number(consumoMeta.discount ?? consumoMeta.value ?? consumoMeta.discount || 0) / 100))).toFixed(2)) : basePrice;
+        const card = document.createElement('article');
+        card.className = 'product-card consumo-card';
+        card.innerHTML = `
+          <div class="product-image">
+            <div class="consumo-ribbon">-${Math.round(Number(consumoMeta && (consumoMeta.discount || consumoMeta.value) || 0))}%</div>
+            <div class="price-badge"><span class="price-new">$${Number(finalPrice).toFixed(2)}</span> <span class="price-old">$${Number(basePrice).toFixed(2)}</span></div>
+            <img src="${p.imagen || 'images/placeholder.png'}" alt="${escapeHtml(p.nombre || p.name || '')}" loading="lazy">
+          </div>
+          <div class="product-info">
+            <h3>${escapeHtml(p.nombre || p.name || '')}</h3>
+            <p>${escapeHtml(p.descripcion || p.description || '')}</p>
+            <div class="card-actions"><button class="btn btn-add" data-id="${escapeHtml(String(p.id ?? p._id ?? p.nombre || ''))}">Agregar</button></div>
+          </div>`;
+        gridEl.appendChild(card);
+      }catch(e){ /* skip faulty product */ }
+    }
+  } else {
+    consumosSection.innerHTML = ''; // clear when none
+  }
+
   const frag = document.createDocumentFragment();
 
   // Render simple promotion cards for promotions that apply to the currently filtered products
@@ -729,7 +777,7 @@ function render({ animate = false } = {}) {
     // append promos into the promotionsRow (separate from product grid)
     promosRow.appendChild(promoFrag);
   }
-  filtered.forEach((p, i) => {
+  mainProducts.forEach((p, i) => {
     const card = document.createElement('article');
     card.className = 'product-card';
     card.setAttribute('tabindex','0');

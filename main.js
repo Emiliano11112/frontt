@@ -254,6 +254,28 @@ document.addEventListener('click', (e) => {
 		const gmailUrl = 'https://mail.google.com/mail/?view=cm&fs=1' +
 			(to ? '&to=' + encodeURIComponent(to) : '') +
 			(subject ? '&su=' + encodeURIComponent(subject) : '') +
+
+		// Ensure brand image src attributes are URL-encoded so filenames with spaces or
+		// non-ASCII characters don't produce 404s when served by some web servers.
+		try{
+			document.addEventListener('DOMContentLoaded', () => {
+				try{
+					const imgs = document.querySelectorAll('.brands-grid img');
+					imgs.forEach(img => {
+						try{
+							const raw = img.getAttribute('src') || '';
+							// Only adjust relative paths (skip already absolute/encoded URLs)
+							if(!raw) return;
+							if(raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('//')) return;
+							// Encode only the path portion (preserve leading ./ or /)
+							const prefix = raw.startsWith('/') ? '/' : '';
+							const trimmed = raw.replace(/^\/+/, '');
+							img.src = prefix + encodeURI(trimmed);
+						}catch(e){ /* ignore per-image errors */ }
+					});
+				}catch(e){ /* ignore overall */ }
+			});
+		}catch(e){ /* ignore if DOM not available */ }
 			'&body=' + encodeURIComponent(professionalBody + '\n\nPor favor adjunte su CV a este correo antes de enviarlo.');
 		// Open Gmail composer in a new tab/window. If popup blocked, fallback to mailto navigation.
 		const w = window.open(gmailUrl, '_blank');
