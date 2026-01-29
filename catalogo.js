@@ -680,7 +680,71 @@ function render({ animate = false } = {}) {
     return;
   }
 
-  /* Consumiciones inmediatas rendering temporarily disabled to avoid syntax issues while debugging. */
+  /* Consumiciones inmediatas: render a separate horizontal row similar to promotions
+     so admin-managed "consumos" (consumo inmediato) are visible and actionable. */
+  // Render consumos (immediate-consumption discounts) row
+  let consumosRow = document.getElementById('consumosRow');
+  if (!consumosRow) {
+    consumosRow = document.createElement('div');
+    consumosRow.id = 'consumosRow';
+    consumosRow.className = 'consumos-row';
+    try{
+      if (promosRow && promosRow.parentNode) promosRow.parentNode.insertBefore(consumosRow, promosRow.nextSibling);
+      else if (grid.parentNode) grid.parentNode.insertBefore(consumosRow, grid);
+      else document.body.insertBefore(consumosRow, grid);
+    }catch(e){ document.body.appendChild(consumosRow); }
+  }
+  // populate consumosRow from `consumos` array and current filtered products
+  try{
+    consumosRow.innerHTML = '';
+    if (Array.isArray(consumos) && consumos.length) {
+      const cFrag = document.createDocumentFragment();
+      const seenC = new Set();
+      consumos.forEach(c => {
+        try{
+          // consumos may reference product id or name
+          const ids = Array.isArray(c.productIds) ? c.productIds.map(x => String(x)) : (c.productId ? [String(c.productId)] : []);
+          const match = filtered.find(p => {
+            const pid = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '');
+            if (ids.length && ids.includes(pid)) return true;
+            if (ids.length && ids.some(x => x.toLowerCase() === String(p.nombre || p.name || '').toLowerCase())) return true;
+            return false;
+          });
+          if (!match || seenC.has(String(c.id || c.productId || match.id))) return;
+          seenC.add(String(c.id || c.productId || match.id));
+          const card = document.createElement('article');
+          card.className = 'consumo-card reveal';
+          const imgSrc = match.imagen || match.image || 'images/placeholder.png';
+          const label = (c.discount || c.value) ? (c.type === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : `$${Number(c.value || 0).toFixed(2)}`) : 'Consumo';
+          card.innerHTML = `
+            <div class="product-thumb"><img src="${imgSrc}" alt="${escapeHtml(match.nombre || match.name || '')}"></div>
+            <div class="product-info">
+              <h3 class="product-title">${escapeHtml(c.name || 'Consumo inmediato')}</h3>
+              <div class="product-sub">${escapeHtml(c.description || match.descripcion || '')}</div>
+              <div class="price-display">${escapeHtml(label)}</div>
+              <div class="product-actions"><button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String(match.id ?? match._id ?? match.nombre || match.name || ''))}">Agregar</button></div>
+            </div>`;
+          cFrag.appendChild(card);
+        }catch(e){ /* ignore individual consumo errors */ }
+      });
+      consumosRow.appendChild(cFrag);
+      // wire consumo add buttons
+      try{
+        consumosRow.querySelectorAll('.consumo-add').forEach(btn => {
+          btn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            const pid = btn.getAttribute('data-pid');
+            if (!pid) return;
+            // try to find product image to animate from
+            const card = btn.closest && btn.closest('article');
+            const img = card && card.querySelector('img');
+            try{ addToCart(String(pid), 1, img || null); openCart(); }catch(e){}
+          });
+        });
+      }catch(e){/* ignore wiring errors */}
+    }
+  }catch(e){ /* ignore consumos rendering errors */ }
+
   const mainProducts = filtered; // fallback: use full filtered list for now
 
   const frag = document.createDocumentFragment();
