@@ -43,16 +43,7 @@
     <button data-filter="complementos">Complementos</button>
   </div>
 
-  <!-- Auto-refresh control (toggle removed; auto-refresh runs automatically) -->
-  <div class="auto-refresh" aria-hidden="false">
-    <div class="auto-controls">
-      <div class="auto-info">
-        <div class="mode">Auto‑refresh <span id="autoMode">soft</span></div>
-        <div class="countdown">Actualiza en <span id="refreshCountdown">30</span>s</div>
-      </div>
-    </div>
-    <div id="autoStatus" class="auto-status" aria-live="polite">Activado</div>
-  </div>
+  <!-- Auto-refresh UI removed (auto-refresh runs silently) -->
 </section>
 
 <!-- Auth Modal -->
@@ -119,7 +110,7 @@
   <span id="cartCount" class="cart-count" aria-hidden="true">0</span>
 </button>
 
-<script src="main.js"></script>
-<script src="catalogo.js"></script>
+<script src="main.js?v=1"></script>
+<script src="catalogo.js?v=2"></script>
 </body>
 </html>

@@ -679,6 +679,14 @@ function render({ animate = false } = {}) {
     }
   }
   grid.style.minHeight = grid.style.minHeight || '200px';
+  // inject out-of-stock styles once
+  if (!document.getElementById('__oos_styles')){
+    const s = document.createElement('style'); s.id = '__oos_styles'; s.textContent = `
+      .product-card.out-of-stock{opacity:0.56;filter:grayscale(0.8);pointer-events:auto}
+      .product-card .out-of-stock-note{color:var(--muted);font-weight:700;margin-top:8px}
+      .product-card .btn.disabled{opacity:0.6;pointer-events:none}
+    `; document.head.appendChild(s);
+  }
   const search = (searchInput.value || '').toLowerCase();
   const productCatMap = loadProductCategories();
   const filtered = products.filter(p => {
@@ -863,6 +871,12 @@ function render({ animate = false } = {}) {
     const imgSrc = p.imagen || 'images/placeholder.png';
     const pid = String(p.id ?? p._id ?? p.nombre ?? i);
     card.dataset.pid = pid;
+    const stockVal = Number(p.stock ?? p.cantidad ?? 0);
+    const outOfStock = Number.isNaN(stockVal) ? false : (stockVal <= 0);
+    if (outOfStock) {
+      card.classList.add('out-of-stock');
+      card.setAttribute('aria-label', `${p.nombre || 'producto'} — sin stock`);
+    }
 
     // check promotion for this product
     const promo = getBestPromotionForProduct(p);
@@ -919,7 +933,12 @@ function render({ animate = false } = {}) {
     html += '<h3>' + escapeHtml(p.nombre) + (isNew ? ' <span class="new-badge">Nuevo</span>' : '') + '</h3>';
     html += '<p>' + escapeHtml(p.descripcion) + '</p>';
     html += '<div class="price">' + (discounted ? ('<span class="price-new">$' + Number(discounted).toFixed(2) + '</span> <span class="price-old">$' + Number(p.precio).toFixed(2) + '</span>') : ('$' + Number(p.precio).toFixed(2))) + '</div>';
-    html += '<div class="card-actions"><button class="btn btn-add" data-id="' + pid + '" aria-label="Agregar ' + escapeHtml(p.nombre) + ' al carrito">Agregar</button></div>';
+    if (outOfStock) {
+      html += '<div class="card-actions"><button class="btn btn-add disabled" disabled data-id="' + pid + '" aria-label="Sin stock">Sin stock</button></div>';
+      html += '<div class="out-of-stock-note">Sin stock</div>';
+    } else {
+      html += '<div class="card-actions"><button class="btn btn-add" data-id="' + pid + '" aria-label="Agregar ' + escapeHtml(p.nombre) + ' al carrito">Agregar</button></div>';
+    }
     html += '</div>';
     card.innerHTML = html;
     // post-render image handling: detect aspect ratio, fade-in, error fallback, lightbox trigger
@@ -1060,7 +1079,7 @@ function showQuantitySelector(productId, sourceEl = null){
     if (existing) existing.remove();
 
     const prod = products.find(x => String(x.id ?? x._id) === String(productId));
-    const title = prod ? (prod.nombre || prod.name || '') : (productId || 'Producto');
+      const title = prod ? (prod.nombre || prod.name || '') : (productId || 'Producto');
     let qty = 1;
 
     const overlay = document.createElement('div');
@@ -1068,6 +1087,11 @@ function showQuantitySelector(productId, sourceEl = null){
     overlay.className = 'qty-overlay';
     const imgSrc = prod?.imagen || prod?.image || prod?.image_url || 'images/placeholder.png';
     const unitPrice = Number(prod?.precio ?? prod?.price ?? 0) || 0;
+    const stockVal = Number(prod?.stock ?? prod?.cantidad ?? 0);
+    if (!isNaN(stockVal) && stockVal <= 0) {
+      showAlert('actualmente no contamos con stock de este articulo', 'error');
+      return;
+    }
     overlay.innerHTML = `
       <div class="qty-box" role="dialog" aria-modal="true" aria-label="Seleccionar cantidad">
         <div class="qb-top"><img class="qb-img" src="${imgSrc}" alt="${escapeHtml(String(title))}"></div>
@@ -1158,6 +1182,10 @@ function addToCart(productId, qty = 1, sourceEl = null){
   // Default single product add
   const p = products.find(x => String(x.id ?? x._id) === String(productId));
   if (!p) return; // avoid adding unknown ids
+  // Validate stock before adding
+  const available = Number(p?.stock ?? p?.cantidad ?? 0) || 0;
+  if (available <= 0) { showAlert('actualmente no contamos con stock de este articulo', 'error'); return; }
+  if (qty > available) { showAlert('No hay suficiente stock disponible (solo ' + String(available) + ' disponibles)', 'error'); return; }
   cart.push({ id: String(productId), qty: Math.min(99, qty), meta: { name: p?.nombre || p?.name || '', price: p?.precio ?? p?.price ?? 0, image: p?.imagen || p?.image || p?.image_url || '' } });
   writeCart(cart);
   renderCart();
@@ -1165,7 +1193,26 @@ function addToCart(productId, qty = 1, sourceEl = null){
   // fly animation from the source image to cart
   if (sourceEl && !reduceMotion) animateFlyToCart(sourceEl);
 }
-function setCartItem(productId, qty){ const cart = readCart(); const idx = cart.findIndex(i=>i.id===productId); if(idx>=0){ if(qty<=0) cart.splice(idx,1); else cart[idx].qty = Math.min(99, qty); writeCart(cart); renderCart(); } }
+function setCartItem(productId, qty){
+  const cart = readCart();
+  const idx = cart.findIndex(i=>i.id===productId);
+  if(idx < 0) return;
+  if(qty <= 0) {
+    cart.splice(idx, 1);
+    writeCart(cart); renderCart(); return;
+  }
+  // enforce stock limits
+  const prod = products.find(x => String(x.id ?? x._id) === String(productId));
+  const available = Number(prod?.stock ?? prod?.cantidad ?? 0) || 0;
+  if (available <= 0) {
+    showAlert('actualmente no contamos con stock de este articulo', 'error');
+    return;
+  }
+  const newQty = Math.min(99, qty > available ? available : qty);
+  if (newQty !== qty) showAlert('Cantidad ajustada al stock disponible (' + String(available) + ')', 'info');
+  cart[idx].qty = newQty;
+  writeCart(cart); renderCart();
+}
 function removeFromCart(productId){ const cart = readCart().filter(i=>i.id!==productId); writeCart(cart); renderCart(); }
 function clearCart(){ writeCart([]); renderCart(); }
 
