@@ -749,32 +749,37 @@ function render({ animate = false } = {}) {
     return;
   }
 
-  /* Consumiciones inmediatas: render a separate horizontal row similar to promotions
-     so admin-managed "consumos" (consumo inmediato) are visible and actionable. */
-  // Render consumos (immediate-consumption discounts) row
-  let consumosRow = document.getElementById('consumosRow');
-  if (!consumosRow) {
-    consumosRow = document.createElement('div');
-    consumosRow.id = 'consumosRow';
-    consumosRow.className = 'consumos-row';
+  /* Consumiciones inmediatas: show a dedicated section with a header and only admin-configured consumos */
+  // Ensure section exists and insert before promotions so it's visible near the top
+  let consumosSection = document.getElementById('consumosSection');
+  if (!consumosSection) {
+    consumosSection = document.createElement('section');
+    consumosSection.id = 'consumosSection';
+    consumosSection.className = 'consumos-section';
+    consumosSection.innerHTML = '<div class="consumos-header"><h2 class="consumos-title">Consumos inmediatos <small id="consumosCount" class="consumos-sub"></small></h2></div><div class="consumos-grid" id="consumosGrid"></div>';
     try{
-      if (promosRow && promosRow.parentNode) promosRow.parentNode.insertBefore(consumosRow, promosRow.nextSibling);
-      else if (grid.parentNode) grid.parentNode.insertBefore(consumosRow, grid);
-      else document.body.insertBefore(consumosRow, grid);
-    }catch(e){ document.body.appendChild(consumosRow); }
+      if (promosRow && promosRow.parentNode) promosRow.parentNode.insertBefore(consumosSection, promosRow);
+      else if (grid.parentNode) grid.parentNode.insertBefore(consumosSection, grid);
+      else document.body.insertBefore(consumosSection, grid);
+    }catch(e){ document.body.appendChild(consumosSection); }
   }
-  // populate consumosRow from `consumos` array and current filtered products
+
+  // populate grid strictly from admin-configured consumos (do not fallback to per-product discounts here)
   try{
-    consumosRow.innerHTML = '';
+    const gridEl = document.getElementById('consumosGrid');
+    gridEl.innerHTML = '';
     const hasConsumosArray = Array.isArray(consumos) && consumos.length;
-    if (hasConsumosArray) {
+    if (!hasConsumosArray) {
+      // hide the section when there are no admin consumos
+      consumosSection.style.display = 'none';
+    } else {
+      consumosSection.style.display = '';
       const cFrag = document.createDocumentFragment();
       const seenC = new Set();
       consumos.forEach(c => {
         try{
-          // consumos may reference product id, productId(s) or name; tolerate saved shape { id, discount }
           const ids = Array.isArray(c.productIds) ? c.productIds.map(x => String(x)) : (c.productId ? [String(c.productId)] : (c.id ? [String(c.id)] : []));
-          const match = filtered.find(p => {
+          const match = products.find(p => {
             const pid = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '');
             if (ids.length && ids.includes(pid)) return true;
             if (ids.length && ids.some(x => x.toLowerCase() === String(p.nombre || p.name || '').toLowerCase())) return true;
@@ -782,71 +787,42 @@ function render({ animate = false } = {}) {
           });
           if (!match || seenC.has(String(c.id || c.productId || match.id))) return;
           seenC.add(String(c.id || c.productId || match.id));
+
           const card = document.createElement('article');
           card.className = 'consumo-card reveal';
           const imgSrc = match.imagen || match.image || 'images/placeholder.png';
-          const label = (c.discount || c.value) ? (c.type === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : `$${Number(c.value || 0).toFixed(2)}`) : 'Consumo';
+          const rawLabel = (c.discount || c.value) ? (c.type === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : `$${Number(c.value || 0).toFixed(2)}`) : 'Consumo';
+          const qtyHtml = (c && c.qty != null) ? ('<div class="consumo-qty">Disponibles: ' + String(Number(c.qty || 0)) + '</div>') : '';
           card.innerHTML = `
-            <div class="product-thumb"><img src="${imgSrc}" alt="${escapeHtml(match.nombre || match.name || '')}"></div>
-            <div class="product-info">
-              <h3 class="product-title">${escapeHtml(c.name || 'Consumo inmediato')}</h3>
-              <div class="product-sub">${escapeHtml(c.description || match.descripcion || '')}</div>
-              <div class="price-display">${escapeHtml(label)}${(c && c.qty != null) ? (' <small style="color:#666">(' + String(Number(c.qty || 0)) + ' disponibles)</small>') : ''}</div>
-              <div class="product-actions"><button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id ?? match.nombre) || match.name || ''))}">Agregar</button></div>
+            <div class="consumo-badge">${escapeHtml(rawLabel)}</div>
+            <div class="consumo-thumb"><img src="${imgSrc}" alt="${escapeHtml(match.nombre || match.name || '')}"></div>
+            <div class="consumo-info">
+              <h4>${escapeHtml(c.name || match.nombre || match.name || 'Consumo inmediato')}</h4>
+              <p>${escapeHtml(c.description || match.descripcion || '')}</p>
+              <div class="consumo-price">${escapeHtml(rawLabel)} ${qtyHtml}</div>
+              <div class="consumo-cta"><button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id) || match.name || ''))}">Agregar</button></div>
             </div>`;
           cFrag.appendChild(card);
-        }catch(e){ /* ignore individual consumo errors */ }
+        }catch(e){ /* ignore */ }
       });
-      consumosRow.appendChild(cFrag);
-      // wire consumo add buttons
+      gridEl.appendChild(cFrag);
+
+      // update count indicator
+      try{ const countEl = document.getElementById('consumosCount'); if (countEl) countEl.textContent = ' ' + String(consumos.length) + ' producto' + (consumos.length === 1 ? '' : 's'); }catch(_){ }
+
+      // wire buttons
       try{
-        consumosRow.querySelectorAll('.consumo-add').forEach(btn => {
+        gridEl.querySelectorAll('.consumo-add').forEach(btn => {
           btn.addEventListener('click', (ev) => {
             ev.preventDefault();
             const pid = btn.getAttribute('data-pid');
             if (!pid) return;
-            // try to find product image to animate from
             const card = btn.closest && btn.closest('article');
             const img = card && card.querySelector('img');
-            try{ addToCart(String(pid), 1, img || null); openCart(); }catch(e){}
+            try{ addToCart(String(pid), 1, img || null); openCart(); }catch(e){ }
           });
         });
-      }catch(e){/* ignore wiring errors */}
-    } else {
-      // No explicit consumos configured — render products that have a per-product discount as consumos
-      const perProduct = filtered.filter(p => !Number.isNaN(Number(p.discount ?? p.descuento ?? 0)) && Number(p.discount ?? p.descuento ?? 0) > 0);
-      if (perProduct.length) {
-        const cFrag = document.createDocumentFragment();
-        perProduct.forEach(match => {
-          try{
-            const card = document.createElement('article');
-            card.className = 'consumo-card reveal';
-            const imgSrc = match.imagen || match.image || 'images/placeholder.png';
-            const label = `-${Math.round(Number(match.discount ?? match.descuento ?? 0))}%`;
-            card.innerHTML = `
-              <div class="product-thumb"><img src="${imgSrc}" alt="${escapeHtml(match.nombre || match.name || '')}"></div>
-              <div class="product-info">
-                <h3 class="product-title">${escapeHtml(match.nombre || match.name || '')}</h3>
-                <div class="price-display">${escapeHtml(label)}</div>
-                <div class="product-actions"><button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id ?? match.nombre) || match.name || ''))}">Agregar</button></div>
-              </div>`;
-            cFrag.appendChild(card);
-          }catch(e){ }
-        });
-        consumosRow.appendChild(cFrag);
-        try{
-          consumosRow.querySelectorAll('.consumo-add').forEach(btn => {
-            btn.addEventListener('click', (ev) => {
-              ev.preventDefault();
-              const pid = btn.getAttribute('data-pid');
-              if (!pid) return;
-              const card = btn.closest && btn.closest('article');
-              const img = card && card.querySelector('img');
-              try{ addToCart(String(pid), 1, img || null); openCart(); }catch(e){}
-            });
-          });
-        }catch(e){}
-      }
+      }catch(e){ /* ignore wiring errors */ }
     }
   }catch(e){ /* ignore consumos rendering errors */ }
 
@@ -988,6 +964,14 @@ function render({ animate = false } = {}) {
     html += '<h3>' + escapeHtml(p.nombre) + (isNew ? ' <span class="new-badge">Nuevo</span>' : '') + '</h3>';
     html += '<p>' + escapeHtml(p.descripcion) + '</p>';
     html += '<div class="price">' + (discounted ? ('<span class="price-new">$' + Number(discounted).toFixed(2) + '</span> <span class="price-old">$' + Number(p.precio).toFixed(2) + '</span>') : ('$' + Number(p.precio).toFixed(2))) + '</div>';
+    // show stock info (reflect admin panel stock)
+    if (!Number.isNaN(stockVal)) {
+      if (stockVal > 0) {
+        html += '<div class="stock-info" style="color:#666;margin-top:6px">Stock: ' + String(stockVal) + '</div>';
+      } else {
+        html += '<div class="stock-info" style="color:#b86a00;margin-top:6px;font-weight:700">Sin stock</div>';
+      }
+    }
     if (outOfStock) {
       html += '<div class="card-actions"><button class="btn btn-add disabled" disabled data-id="' + pid + '" aria-label="Sin stock">Sin stock</button></div>';
       html += '<div class="out-of-stock-note">Sin stock</div>';
@@ -2268,6 +2252,47 @@ window.addEventListener('error', function(ev){ try{ showOverlayError('Error: '+(
 window.addEventListener('unhandledrejection', function(ev){ try{ showOverlayError('Promise rejection: '+(ev && ev.reason ? String(ev.reason) : String(ev))); }catch(e){} });
 
 // small helper to avoid XSS when inserting strings into innerHTML
+// WebSocket client: subscribe to product/consumos updates and refresh catalog in near-realtime
+function connectProductWS(){
+  if (typeof WebSocket === 'undefined') return;
+  let socket = null;
+  let retries = 0;
+  function _connect(){
+    try{
+      const wsProtocol = (window.location.protocol === 'https:') ? 'wss' : 'ws';
+      let host = null;
+      try{ host = (new URL(API_ORIGIN)).host; }catch(e){ host = window.location.host; }
+      const url = wsProtocol + '://' + host + '/ws/products';
+      socket = new WebSocket(url);
+      socket.onopen = () => { retries = 0; console.debug('[catalogo] WS connected to', url); };
+      socket.onmessage = (ev) => {
+        try{
+          const d = JSON.parse(ev.data);
+          if (!d || !d.action) return;
+          // product updated: refresh products snapshot
+          if (d.action === 'updated' && d.product && d.product.id){
+            fetchProducts({ showSkeleton: false }).catch(()=>{});
+          }
+          // consumos updated: refresh consumos
+          else if (d.action === 'consumos-updated'){
+            fetchConsumos().then(()=>{ try{ render({ animate: true }); }catch(_){} }).catch(()=>{});
+          }
+          // order created: may affect both stock and consumos
+          else if (d.action === 'order_created'){
+            try{ fetchProducts({ showSkeleton: false }).catch(()=>{}); fetchConsumos().then(()=>{ try{ render({ animate: true }); }catch(_){} }).catch(()=>{}); }catch(_){}
+          }
+        }catch(e){ console.warn('[catalogo] ws message parse failed', e); }
+      };
+      socket.onclose = (ev) => { console.warn('[catalogo] WS closed, reconnecting...'); retries += 1; const delay = Math.min(60000, Math.max(1000, Math.round(1000 * Math.pow(1.5, retries)))); setTimeout(_connect, delay); };
+      socket.onerror = (e) => { console.warn('[catalogo] WS error', e); try{ socket.close(); }catch(_){ } };
+    }catch(e){ console.warn('[catalogo] ws connect failed', e); setTimeout(_connect, 3000); }
+  }
+  _connect();
+}
+
+// Start WS after init so API_ORIGIN is available and DOM is ready
+try{ if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ()=>{ setTimeout(()=>{ try{ connectProductWS(); }catch(_){} }, 900); }); else setTimeout(()=>{ try{ connectProductWS(); }catch(_){} }, 900); }catch(e){}
+
 function escapeHtml(str) {
   if (!str) return '';
   return String(str)
