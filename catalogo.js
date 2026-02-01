@@ -719,6 +719,16 @@ function render({ animate = false } = {}) {
     return matchesSearch && matchesFilter;
   });
 
+  // Sort so products with stock appear first (in-stock before out-of-stock), preserving relative order otherwise
+  try{
+    filtered.sort((a,b)=>{
+      const sa = (Number(a.stock ?? a.cantidad ?? 0) > 0) ? 0 : 1;
+      const sb = (Number(b.stock ?? b.cantidad ?? 0) > 0) ? 0 : 1;
+      if(sa !== sb) return sa - sb;
+      return 0;
+    });
+  }catch(e){ /* ignore sorting errors */ }
+
   grid.innerHTML = '';
   // ensure promotions container exists (separate from product grid)
   let promosRow = document.getElementById('promotionsRow');
@@ -756,13 +766,14 @@ function render({ animate = false } = {}) {
   // populate consumosRow from `consumos` array and current filtered products
   try{
     consumosRow.innerHTML = '';
-    if (Array.isArray(consumos) && consumos.length) {
+    const hasConsumosArray = Array.isArray(consumos) && consumos.length;
+    if (hasConsumosArray) {
       const cFrag = document.createDocumentFragment();
       const seenC = new Set();
       consumos.forEach(c => {
         try{
-          // consumos may reference product id or name
-          const ids = Array.isArray(c.productIds) ? c.productIds.map(x => String(x)) : (c.productId ? [String(c.productId)] : []);
+          // consumos may reference product id, productId(s) or name; tolerate saved shape { id, discount }
+          const ids = Array.isArray(c.productIds) ? c.productIds.map(x => String(x)) : (c.productId ? [String(c.productId)] : (c.id ? [String(c.id)] : []));
           const match = filtered.find(p => {
             const pid = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '');
             if (ids.length && ids.includes(pid)) return true;
@@ -780,7 +791,7 @@ function render({ animate = false } = {}) {
             <div class="product-info">
               <h3 class="product-title">${escapeHtml(c.name || 'Consumo inmediato')}</h3>
               <div class="product-sub">${escapeHtml(c.description || match.descripcion || '')}</div>
-              <div class="price-display">${escapeHtml(label)}</div>
+              <div class="price-display">${escapeHtml(label)}${(c && c.qty != null) ? (' <small style="color:#666">(' + String(Number(c.qty || 0)) + ' disponibles)</small>') : ''}</div>
               <div class="product-actions"><button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id ?? match.nombre) || match.name || ''))}">Agregar</button></div>
             </div>`;
           cFrag.appendChild(card);
@@ -801,6 +812,41 @@ function render({ animate = false } = {}) {
           });
         });
       }catch(e){/* ignore wiring errors */}
+    } else {
+      // No explicit consumos configured — render products that have a per-product discount as consumos
+      const perProduct = filtered.filter(p => !Number.isNaN(Number(p.discount ?? p.descuento ?? 0)) && Number(p.discount ?? p.descuento ?? 0) > 0);
+      if (perProduct.length) {
+        const cFrag = document.createDocumentFragment();
+        perProduct.forEach(match => {
+          try{
+            const card = document.createElement('article');
+            card.className = 'consumo-card reveal';
+            const imgSrc = match.imagen || match.image || 'images/placeholder.png';
+            const label = `-${Math.round(Number(match.discount ?? match.descuento ?? 0))}%`;
+            card.innerHTML = `
+              <div class="product-thumb"><img src="${imgSrc}" alt="${escapeHtml(match.nombre || match.name || '')}"></div>
+              <div class="product-info">
+                <h3 class="product-title">${escapeHtml(match.nombre || match.name || '')}</h3>
+                <div class="price-display">${escapeHtml(label)}</div>
+                <div class="product-actions"><button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id ?? match.nombre) || match.name || ''))}">Agregar</button></div>
+              </div>`;
+            cFrag.appendChild(card);
+          }catch(e){ }
+        });
+        consumosRow.appendChild(cFrag);
+        try{
+          consumosRow.querySelectorAll('.consumo-add').forEach(btn => {
+            btn.addEventListener('click', (ev) => {
+              ev.preventDefault();
+              const pid = btn.getAttribute('data-pid');
+              if (!pid) return;
+              const card = btn.closest && btn.closest('article');
+              const img = card && card.querySelector('img');
+              try{ addToCart(String(pid), 1, img || null); openCart(); }catch(e){}
+            });
+          });
+        }catch(e){}
+      }
     }
   }catch(e){ /* ignore consumos rendering errors */ }
 
@@ -886,9 +932,18 @@ function render({ animate = false } = {}) {
       try{ if (String(c.id) === String(p.nombre || p.name || '')) return true; }catch(_){}
       return false;
     }) : null;
+    try{
+      // Support per-product discount saved as `discount` (or `descuento`) on the product
+      // If no explicit consumo exists for this product, treat the per-product discount as a consumo
+      if(!(consumo) && !Number.isNaN(Number(p.discount ?? p.descuento ?? 0)) && Number(p.discount ?? p.descuento ?? 0) > 0){
+        consumo = { id: p.id ?? p._id ?? p.nombre ?? p.name, discount: Number(p.discount ?? p.descuento ?? 0) };
+      }
+    }catch(_){ }
+    let validConsumo = null;
+    try{ if(consumo && (consumo.qty == null || Number(consumo.qty) > 0)) validConsumo = consumo; if(!validConsumo && !Number.isNaN(Number(p.discount ?? p.descuento ?? 0)) && Number(p.discount ?? p.descuento ?? 0) > 0){ validConsumo = { id: p.id ?? p._id ?? p.nombre ?? p.name, discount: Number(p.discount ?? p.descuento ?? 0) }; } }catch(_){ validConsumo = null; }
     const basePrice = Number(p.precio ?? p.price ?? 0);
     const discountedPromo = promo ? getDiscountedPrice(basePrice, promo) : null;
-    const discountedConsumo = consumo ? Math.max(0, +(basePrice * (1 - (Number(consumo.discount ?? consumo.value ?? 0) / 100))).toFixed(2)) : null;
+    const discountedConsumo = validConsumo ? Math.max(0, +(basePrice * (1 - (Number(validConsumo.discount ?? validConsumo.value ?? 0) / 100))).toFixed(2)) : null;
     // choose the best (lowest) final price for the customer when multiple discounts exist
     let discounted = null;
     if (discountedPromo !== null && discountedConsumo !== null) discounted = Math.min(discountedPromo, discountedConsumo);
