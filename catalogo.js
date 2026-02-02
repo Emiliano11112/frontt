@@ -31,6 +31,7 @@ async function fetchConsumos(){
   const tryUrls = [
     '/api/consumos',
     '/consumos',
+    `${API_ORIGIN}/api/consumos`,
     `${API_ORIGIN}/consumos`,
     'consumos.json'
   ];
@@ -792,7 +793,9 @@ function render({ animate = false } = {}) {
           card.className = 'consumo-card reveal';
           const imgSrc = match.imagen || match.image || 'images/placeholder.png';
           const rawLabel = (c.discount || c.value) ? (c.type === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : `$${Number(c.value || 0).toFixed(2)}`) : 'Consumo';
-          const qtyHtml = (c && c.qty != null) ? ('<div class="consumo-qty">Disponibles: ' + String(Number(c.qty || 0)) + '</div>') : '';
+          const avail = (c && c.qty != null) ? Number(c.qty || 0) : null;
+          const qtyHtml = (avail != null) ? ('<div class="consumo-qty">Disponibles: ' + String(avail) + '</div>') : '';
+          const btnHtml = (avail == null || avail > 0) ? `<button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id) || match.name || ''))}">Agregar</button>` : `<button class="btn btn-disabled" disabled>Agotado</button>`;
           card.innerHTML = `
             <div class="consumo-badge">${escapeHtml(rawLabel)}</div>
             <div class="consumo-thumb"><img src="${imgSrc}" alt="${escapeHtml(match.nombre || match.name || '')}"></div>
@@ -800,7 +803,7 @@ function render({ animate = false } = {}) {
               <h4>${escapeHtml(c.name || match.nombre || match.name || 'Consumo inmediato')}</h4>
               <p>${escapeHtml(c.description || match.descripcion || '')}</p>
               <div class="consumo-price">${escapeHtml(rawLabel)} ${qtyHtml}</div>
-              <div class="consumo-cta"><button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id) || match.name || ''))}">Agregar</button></div>
+              <div class="consumo-cta">${btnHtml}</div>
             </div>`;
           cFrag.appendChild(card);
         }catch(e){ /* ignore */ }
@@ -902,21 +905,12 @@ function render({ animate = false } = {}) {
 
     // check promotion for this product
     const promo = getBestPromotionForProduct(p);
-    // check admin-managed consumos (immediate consumption discounts)
-    const consumo = (Array.isArray(consumos) && consumos.length) ? consumos.find(c => {
-      try{ const cid = String(c.id); if (cid && cid === String(p.id ?? p._id ?? p.nombre)) return true; }catch(_){}
-      try{ if (String(c.id) === String(p.nombre || p.name || '')) return true; }catch(_){}
-      return false;
-    }) : null;
-    try{
-      // Support per-product discount saved as `discount` (or `descuento`) on the product
-      // If no explicit consumo exists for this product, treat the per-product discount as a consumo
-      if(!(consumo) && !Number.isNaN(Number(p.discount ?? p.descuento ?? 0)) && Number(p.discount ?? p.descuento ?? 0) > 0){
-        consumo = { id: p.id ?? p._id ?? p.nombre ?? p.name, discount: Number(p.discount ?? p.descuento ?? 0) };
-      }
-    }catch(_){ }
+    // Do NOT apply admin-managed consumos discounts to the product listing; use per-product discount only
+    let perProductDiscount = null;
+    try{ const d = Number(p.discount ?? p.descuento ?? 0); if(!Number.isNaN(d) && d > 0) perProductDiscount = d; }catch(_){ perProductDiscount = null; }
+    // Only honor per-product discount for product cards
     let validConsumo = null;
-    try{ if(consumo && (consumo.qty == null || Number(consumo.qty) > 0)) validConsumo = consumo; if(!validConsumo && !Number.isNaN(Number(p.discount ?? p.descuento ?? 0)) && Number(p.discount ?? p.descuento ?? 0) > 0){ validConsumo = { id: p.id ?? p._id ?? p.nombre ?? p.name, discount: Number(p.discount ?? p.descuento ?? 0) }; } }catch(_){ validConsumo = null; }
+    try{ if(perProductDiscount != null) validConsumo = { id: p.id ?? p._id ?? p.nombre ?? p.name, discount: perProductDiscount }; }catch(_){ validConsumo = null; }
     const basePrice = Number(p.precio ?? p.price ?? 0);
     const discountedPromo = promo ? getDiscountedPrice(basePrice, promo) : null;
     const discountedConsumo = validConsumo ? Math.max(0, +(basePrice * (1 - (Number(validConsumo.discount ?? validConsumo.value ?? 0) / 100))).toFixed(2)) : null;
@@ -949,7 +943,8 @@ function render({ animate = false } = {}) {
       catsHtml = '<div class="product-meta">' + spans + '</div>';
     }
 
-    const consumoRibbon = consumo ? `-${Math.round(Number(consumo.discount ?? consumo.value ?? 0))}%` : '';
+    // Show ribbon only for per-product discounts (do not reuse admin consumos)
+    const consumoRibbon = validConsumo ? `-${Math.round(Number(validConsumo.discount ?? validConsumo.value ?? 0))}%` : '';
 
     // build card HTML using concatenation to avoid nested template literal parsing issues
     let html = '';
