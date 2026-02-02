@@ -1,23 +1,7 @@
-// API: prefer the real endpoint but tolerate variations (English/Spanish)
-const API_URL = "https://backend-0lcs.onrender.com";
-const API_ORIGIN = new URL(API_URL).origin;
-// Auth endpoints
-const AUTH_REGISTER = `${API_ORIGIN}/auth/register`;
-const AUTH_TOKEN = `${API_ORIGIN}/auth/token`;
-
-// DOM references will be initialized in `init()` to avoid race conditions
-let grid = null;
-let searchInput = null;
-let filterButtons = null;
-
-// auto-refresh configuration (seconds)
-const AUTO_REFRESH_SECONDS = 30;
-let products = [];
-// indica si los productos fueron cargados desde el API remoto o desde el archivo local
-let productsSource = 'api';
-let currentFilter = "all";
-let autoTimer = null;
-let countdownTimer = null;
+// This file was a downloaded copy of the served bundle used for debugging.
+// Removed to avoid confusion — use frontend/catalogo.js as source of truth.
+// (Intentionally blanked by automated cleanup.)
+/* removed */
 let countdown = AUTO_REFRESH_SECONDS;
 
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -279,16 +263,6 @@ async function showFilterManagerModal(){
     const active = loadActiveFilters();
 
     const overlay = document.createElement('div'); overlay.id='__filters_modal'; overlay.className='filters-overlay';
-    const itemsHtml = (function(){
-      if (all.length) {
-        return all.map(function(f){
-          const checked = active.includes(String(f.value).toLowerCase()) ? 'checked' : '';
-          return '<label class="f-item"><input type="checkbox" value="' + escapeHtml(f.value) + '" ' + checked + '><div style="flex:1">' + escapeHtml(f.name) + '</div></label>';
-        }).join('');
-      }
-      return '<div style="color:var(--muted);padding:12px">No hay filtros disponibles desde el panel de administración.</div>';
-    })();
-
     overlay.innerHTML = `
       <div class="filters-modal" role="dialog" aria-modal="true" aria-label="Administrar filtros">
         <header>
@@ -299,7 +273,7 @@ async function showFilterManagerModal(){
           <button class="fm-close" aria-label="Cerrar">✕</button>
         </header>
         <div class="filters-list">
-          ${itemsHtml}
+          ${all.length ? all.map(f=>`<label class="f-item"><input type="checkbox" value="${escapeHtml(f.value)}" ${active.includes(String(f.value).toLowerCase()) ? 'checked' : ''}><div style="flex:1">${escapeHtml(f.name)}</div></label>`).join('') : `<div style="color:var(--muted);padding:12px">No hay filtros disponibles desde el panel de administración.</div>`}
         </div>
         <div class="filters-actions">
           <button class="btn fm-select-all">Seleccionar todo</button>
@@ -542,47 +516,20 @@ function renderSkeleton(count = 6) {
 
 async function fetchProducts({ showSkeleton = true } = {}) {
   if (showSkeleton) renderSkeleton();
-  // quick probe: avoid long waits trying remote API when backend is down
-  let backendLikelyUp = true;
-  try {
-    const probeUrl = (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/health') : '/health';
-    const pr = await fetchWithTimeout(probeUrl, {}, 1200).catch(()=>null);
-    backendLikelyUp = !!(pr && pr.ok);
-  } catch (e) { backendLikelyUp = false; }
   // try multiple endpoints: prefer configured remote API when page is served from a different origin
   // (avoid triggering many 404s when the frontend is hosted as static site on another host)
   let tryUrls = [];
   try {
     const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
     const apiOrigin = (typeof API_URL === 'string' && API_URL) ? (new URL(API_URL)).origin : null;
-    // broaden attempted endpoints to common API paths (api, api/v1, spanish plural)
     if (pageOrigin && apiOrigin && pageOrigin !== apiOrigin) {
-      if (backendLikelyUp) {
-        tryUrls = [
-          apiOrigin + '/products',
-          apiOrigin + '/api/products',
-          apiOrigin + '/api/v1/products',
-          apiOrigin + '/productos',
-          apiOrigin + '/api/productos',
-          pageOrigin + '/products',
-          '/products',
-          'products.json'
-        ];
-      } else {
-        // backend down - prefer same-origin and local copies
-        tryUrls = [ pageOrigin + '/products', '/products', 'products.json' ];
-      }
+      tryUrls = [API_ORIGIN + '/products', (pageOrigin + '/products'), '/products', 'products.json'];
     } else {
-      if (backendLikelyUp && apiOrigin) {
-        tryUrls = [ '/products', apiOrigin + '/products', apiOrigin + '/api/products', apiOrigin + '/api/v1/products', 'products.json' ];
-      } else {
-        tryUrls = [ '/products', 'products.json' ];
-      }
+      tryUrls = ['/products', API_ORIGIN + '/products', 'products.json'];
     }
   } catch (e) {
-    tryUrls = ['/products', API_ORIGIN + '/products', API_ORIGIN + '/api/products', 'products.json'];
+    tryUrls = ['/products', API_URL, 'products.json'];
   }
-  try{ console.debug('[catalogo] fetchProducts tryUrls:', tryUrls); }catch(_){ }
   let data = null;
   let used = null;
   for (const url of tryUrls) {
@@ -680,14 +627,6 @@ function render({ animate = false } = {}) {
     }
   }
   grid.style.minHeight = grid.style.minHeight || '200px';
-  // inject out-of-stock styles once
-  if (!document.getElementById('__oos_styles')){
-    const s = document.createElement('style'); s.id = '__oos_styles'; s.textContent = `
-      .product-card.out-of-stock{opacity:0.56;filter:grayscale(0.8);pointer-events:auto}
-      .product-card .out-of-stock-note{color:var(--muted);font-weight:700;margin-top:8px}
-      .product-card .btn.disabled{opacity:0.6;pointer-events:none}
-    `; document.head.appendChild(s);
-  }
   const search = (searchInput.value || '').toLowerCase();
   const productCatMap = loadProductCategories();
   const filtered = products.filter(p => {
@@ -729,58 +668,39 @@ function render({ animate = false } = {}) {
       return 0;
     });
   }catch(e){ /* ignore sorting errors */ }
-
-  grid.innerHTML = '';
-  // ensure promotions container exists (separate from product grid)
-  let promosRow = document.getElementById('promotionsRow');
-  if (!promosRow) {
-    promosRow = document.createElement('div');
-    promosRow.id = 'promotionsRow';
-    promosRow.className = 'promotions-row';
-    // insert promotions container before the grid to keep products always visible below
+    // Ensure there is a visible consumos section and inner grid to populate (prevent undefined reference)
     try{
-      if (grid.parentNode) grid.parentNode.insertBefore(promosRow, grid);
-      else document.body.insertBefore(promosRow, grid);
-    }catch(e){ document.body.appendChild(promosRow); }
+      let consumosSection = document.getElementById('consumosSection');
+      if(!consumosSection){
+        consumosSection = document.createElement('section');
+        consumosSection.id = 'consumosSection';
+        consumosSection.className = 'consumos-section';
+        consumosSection.innerHTML = '<div class="consumos-header"><h2 class="consumos-title">Consumos inmediatos <small id="consumosCount" class="consumos-sub"></small></h2></div><div class="consumos-grid" id="consumosGrid"></div>';
+        try{
+          if (promosRow && promosRow.parentNode) promosRow.parentNode.insertBefore(consumosSection, promosRow);
+          else if (grid.parentNode) grid.parentNode.insertBefore(consumosSection, grid);
+          else document.body.insertBefore(consumosSection, grid);
+        }catch(e){ document.body.appendChild(consumosSection); }
+      }
+      // reference the inner grid where cards will be appended
+      var consumosGrid = document.getElementById('consumosGrid');
+    }catch(e){
+      // if anything goes wrong, fallback to a simple grid appended to body
+      try{ consumosRow = document.getElementById('consumosRow') || document.createElement('div'); consumosRow.id = 'consumosRow'; consumosRow.className = 'consumos-grid'; if(!document.getElementById('consumosSection')) document.body.appendChild(consumosRow); }catch(_){ }
+    }
   }
-
-  if (filtered.length === 0) {
-    grid.innerHTML = '<p class="message">No hay resultados</p>';
-    promosRow.innerHTML = ''; // clear promos when no results
-    return;
-  }
-
-  /* Consumiciones inmediatas: show a dedicated section with a header and only admin-configured consumos */
-  // Ensure section exists and insert before promotions so it's visible near the top
-  let consumosSection = document.getElementById('consumosSection');
-  if (!consumosSection) {
-    consumosSection = document.createElement('section');
-    consumosSection.id = 'consumosSection';
-    consumosSection.className = 'consumos-section';
-    consumosSection.innerHTML = '<div class="consumos-header"><h2 class="consumos-title">Consumos inmediatos <small id="consumosCount" class="consumos-sub"></small></h2></div><div class="consumos-grid" id="consumosGrid"></div>';
-    try{
-      if (promosRow && promosRow.parentNode) promosRow.parentNode.insertBefore(consumosSection, promosRow);
-      else if (grid.parentNode) grid.parentNode.insertBefore(consumosSection, grid);
-      else document.body.insertBefore(consumosSection, grid);
-    }catch(e){ document.body.appendChild(consumosSection); }
-  }
-
-  // populate grid strictly from admin-configured consumos (do not fallback to per-product discounts here)
+  // populate consumosGrid from `consumos` array and current filtered products
   try{
-    const gridEl = document.getElementById('consumosGrid');
-    gridEl.innerHTML = '';
+    consumosGrid.innerHTML = '';
     const hasConsumosArray = Array.isArray(consumos) && consumos.length;
-    if (!hasConsumosArray) {
-      // hide the section when there are no admin consumos
-      consumosSection.style.display = 'none';
-    } else {
-      consumosSection.style.display = '';
+    if (hasConsumosArray) {
       const cFrag = document.createDocumentFragment();
       const seenC = new Set();
       consumos.forEach(c => {
         try{
+          // consumos may reference product id, productId(s) or name; tolerate saved shape { id, discount }
           const ids = Array.isArray(c.productIds) ? c.productIds.map(x => String(x)) : (c.productId ? [String(c.productId)] : (c.id ? [String(c.id)] : []));
-          const match = products.find(p => {
+          const match = filtered.find(p => {
             const pid = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '');
             if (ids.length && ids.includes(pid)) return true;
             if (ids.length && ids.some(x => x.toLowerCase() === String(p.nombre || p.name || '').toLowerCase())) return true;
@@ -788,11 +708,10 @@ function render({ animate = false } = {}) {
           });
           if (!match || seenC.has(String(c.id || c.productId || match.id))) return;
           seenC.add(String(c.id || c.productId || match.id));
-
           const card = document.createElement('article');
           card.className = 'consumo-card reveal';
           const imgSrc = match.imagen || match.image || 'images/placeholder.png';
-          const rawLabel = (c.discount || c.value) ? (c.type === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : `$${Number(c.value || 0).toFixed(2)}`) : 'Consumo';
+          const label = (c.discount || c.value) ? (c.type === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : `$${Number(c.value || 0).toFixed(2)}`) : 'Consumo';
           const basePrice = Number(match.precio ?? match.price ?? 0) || 0;
           let discountedPrice = basePrice;
           try{
@@ -802,39 +721,34 @@ function render({ animate = false } = {}) {
             }
           }catch(_){ }
           const avail = (c && c.qty != null) ? Number(c.qty || 0) : null;
-          const qtyHtml = (avail != null) ? ('<div class="consumo-qty">Disponibles: ' + String(avail) + '</div>') : '';
-          // show new/old price and explicit saving when discounted
+          const qtyHtml = (avail != null) ? (' <small style="color:#666">(' + String(avail) + ' disponibles)</small>') : '';
+          // compute explicit saving display when discounted
           const saved = Math.max(0, +(Number(basePrice) - Number(discountedPrice)).toFixed(2));
-          const savingHtml = (saved > 0) ? ('<div class="consumo-saving">Ahorra: <strong>$' + Number(saved).toFixed(2) + '</strong>' + (c.type === 'percent' && (c.discount || c.value) ? ' (' + String(Math.round(Number(c.discount || c.value))) + '%)' : '') + '</div>') : '';
-          const priceHtml = '<div class="consumo-price"><span class="price-new">$' + Number(discountedPrice).toFixed(2) + '</span>' + (discountedPrice !== basePrice ? ' <span class="price-old">$' + Number(basePrice).toFixed(2) + '</span>' : '') + savingHtml + ' ' + qtyHtml + '</div>';
-          const btnHtml = (avail == null || avail > 0) ? `<button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id) || match.name || ''))}">Agregar</button>` : `<button class="btn btn-disabled" disabled>Agotado</button>`;
+          const savingHtml = (saved > 0) ? (' <div class="consumo-saving" style="color:#b86a00">Ahorra: <strong>$' + Number(saved).toFixed(2) + '</strong>' + (c.type === 'percent' && (c.discount || c.value) ? ' (' + String(Math.round(Number(c.discount || c.value))) + '%)' : '') + '</div>') : '';
+          const btnHtml = (avail == null || avail > 0) ? `<button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String(match.id ?? match._id ?? match.nombre || match.name || ''))}">Agregar</button>` : `<button class="btn btn-disabled" disabled>Agotado</button>`;
           card.innerHTML = `
-            <div class="consumo-badge">${escapeHtml(rawLabel)}</div>
-            <div class="consumo-thumb"><img src="${imgSrc}" alt="${escapeHtml(match.nombre || match.name || '')}"></div>
-            <div class="consumo-info">
-              <h4>${escapeHtml(c.name || match.nombre || match.name || 'Consumo inmediato')}</h4>
-              <p>${escapeHtml(c.description || match.descripcion || '')}</p>
-              ${priceHtml}
-              <div class="consumo-cta">${btnHtml}</div>
+            <div class="product-thumb"><img src="${imgSrc}" alt="${escapeHtml(match.nombre || match.name || '')}"></div>
+            <div class="product-info">
+              <h3 class="product-title">${escapeHtml(c.name || 'Consumo inmediato')}</h3>
+              <div class="product-sub">${escapeHtml(c.description || match.descripcion || '')}</div>
+              <div class="price-display"><span class="price-new">$${Number(discountedPrice).toFixed(2)}</span>${discountedPrice !== basePrice ? (' <span class="price-old">$' + Number(basePrice).toFixed(2) + '</span>') : ''}${qtyHtml}${savingHtml}</div>
+              <div class="product-actions">${btnHtml}</div>
             </div>`;
           cFrag.appendChild(card);
-        }catch(e){ /* ignore */ }
+        }catch(e){ /* ignore individual consumo errors */ }
       });
-      gridEl.appendChild(cFrag);
-
-      // update count indicator
-      try{ const countEl = document.getElementById('consumosCount'); if (countEl) countEl.textContent = ' ' + String(consumos.length) + ' producto' + (consumos.length === 1 ? '' : 's'); }catch(_){ }
-
-      // wire buttons
+      consumosGrid.appendChild(cFrag);
+      // wire consumo add buttons
       try{
-        gridEl.querySelectorAll('.consumo-add').forEach(btn => {
+        consumosGrid.querySelectorAll('.consumo-add').forEach(btn => {
           btn.addEventListener('click', (ev) => {
             ev.preventDefault();
             const pid = btn.getAttribute('data-pid');
             if (!pid) return;
+            // try to find product image to animate from
             const card = btn.closest && btn.closest('article');
             const img = card && card.querySelector('img');
-            // find consumo config for this pid
+            // find consumo object
             let cobj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
               const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : []));
               const pidStr = String(pid);
@@ -842,26 +756,22 @@ function render({ animate = false } = {}) {
               return false;
             }) : null;
             let discountedPrice = null;
-            try {
-              const prod = products.find(p => String(p.id ?? p._id) === String(pid));
-              const base = prod ? Number(prod.precio ?? prod.price ?? 0) : 0;
-              if (cobj) {
-                if (cobj.type === 'percent') discountedPrice = Math.max(0, +(base * (1 - (Number(cobj.discount || cobj.value || 0) / 100))).toFixed(2));
-                else if (cobj.value) discountedPrice = Number(cobj.value);
-              }
-              if (discountedPrice === null) discountedPrice = base;
-            }catch(_){ discountedPrice = null; }
+            try { const prod = products.find(p => String(p.id ?? p._id) === String(pid)); const base = prod ? Number(prod.precio ?? prod.price ?? 0) : 0; if (cobj) { if (cobj.type === 'percent') discountedPrice = Math.max(0, +(base * (1 - (Number(cobj.discount || cobj.value || 0) / 100))).toFixed(2)); else if (cobj.value) discountedPrice = Number(cobj.value); } if (discountedPrice === null) discountedPrice = base; }catch(_){ discountedPrice = null; }
             const available = cobj ? Number(cobj.qty || 0) : null;
             if (available !== null && available <= 0) { showAlert('Este consumo está agotado', 'error'); return; }
-            try{ 
+            try{
+              const prod = products.find(p => String(p.id ?? p._id) === String(pid));
               const discountLabel = (cobj && (cobj.discount != null || cobj.value != null)) ? (cobj.type === 'percent' ? '-' + String(Math.round(Number(cobj.discount || cobj.value || 0))) + '%' : '$' + Number(cobj.value || 0).toFixed(2)) : '';
               const savings = (typeof discountedPrice === 'number' && prod) ? Math.max(0, +(Number(prod.precio ?? prod.price ?? 0) - Number(discountedPrice)).toFixed(2)) : 0;
               const meta = { price: discountedPrice, consumo: !!cobj, consumo_id: cobj ? cobj.id : null, discount_label: discountLabel, discount_savings: savings, discount_type: cobj ? cobj.type : null, discount_value: cobj ? (cobj.discount || cobj.value) : null };
-              addToCart(String(pid), 1, img || null, { meta }); openCart(); 
-            }catch(e){ }
+              addToCart(String(pid), 1, img || null, { meta }); openCart();
+            }catch(e){}
           });
         });
-      }catch(e){ /* ignore wiring errors */ }
+      }catch(e){/* ignore wiring errors */}
+    } else {
+      // No explicit admin consumos configured — hide the consumos section (do not promote per-product discounts as consumos)
+      try{ if (consumosRow) consumosRow.style.display = 'none'; }catch(_){ }
     }
   }catch(e){ /* ignore consumos rendering errors */ }
 
@@ -932,57 +842,28 @@ function render({ animate = false } = {}) {
     const imgSrc = p.imagen || 'images/placeholder.png';
     const pid = String(p.id ?? p._id ?? p.nombre ?? i);
     card.dataset.pid = pid;
-    const stockVal = Number(p.stock ?? p.cantidad ?? 0);
-    // subtract reserved consumos from display
-    let reserved = 0;
-    try{ if (Array.isArray(consumos) && consumos.length) {
-      const cc = consumos.find(c => {
-        const ids = Array.isArray(c.productIds) ? c.productIds.map(String) : (c.productId ? [String(c.productId)] : (c.id ? [String(c.id)] : []));
-        const pidStr = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '');
-        if (ids && ids.includes(pidStr)) return true;
-        try{ if (ids && ids.some(id => id.toLowerCase() === String(p.nombre || p.name || '').toLowerCase())) return true; }catch(_){ }
-        return false;
-      });
-      if (cc) reserved = Number(cc.qty || 0);
-    }}catch(_){ }
-    const displayStock = Math.max(0, (Number(stockVal || 0) - Number(reserved || 0)));
-    const outOfStock = Number.isNaN(displayStock) ? false : (displayStock <= 0);
-    if (outOfStock) {
-      card.classList.add('out-of-stock');
-      card.setAttribute('aria-label', `${p.nombre || 'producto'} — sin stock`);
-    }
 
     // check promotion for this product
     const promo = getBestPromotionForProduct(p);
-    // find per-product discount if present on the product object
+    // check admin-managed consumos (immediate consumption discounts)
+    let consumo = (Array.isArray(consumos) && consumos.length) ? consumos.find(c => {
+      try{ const cid = String(c.id); if (cid && cid === String(p.id ?? p._id ?? p.nombre)) return true; }catch(_){}
+      try{ if (String(c.id) === String(p.nombre || p.name || '')) return true; }catch(_){}
+      return false;
+    }) : null;
     let perProductDiscount = null;
     try{ const d = Number(p.discount ?? p.descuento ?? 0); if(!Number.isNaN(d) && d > 0) perProductDiscount = d; }catch(_){ perProductDiscount = null; }
-
-    // Honor per-product discount or admin-configured consumos for product cards. Prefer admin consumos when present.
+    try{
+      // don't conflate per-product discount with admin 'consumo' — keep consumo null for product cards
+      /* if(!(consumo) && perProductDiscount != null){
+        consumo = { id: p.id ?? p._id ?? p.nombre ?? p.name, discount: Number(perProductDiscount) };
+      } */
+    }catch(_){ }
     let validConsumo = null;
+    try{ if(perProductDiscount != null) validConsumo = { id: p.id ?? p._id ?? p.nombre ?? p.name, discount: perProductDiscount }; }catch(_){ validConsumo = null; }
     const basePrice = Number(p.precio ?? p.price ?? 0);
-
-    // Only per-product discounts apply to product cards. Admin-configured consumos are shown in the "Consumos inmediatos" section only
-    try{
-      if (perProductDiscount != null){
-        validConsumo = { id: p.id ?? p._id ?? p.nombre ?? p.name, discount: perProductDiscount, value: null };
-      } else {
-        validConsumo = null;
-      }
-    }catch(_){ validConsumo = null; }
-
     const discountedPromo = promo ? getDiscountedPrice(basePrice, promo) : null;
-    let discountedConsumo = null;
-    try{
-      if (validConsumo){
-        if (validConsumo.value != null && !Number.isNaN(Number(validConsumo.value))){
-          discountedConsumo = Number(validConsumo.value);
-        } else if (validConsumo.discount != null && !Number.isNaN(Number(validConsumo.discount))){
-          discountedConsumo = Math.max(0, +(basePrice * (1 - (Number(validConsumo.discount) / 100))).toFixed(2));
-        }
-      }
-    }catch(_){ discountedConsumo = null; }
-
+    const discountedConsumo = validConsumo ? Math.max(0, +(basePrice * (1 - (Number(validConsumo.discount ?? validConsumo.value ?? 0) / 100))).toFixed(2)) : null;
     // choose the best (lowest) final price for the customer when multiple discounts exist
     let discounted = null;
     if (discountedPromo !== null && discountedConsumo !== null) discounted = Math.min(discountedPromo, discountedConsumo);
@@ -1006,7 +887,6 @@ function render({ animate = false } = {}) {
         if (changed) { try{ writeCart(cart); }catch(_){ } }
       }
     }catch(_){ }
-
     const isNew = p.created_at ? (Date.now() - new Date(p.created_at).getTime()) < (1000 * 60 * 60 * 24 * 7) : false;
 
     // build promo ribbon label robustly (supports fractional percent values)
@@ -1026,27 +906,17 @@ function render({ animate = false } = {}) {
     // product categories assigned by admin
     const pid2 = pid;
     const assignedCats = (productCatMap && (productCatMap[pid2] || productCatMap[String(p.nombre)])) || [];
-    let catsHtml = '';
-    if (assignedCats && assignedCats.length) {
-      const spans = assignedCats.map(function(c){ return '<span class="pc-tag">' + escapeHtml(c) + '</span>'; }).join(' ');
-      catsHtml = '<div class="product-meta">' + spans + '</div>';
-    }
+    const catsHtml = (assignedCats && assignedCats.length) ? `<div class="product-meta">${assignedCats.map(c => `<span class="pc-tag">${escapeHtml(c)}</span>`).join(' ')}</div>` : '';
 
-    // Show ribbon for validConsumo: percent as '-N%' or absolute value as '$N'
-    let consumoRibbon = '';
-    try{
-      if (validConsumo){
-        if (validConsumo.discount != null) consumoRibbon = `-${Math.round(Number(validConsumo.discount))}%`;
-        else if (validConsumo.value != null) consumoRibbon = `$${Number(validConsumo.value).toFixed(2)}`;
-      }
-    }catch(_){ consumoRibbon = ''; }
+    // show ribbon only for per-product discount
+    const consumoRibbon = validConsumo ? `-${Math.round(Number(validConsumo.discount ?? validConsumo.value ?? 0))}%` : '';
 
     // build card HTML using concatenation to avoid nested template literal parsing issues
     let html = '';
     html += '<div class="product-image">';
     html += (promo && promoRibbon) ? ('<div class="promo-ribbon">' + promoRibbon + '</div>') : '';
     html += validConsumo ? ('<div class="consumo-ribbon">' + escapeHtml(consumoRibbon) + '</div>') : '';
-    html += '<div class="price-badge">' + (discounted ? ('<span class="price-new">$' + Number(discounted).toFixed(2) + '</span><span class="price-old">$' + Number(p.precio).toFixed(2) + '</span>') : ('$' + Number(p.precio).toFixed(2))) + '</div>'; 
+    html += '<div class="price-badge">' + (discounted ? ('<span class="price-new">$' + Number(discounted).toFixed(2) + '</span><span class="price-old">$' + Number(p.precio).toFixed(2) + '</span>') : ('$' + Number(p.precio).toFixed(2))) + '</div';}```} PMID:99832_REQUEST_COMPLETED_TOO_LONG_APOLOGY(Note: the trailing characters may be due to formatting)
     html += '<img src="' + (imgSrc) + '" alt="' + escapeHtml(p.nombre) + '" loading="lazy" fetchpriority="low">';
     html += '</div>';
     html += '<div class="product-info">';
@@ -1054,20 +924,7 @@ function render({ animate = false } = {}) {
     html += '<h3>' + escapeHtml(p.nombre) + (isNew ? ' <span class="new-badge">Nuevo</span>' : '') + '</h3>';
     html += '<p>' + escapeHtml(p.descripcion) + '</p>';
     html += '<div class="price">' + (discounted ? ('<span class="price-new">$' + Number(discounted).toFixed(2) + '</span> <span class="price-old">$' + Number(p.precio).toFixed(2) + '</span>') : ('$' + Number(p.precio).toFixed(2))) + '</div>';
-    // show stock info (reflect admin panel stock)
-    if (!Number.isNaN(stockVal)) {
-      if (stockVal > 0) {
-        html += '<div class="stock-info" style="color:#666;margin-top:6px">Stock: ' + String(displayStock) + '</div>';
-      } else {
-        html += '<div class="stock-info" style="color:#b86a00;margin-top:6px;font-weight:700">Sin stock</div>';
-      }
-    }
-    if (outOfStock) {
-      html += '<div class="card-actions"><button class="btn btn-add disabled" disabled data-id="' + pid + '" aria-label="Sin stock">Sin stock</button></div>';
-      html += '<div class="out-of-stock-note">Sin stock</div>';
-    } else {
-      html += '<div class="card-actions"><button class="btn btn-add" data-id="' + pid + '" aria-label="Agregar ' + escapeHtml(p.nombre) + ' al carrito">Agregar</button></div>';
-    }
+    html += '<div class="card-actions"><button class="btn btn-add" data-id="' + pid + '" aria-label="Agregar ' + escapeHtml(p.nombre) + ' al carrito">Agregar</button></div>';
     html += '</div>';
     card.innerHTML = html;
     // post-render image handling: detect aspect ratio, fade-in, error fallback, lightbox trigger
@@ -1208,7 +1065,7 @@ function showQuantitySelector(productId, sourceEl = null){
     if (existing) existing.remove();
 
     const prod = products.find(x => String(x.id ?? x._id) === String(productId));
-      const title = prod ? (prod.nombre || prod.name || '') : (productId || 'Producto');
+    const title = prod ? (prod.nombre || prod.name || '') : (productId || 'Producto');
     let qty = 1;
 
     const overlay = document.createElement('div');
@@ -1229,17 +1086,10 @@ function showQuantitySelector(productId, sourceEl = null){
         if (consumoObj.type === 'percent') unitPrice = Math.max(0, +(basePrice * (1 - (Number(consumoObj.discount || consumoObj.value || 0) / 100))).toFixed(2));
         else if (consumoObj.value) unitPrice = Number(consumoObj.value);
       } else {
-        // fallback: honor per-product discount if present
         const perDisc = Number(prod?.discount ?? prod?.descuento ?? 0);
         if (!Number.isNaN(perDisc) && perDisc > 0) unitPrice = Math.max(0, +(basePrice * (1 - perDisc / 100)).toFixed(2));
       }
     }catch(_){ }
-
-    const stockVal = Number(prod?.stock ?? prod?.cantidad ?? 0);
-    if (!isNaN(stockVal) && stockVal <= 0) {
-      showAlert('actualmente no contamos con stock de este articulo', 'error');
-      return;
-    }
 
     overlay.innerHTML = `
       <div class="qty-box" role="dialog" aria-modal="true" aria-label="Seleccionar cantidad">
@@ -1333,20 +1183,20 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
   // Default single product add
   const p = products.find(x => String(x.id ?? x._id) === String(productId));
   if (!p) return; // avoid adding unknown ids
-  // Validate stock before adding (if consumo meta provided use consumo availability)
-  let available = Number(p?.stock ?? p?.cantidad ?? 0) || 0;
-  try {
-    if (opts && opts.meta && opts.meta.consumo) {
-      const cobj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
-        const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : []));
-        return ids.includes(String(productId));
-      }) : null;
-      available = cobj ? Number(cobj.qty || 0) : 0;
-    }
-  }catch(_){ }
+  // Validate stock before adding
+  let available = null;
+  if (opts && opts.meta && opts.meta.consumo) {
+    const cobj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
+      const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : []));
+      return ids.includes(String(productId));
+    }) : null;
+    available = cobj ? Number(cobj.qty || 0) : 0;
+  } else {
+    available = Number(p?.stock ?? p?.cantidad ?? 0) || 0;
+  }
   if (available <= 0) { showAlert('actualmente no contamos con stock de este articulo', 'error'); return; }
   if (qty > available) { showAlert('No hay suficiente stock disponible (solo ' + String(available) + ' disponibles)', 'error'); return; }
-  const meta = { name: p?.nombre || p?.name || '', price: p?.precio ?? p?.price ?? 0, image: p?.imagen || p?.image || p?.image_url || '' };
+  const meta = { name: p?.nombre || p?.name || '', price: opts.meta?.price ?? p?.precio ?? p?.price ?? 0, image: p?.imagen || p?.image || p?.image_url || '' };
   if (opts && opts.meta) try{ Object.assign(meta, opts.meta); }catch(_){ }
   cart.push({ id: String(productId), qty: Math.min(99, qty), meta });
   writeCart(cart);
@@ -1355,35 +1205,7 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
   // fly animation from the source image to cart
   if (sourceEl && !reduceMotion) animateFlyToCart(sourceEl);
 }
-function setCartItem(productId, qty){
-  const cart = readCart();
-  const idx = cart.findIndex(i=>i.id===productId);
-  if(idx < 0) return;
-  if(qty <= 0) {
-    cart.splice(idx, 1);
-    writeCart(cart); renderCart(); return;
-  }
-  // enforce stock limits
-  const prod = products.find(x => String(x.id ?? x._id) === String(productId));
-  // If this cart item is a consumo, respect consumo availability
-  const ci = cart[idx];
-  let available = Number(prod?.stock ?? prod?.cantidad ?? 0) || 0;
-  try{ if (ci && ci.meta && ci.meta.consumo) {
-    const cobj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
-      const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : []));
-      return ids.includes(String(productId));
-    }) : null;
-    available = cobj ? Number(cobj.qty || 0) : 0;
-  }}catch(_){ }
-  if (available <= 0) {
-    showAlert('actualmente no contamos con stock de este articulo', 'error');
-    return;
-  }
-  const newQty = Math.min(99, qty > available ? available : qty);
-  if (newQty !== qty) showAlert('Cantidad ajustada al stock disponible (' + String(available) + ')', 'info');
-  cart[idx].qty = newQty;
-  writeCart(cart); renderCart();
-}
+function setCartItem(productId, qty){ const cart = readCart(); const idx = cart.findIndex(i=>i.id===productId); if(idx < 0) return; if(qty <= 0) { cart.splice(idx, 1); writeCart(cart); renderCart(); return; } const ci = cart[idx]; const prod = products.find(x => String(x.id ?? x._id) === String(productId)); let available = Number(prod?.stock ?? prod?.cantidad ?? 0) || 0; try{ if (ci && ci.meta && ci.meta.consumo) { const cobj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => { const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : [])); return ids.includes(String(productId)); }) : null; available = cobj ? Number(cobj.qty || 0) : 0; } }catch(_){ } const newQty = Math.min(99, qty > available ? available : qty); if (newQty !== qty) showAlert('Cantidad ajustada al stock disponible (' + String(available) + ')', 'info'); cart[idx].qty = newQty; writeCart(cart); renderCart(); }
 function removeFromCart(productId){ const cart = readCart().filter(i=>i.id!==productId); writeCart(cart); renderCart(); }
 function clearCart(){ writeCart([]); renderCart(); }
 
@@ -1440,12 +1262,12 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     const img = document.createElement('div'); img.className = 'ci-image'; img.innerHTML = `<img src="${item.meta?.image || 'images/placeholder.png'}" alt="${escapeHtml(item.meta?.name||'')}">`;
     const info = document.createElement('div'); info.className = 'ci-info';
 
-    // prefer item.meta.price when provided; try to reconcile with current `consumos` (admin changes may occur after item entered)
+    // prefer item meta.price; reconcile with current `consumos` so cart reflects admin-set discounts
     const prod = products.find(x => String(x.id ?? x._id) === String(item.id));
     const productBase = prod ? (prod.precio ?? prod.price ?? 0) : (item.meta?.price ?? 0);
     const promo = getBestPromotionForProduct(prod || item);
 
-    // If a consumo config currently exists for this product, compute its discounted price and prefer that (this lets cart reflect admin changes even for pre-existing cart items)
+    // If a consumo config exists, compute its price and persist it into the cart item meta
     let unitPrice = null;
     try {
       const cobj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
@@ -1459,16 +1281,14 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
           else if (cobj.value) cPrice = Number(cobj.value);
         }
         unitPrice = Number(cPrice);
-        // persist meta so subsequent renders keep the right price
         if (!item.meta) item.meta = {};
         if (item.meta.price !== unitPrice || !item.meta.consumo) {
           item.meta.price = unitPrice; item.meta.consumo = true; try{ writeCart(cart); }catch(_){ }
         }
       }
-    } catch(e){ /* ignore */ }
+    } catch(e) { /* ignore */ }
 
     if (unitPrice === null) {
-      // fallback: prefer stored meta.price when present (non-consumo), otherwise promo or product base
       const livePriceBase = (item.meta && item.meta.price != null) ? Number(item.meta.price) : productBase;
       unitPrice = (item.meta && item.meta.consumo && item.meta.price != null) ? Number(item.meta.price) : (promo ? getDiscountedPrice(productBase, promo) : livePriceBase);
     }
@@ -1478,7 +1298,6 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     if (item.meta && item.meta.consumo) {
       nameHtml += `<div class="ci-sub"><small class="badge consumo-badge" style="background:#fef3e8;color:#b86a00;border-radius:8px;padding:3px 6px;font-weight:700">Consumo inmediato</small></div>`;
       try{
-        // show how much discount is applied (prefer metadata from when item was added)
         const saved = item.meta && (typeof item.meta.discount_savings === 'number') ? Number(item.meta.discount_savings) : Math.max(0, Number(productBase) - Number(unitPrice));
         const label = (item.meta && item.meta.discount_label) ? String(item.meta.discount_label) : null;
         if (saved > 0) {
@@ -2390,21 +2209,6 @@ const _origFetchProducts = typeof fetchProducts === 'function' ? fetchProducts :
 function init(){
   try{
     grid = document.getElementById("catalogGrid") || (function(){ const s = document.createElement('section'); s.id='catalogGrid'; document.body.appendChild(s); return s;} )();
-    // ensure there is a visible catalog title for clarity
-    if (!document.getElementById('catalogTitle')){
-      try{
-        const title = document.createElement('div');
-        title.id = 'catalogTitle';
-        title.className = 'catalog-title';
-        const controlsEl = document.querySelector('.controls');
-        if (controlsEl && controlsEl.parentNode) {
-          // place title near the search/filters area for clearer layout
-          controlsEl.parentNode.insertBefore(title, controlsEl);
-        } else {
-          grid.parentNode && grid.parentNode.insertBefore(title, grid);
-        }
-      }catch(_){ }
-    }
     searchInput = document.getElementById("searchInput") || (function(){ const i = document.createElement('input'); i.id='searchInput'; i.type='search'; document.body.insertBefore(i, grid); return i;} )();
     // Render dynamic filter buttons (admin-managed) or fallback to default inline ones
     try{ renderFilterButtons(); }catch(e){ console.warn('initial renderFilterButtons failed', e); }
@@ -2452,118 +2256,6 @@ window.addEventListener('error', function(ev){ try{ showOverlayError('Error: '+(
 window.addEventListener('unhandledrejection', function(ev){ try{ showOverlayError('Promise rejection: '+(ev && ev.reason ? String(ev.reason) : String(ev))); }catch(e){} });
 
 // small helper to avoid XSS when inserting strings into innerHTML
-// WebSocket client: subscribe to product/consumos updates and refresh catalog in near-realtime
-function connectProductWS(){
-  if (typeof WebSocket === 'undefined') return;
-  let socket = null;
-  let retries = 0;
-  // prefer same-origin host first, then consider API_ORIGIN as fallback
-  const hosts = [window.location.host];
-  try{ if (typeof API_ORIGIN === 'string' && API_ORIGIN) { const apiHost = (new URL(API_ORIGIN)).host; if (apiHost && apiHost !== window.location.host) hosts.push(apiHost); } }catch(e){}
-  let hostIdx = 0;
-  let consecutiveFails = 0;
-  function _connect(){
-    try{
-      const wsProtocol = (window.location.protocol === 'https:') ? 'wss' : 'ws';
-      const host = hosts[hostIdx % hosts.length];
-      const url = wsProtocol + '://' + host + '/ws/products';
-      socket = new WebSocket(url);
-      socket.onopen = () => { retries = 0; consecutiveFails = 0; console.debug('[catalogo] WS connected to', url); };
-      socket.onmessage = (ev) => {
-        try{
-          const d = JSON.parse(ev.data);
-          if (!d || !d.action) return;
-          // product updated: refresh products snapshot
-          if (d.action === 'updated' && d.product && d.product.id){
-            fetchProducts({ showSkeleton: false }).catch(()=>{});
-          }
-          // consumos updated: refresh consumos
-          else if (d.action === 'consumos-updated'){
-            fetchConsumos().then(()=>{ try{ render({ animate: true }); }catch(_){} }).catch(()=>{});
-          }
-          // order created: may affect both stock and consumos
-          else if (d.action === 'order_created'){
-            try{ fetchProducts({ showSkeleton: false }).catch(()=>{}); fetchConsumos().then(()=>{ try{ render({ animate: true }); }catch(_){} }).catch(()=>{}); }catch(_){ }
-          }
-        }catch(e){ console.warn('[catalogo] ws message parse failed', e); }
-      };
-      socket.onclose = (ev) => {
-        console.warn('[catalogo] WS closed for host', host, 'retrying...');
-        consecutiveFails += 1;
-        if (consecutiveFails >= 3 && hosts.length > 1) { hostIdx += 1; consecutiveFails = 0; console.warn('[catalogo] switching to next WS host'); }
-        retries += 1;
-        const delay = Math.min(60000, Math.max(1000, Math.round(1000 * Math.pow(1.5, retries))));
-        setTimeout(_connect, delay);
-      };
-      socket.onerror = (e) => { console.warn('[catalogo] WS error for host', hosts[hostIdx % hosts.length], e); try{ socket.close(); }catch(_){ } };
-    }catch(e){ console.warn('[catalogo] ws connect failed', e); setTimeout(_connect, 3000); }
-  }
-  // Skip inline fallback block; use host-rotation _connect() only
-  _connect();
-  return;
-    try{
-      const wsProtocol = (window.location.protocol === 'https:') ? 'wss' : 'ws';
-      let host = null;
-      try{ host = (new URL(API_ORIGIN)).host; }catch(e){ host = window.location.host; }
-      const url = wsProtocol + '://' + host + '/ws/products';
-      /* fallback WebSocket disabled - host-rotation _connect() used */
-      socket.onmessage = (ev) => {
-        try{
-          const d = JSON.parse(ev.data);
-          if (!d || !d.action) return;
-          // product updated: refresh products snapshot
-          if (d.action === 'updated' && d.product && d.product.id){
-            fetchProducts({ showSkeleton: false }).catch(()=>{});
-          }
-          // consumos updated: refresh consumos
-          else if (d.action === 'consumos-updated'){
-            fetchConsumos().then(()=>{ try{ render({ animate: true }); }catch(_){} }).catch(()=>{});
-          }
-          // order created: may affect both stock and consumos
-          else if (d.action === 'order_created'){
-            try{ fetchProducts({ showSkeleton: false }).catch(()=>{}); fetchConsumos().then(()=>{ try{ render({ animate: true }); }catch(_){} }).catch(()=>{}); }catch(_){}
-          }
-        }catch(e){ console.warn('[catalogo] ws message parse failed', e); }
-      };
-      socket.onclose = (ev) => { console.warn('[catalogo] WS closed, reconnecting...'); retries += 1; const delay = Math.min(60000, Math.max(1000, Math.round(1000 * Math.pow(1.5, retries)))); setTimeout(_connect, delay); };
-      socket.onerror = (e) => { console.warn('[catalogo] WS error', e); try{ socket.close(); }catch(_){ } };
-    }catch(e){ console.warn('[catalogo] ws connect failed', e); setTimeout(_connect, 3000); }
-  _connect();
-}
-
-// Start WS after init so API_ORIGIN is available and DOM is ready
-try{ if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ()=>{ setTimeout(()=>{ try{ connectProductWS(); }catch(_){} }, 900); }); else setTimeout(()=>{ try{ connectProductWS(); }catch(_){} }, 900); }catch(e){}
-
-function parsePriceValue(v){
-  if (v == null) return null;
-  if (typeof v === 'number') return v;
-  try{
-    const s = String(v).trim();
-    if (!s) return null;
-    // strip non-numeric chars except . and -
-    const cleaned = s.replace(/[^0-9.\-]+/g, '');
-    const n = Number(cleaned);
-    return Number.isFinite(n) ? n : null;
-  }catch(_){ return null; }
-}
-function getProductBasePrice(prod){
-  if (!prod) return 0;
-  const candidates = [prod.precio, prod.price, prod.unit_price, prod.precio_unit, prod.price_display, prod.price_string, prod.pvp, prod.precio_unitario];
-  for (const c of candidates){
-    const n = parsePriceValue(c);
-    if (n != null) return n;
-  }
-  // last resort: try scanning object for numeric-looking keys
-  try{
-    for (const k of Object.keys(prod)){
-      const v = prod[k];
-      const n = parsePriceValue(v);
-      if (n != null && n > 0) return n;
-    }
-  }catch(_){ }
-  return 0;
-}
-
 function escapeHtml(str) {
   if (!str) return '';
   return String(str)
