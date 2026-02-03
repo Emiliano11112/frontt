@@ -26,6 +26,13 @@ const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').match
 let promotions = [];
 // consumos (admin-managed immediate-consumption discounts)
 let consumos = [];
+// helper: infer consumo type when admin data doesn't include `type`
+function getConsumoType(c){
+  if (!c) return null;
+  if (c.type) return c.type;
+  if (c.discount != null) return 'percent';
+  return null;
+}
 
 async function fetchConsumos(){
   const tryUrls = [
@@ -792,12 +799,13 @@ function render({ animate = false } = {}) {
           const card = document.createElement('article');
           card.className = 'consumo-card reveal';
           const imgSrc = match.imagen || match.image || 'images/placeholder.png';
-          const rawLabel = (c.discount || c.value) ? (c.type === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : `$${Number(c.value || 0).toFixed(2)}`) : 'Consumo';
+          const cType = getConsumoType(c);
+          const rawLabel = (c.discount || c.value) ? (cType === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : `$${Number(c.value || 0).toFixed(2)}`) : 'Consumo';
           const basePrice = Number(match.precio ?? match.price ?? 0) || 0;
           let discountedPrice = basePrice;
           try{
             if (c && (c.discount != null || c.value != null)) {
-              if (c.type === 'percent') discountedPrice = Math.max(0, +(basePrice * (1 - (Number(c.discount || c.value || 0) / 100))).toFixed(2));
+              if (cType === 'percent') discountedPrice = Math.max(0, +(basePrice * (1 - (Number(c.discount || c.value || 0) / 100))).toFixed(2));
               else if (c.value) discountedPrice = Number(c.value);
             }
           }catch(_){ }
@@ -805,7 +813,7 @@ function render({ animate = false } = {}) {
           const qtyHtml = (avail != null) ? ('<div class="consumo-qty">Disponibles: ' + String(avail) + '</div>') : '';
           // show new/old price and explicit saving when discounted
           const saved = Math.max(0, +(Number(basePrice) - Number(discountedPrice)).toFixed(2));
-          const savingHtml = (saved > 0) ? ('<div class="consumo-saving">Ahorra: <strong>$' + Number(saved).toFixed(2) + '</strong>' + (c.type === 'percent' && (c.discount || c.value) ? ' (' + String(Math.round(Number(c.discount || c.value))) + '%)' : '') + '</div>') : '';
+          const savingHtml = (saved > 0) ? ('<div class="consumo-saving">Ahorra: <strong>$' + Number(saved).toFixed(2) + '</strong>' + (cType === 'percent' && (c.discount || c.value) ? ' (' + String(Math.round(Number(c.discount || c.value))) + '%)' : '') + '</div>') : '';
           const priceHtml = '<div class="consumo-price"><span class="price-new">$' + Number(discountedPrice).toFixed(2) + '</span>' + (discountedPrice !== basePrice ? ' <span class="price-old">$' + Number(basePrice).toFixed(2) + '</span>' : '') + savingHtml + ' ' + qtyHtml + '</div>';
           const btnHtml = (avail == null || avail > 0) ? `<button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id) || match.name || ''))}">Agregar</button>` : `<button class="btn btn-disabled" disabled>Agotado</button>`;
           card.innerHTML = `
@@ -846,7 +854,8 @@ function render({ animate = false } = {}) {
               const prod = products.find(p => String(p.id ?? p._id) === String(pid));
               const base = prod ? Number(prod.precio ?? prod.price ?? 0) : 0;
               if (cobj) {
-                if (cobj.type === 'percent') discountedPrice = Math.max(0, +(base * (1 - (Number(cobj.discount || cobj.value || 0) / 100))).toFixed(2));
+                const cType = getConsumoType(cobj);
+                if (cType === 'percent') discountedPrice = Math.max(0, +(base * (1 - (Number(cobj.discount || cobj.value || 0) / 100))).toFixed(2));
                 else if (cobj.value) discountedPrice = Number(cobj.value);
               }
               if (discountedPrice === null) discountedPrice = base;
@@ -854,10 +863,16 @@ function render({ animate = false } = {}) {
             const available = cobj ? Number(cobj.qty || 0) : null;
             if (available !== null && available <= 0) { showAlert('Este consumo está agotado', 'error'); return; }
             try{ 
-              const discountLabel = (cobj && (cobj.discount != null || cobj.value != null)) ? (cobj.type === 'percent' ? '-' + String(Math.round(Number(cobj.discount || cobj.value || 0))) + '%' : '$' + Number(cobj.value || 0).toFixed(2)) : '';
-              const savings = (typeof discountedPrice === 'number' && prod) ? Math.max(0, +(Number(prod.precio ?? prod.price ?? 0) - Number(discountedPrice)).toFixed(2)) : 0;
-              const meta = { price: discountedPrice, consumo: !!cobj, consumo_id: cobj ? cobj.id : null, discount_label: discountLabel, discount_savings: savings, discount_type: cobj ? cobj.type : null, discount_value: cobj ? (cobj.discount || cobj.value) : null };
-              addToCart(String(pid), 1, img || null, { meta }); openCart(); 
+              // Use quantity selector so consumos can be added properly to cart
+              if (typeof showQuantitySelector === 'function') {
+                showQuantitySelector(String(pid), img || null);
+              } else {
+                const cType = getConsumoType(cobj);
+                const discountLabel = (cobj && (cobj.discount != null || cobj.value != null)) ? (cType === 'percent' ? '-' + String(Math.round(Number(cobj.discount || cobj.value || 0))) + '%' : '$' + Number(cobj.value || 0).toFixed(2)) : '';
+                const savings = (typeof discountedPrice === 'number' && prod) ? Math.max(0, +(Number(prod.precio ?? prod.price ?? 0) - Number(discountedPrice)).toFixed(2)) : 0;
+                const meta = { price: discountedPrice, consumo: !!cobj, consumo_id: cobj ? cobj.id : null, discount_label: discountLabel, discount_savings: savings, discount_type: cType, discount_value: cobj ? (cobj.discount || cobj.value) : null };
+                addToCart(String(pid), 1, img || null, { meta }); openCart(); 
+              }
             }catch(e){ }
           });
         });
@@ -1113,7 +1128,7 @@ function render({ animate = false } = {}) {
       addBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const id = addBtn.dataset.id;
-        showQuantitySelector(String(id), img || null);
+        showQuantitySelector(String(id), img || null, { forceRegular: true });
       });
       addBtn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); addBtn.click(); } });
     }
@@ -1194,6 +1209,8 @@ function closeLightbox(){
 /* CART: simple local cart with persistence, drawer UI and qty controls */
 const CART_KEY = 'catalog:cart_v1';
 
+function getCartKey(item){ return String(item.id) + ((item.meta && item.meta.consumo) ? ':consumo' : ':regular'); }
+
 function getProductKey(obj){ return String(obj.id ?? obj._id ?? obj.nombre ?? obj.name); }
 function readCart(){ try{ return JSON.parse(localStorage.getItem(CART_KEY) || '[]'); }catch{ return []; } }
 function writeCart(cart){ localStorage.setItem(CART_KEY, JSON.stringify(cart)); updateCartBadge(); }
@@ -1201,7 +1218,7 @@ function writeCart(cart){ localStorage.setItem(CART_KEY, JSON.stringify(cart)); 
 function updateCartBadge(){ const count = readCart().reduce((s,i)=>s+i.qty,0); const el = document.getElementById('cartCount'); if(el) el.textContent = String(count); if(count>0){ el.classList.add('has-items'); el.animate?.([{ transform: 'scale(1)' },{ transform: 'scale(1.12)' },{ transform: 'scale(1)' }], { duration: 320 }); } }
 
 /* showQuantitySelector: minimal, scoped modal to choose quantity before adding to cart */
-function showQuantitySelector(productId, sourceEl = null){
+function showQuantitySelector(productId, sourceEl = null, opts = {}){
   try{
     // avoid duplicates
     const existing = document.getElementById('__qty_selector');
@@ -1217,16 +1234,20 @@ function showQuantitySelector(productId, sourceEl = null){
     const imgSrc = prod?.imagen || prod?.image || prod?.image_url || 'images/placeholder.png';
     const basePrice = Number(prod?.precio ?? prod?.price ?? 0) || 0;
     let unitPrice = basePrice;
+    const forceRegular = !!(opts && opts.forceRegular);
     let consumoObj = null;
     try {
-      consumoObj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
-        const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : []));
-        return ids.includes(String(productId));
-      }) : null;
+      if (!forceRegular) {
+        consumoObj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
+          const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : []));
+          return ids.includes(String(productId));
+        }) : null;
+      }
     } catch(_) { consumoObj = null; }
     try{
       if (consumoObj && (consumoObj.discount != null || consumoObj.value != null)) {
-        if (consumoObj.type === 'percent') unitPrice = Math.max(0, +(basePrice * (1 - (Number(consumoObj.discount || consumoObj.value || 0) / 100))).toFixed(2));
+        const cType = getConsumoType(consumoObj);
+        if (cType === 'percent') unitPrice = Math.max(0, +(basePrice * (1 - (Number(consumoObj.discount || consumoObj.value || 0) / 100))).toFixed(2));
         else if (consumoObj.value) unitPrice = Number(consumoObj.value);
       } else {
         // fallback: honor per-product discount if present
@@ -1282,7 +1303,7 @@ function showQuantitySelector(productId, sourceEl = null){
     inc.addEventListener('click', ()=>{ if (qty < 99) qty += 1; refresh(); });
     dec.addEventListener('click', ()=>{ if (qty > 1) qty -= 1; refresh(); });
     cancel.addEventListener('click', ()=>{ overlay.remove(); });
-    confirm.addEventListener('click', ()=>{ try{ const opts = {}; if (consumoObj) opts.meta = { price: unitPrice, consumo: true, consumo_id: consumoObj.id }; else opts.meta = { price: unitPrice }; addToCart(String(productId), qty, sourceEl, opts); openCart(String(productId)); }catch(e){console.error(e);} finally{ overlay.remove(); } });
+    confirm.addEventListener('click', ()=>{ try{ const optsLocal = {}; if (consumoObj) optsLocal.meta = { price: unitPrice, consumo: true, consumo_id: consumoObj.id }; else optsLocal.meta = { price: unitPrice, force_regular: forceRegular }; addToCart(String(productId), qty, sourceEl, optsLocal); openCart(String(productId)); }catch(e){console.error(e);} finally{ overlay.remove(); } });
 
     const onKey = (ev)=>{ if (ev.key === 'Escape') { overlay.remove(); window.removeEventListener('keydown', onKey); } if (ev.key === 'Enter') { confirm.click(); } };
     window.addEventListener('keydown', onKey);
@@ -1292,11 +1313,13 @@ function showQuantitySelector(productId, sourceEl = null){
 
 function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
   const cart = readCart();
-  const idx = cart.findIndex(i=>i.id===productId);
+  const key = String(productId) + ((opts && opts.meta && opts.meta.consumo) ? ':consumo' : ':regular');
+  const idx = cart.findIndex(i=> (i.key || getCartKey(i)) === key);
   if(idx>=0){
     // update existing item quantity and merge provided meta (so discounts / consumo flags propagate)
     cart[idx].qty = Math.min(99, cart[idx].qty + qty);
     try{ if (opts && opts.meta){ cart[idx].meta = Object.assign({}, cart[idx].meta || {}, opts.meta); } }catch(_){ }
+    cart[idx].key = key;
     writeCart(cart);
     renderCart();
     pulseCard(productId);
@@ -1348,30 +1371,29 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
   if (qty > available) { showAlert('No hay suficiente stock disponible (solo ' + String(available) + ' disponibles)', 'error'); return; }
   const meta = { name: p?.nombre || p?.name || '', price: p?.precio ?? p?.price ?? 0, image: p?.imagen || p?.image || p?.image_url || '' };
   if (opts && opts.meta) try{ Object.assign(meta, opts.meta); }catch(_){ }
-  cart.push({ id: String(productId), qty: Math.min(99, qty), meta });
+  cart.push({ id: String(productId), qty: Math.min(99, qty), meta, key: String(productId) + ((meta && meta.consumo) ? ':consumo' : ':regular') });
   writeCart(cart);
   renderCart();
   pulseCard(productId);
   // fly animation from the source image to cart
   if (sourceEl && !reduceMotion) animateFlyToCart(sourceEl);
 }
-function setCartItem(productId, qty){
+function setCartItemByKey(itemKey, qty){
   const cart = readCart();
-  const idx = cart.findIndex(i=>i.id===productId);
+  const idx = cart.findIndex(i=> (i.key || getCartKey(i)) === String(itemKey));
   if(idx < 0) return;
   if(qty <= 0) {
     cart.splice(idx, 1);
     writeCart(cart); renderCart(); return;
   }
   // enforce stock limits
-  const prod = products.find(x => String(x.id ?? x._id) === String(productId));
-  // If this cart item is a consumo, respect consumo availability
   const ci = cart[idx];
+  const prod = products.find(x => String(x.id ?? x._id) === String(ci.id));
   let available = Number(prod?.stock ?? prod?.cantidad ?? 0) || 0;
   try{ if (ci && ci.meta && ci.meta.consumo) {
     const cobj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
       const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : []));
-      return ids.includes(String(productId));
+      return ids.includes(String(ci.id));
     }) : null;
     available = cobj ? Number(cobj.qty || 0) : 0;
   }}catch(_){ }
@@ -1384,7 +1406,7 @@ function setCartItem(productId, qty){
   cart[idx].qty = newQty;
   writeCart(cart); renderCart();
 }
-function removeFromCart(productId){ const cart = readCart().filter(i=>i.id!==productId); writeCart(cart); renderCart(); }
+function removeFromCartByKey(itemKey){ const cart = readCart().filter(i=> (i.key || getCartKey(i)) !== String(itemKey)); writeCart(cart); renderCart(); }
 function clearCart(){ writeCart([]); renderCart(); }
 
 function pulseCard(productId){ const sel = `[data-pid="${productId}"]`; const card = document.querySelector(sel); if(!card) return; card.classList.add('added'); setTimeout(()=>card.classList.remove('added'), 600); }
@@ -1436,7 +1458,7 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
   if(cart.length===0){ container.innerHTML = `<div class="cart-empty"><div style="font-size:36px;opacity:0.9">🛒</div><div style="font-weight:800">Tu carrito está vacío</div><div style="color:var(--muted)">Agregá productos para comenzar</div><div class="ce-cta"><button class="btn btn-primary" onclick="closeCart()">Seguir comprando</button></div></div>`; subtotalEl.textContent = '$0.00'; updateCartBadge(); return; }
 
   let subtotal = 0; cart.forEach(item=>{
-    const row = document.createElement('div'); row.className = 'cart-item'; row.dataset.pid = item.id;
+    const row = document.createElement('div'); row.className = 'cart-item'; row.dataset.pid = item.id; row.dataset.key = (item.key || getCartKey(item));
     const img = document.createElement('div'); img.className = 'ci-image'; img.innerHTML = `<img src="${item.meta?.image || 'images/placeholder.png'}" alt="${escapeHtml(item.meta?.name||'')}">`;
     const info = document.createElement('div'); info.className = 'ci-info';
 
@@ -1448,14 +1470,16 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     // If a consumo config currently exists for this product, compute its discounted price and prefer that (this lets cart reflect admin changes even for pre-existing cart items)
     let unitPrice = null;
     try {
-      const cobj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
+      const forceRegularItem = !!(item.meta && item.meta.force_regular);
+      const cobj = (!forceRegularItem && Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
         const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : []));
         return ids.includes(String(item.id));
       }) : null;
       if (cobj) {
         let cPrice = Number(productBase || 0);
         if (cobj.discount != null || cobj.value != null) {
-          if (cobj.type === 'percent') cPrice = Math.max(0, +(Number(productBase) * (1 - (Number(cobj.discount || cobj.value || 0) / 100))).toFixed(2));
+          const cType = getConsumoType(cobj);
+          if (cType === 'percent') cPrice = Math.max(0, +(Number(productBase) * (1 - (Number(cobj.discount || cobj.value || 0) / 100))).toFixed(2));
           else if (cobj.value) cPrice = Number(cobj.value);
         }
         unitPrice = Number(cPrice);
@@ -1507,9 +1531,10 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     subtotal += Number(unitPrice || 0) * item.qty;
 
     // bindings
-    controls.querySelector('.qty-inc').addEventListener('click', ()=> setCartItem(item.id, item.qty+1));
-    controls.querySelector('.qty-dec').addEventListener('click', ()=> setCartItem(item.id, item.qty-1));
-    controls.querySelector('.remove').addEventListener('click', ()=> removeFromCart(item.id));
+    const itemKey = (item.key || getCartKey(item));
+    controls.querySelector('.qty-inc').addEventListener('click', ()=> setCartItemByKey(itemKey, item.qty+1));
+    controls.querySelector('.qty-dec').addEventListener('click', ()=> setCartItemByKey(itemKey, item.qty-1));
+    controls.querySelector('.remove').addEventListener('click', ()=> removeFromCartByKey(itemKey));
   });
 
   // animate subtotal change
