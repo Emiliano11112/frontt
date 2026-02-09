@@ -880,6 +880,27 @@ function render({ animate = false } = {}) {
     }
   }catch(e){ /* ignore consumos rendering errors */ }
 
+  /* Catálogo: show a dedicated header with product count */
+  let catalogSection = document.getElementById('catalogSection');
+  if (!catalogSection) {
+    catalogSection = document.createElement('section');
+    catalogSection.id = 'catalogSection';
+    catalogSection.className = 'catalog-section';
+    catalogSection.innerHTML = '<div class="catalog-header"><h2 class="catalog-title">Catálogo <small id="catalogCount" class="catalog-sub"></small></h2></div><div class="catalog-grid-wrap" id="catalogGridWrap"></div>';
+    try{
+      if (grid && grid.parentNode) grid.parentNode.insertBefore(catalogSection, grid);
+      else document.body.appendChild(catalogSection);
+    }catch(e){ document.body.appendChild(catalogSection); }
+  }
+  try{
+    const wrap = document.getElementById('catalogGridWrap');
+    if (wrap && grid && grid.parentNode !== wrap) wrap.appendChild(grid);
+  }catch(_){}
+  try{
+    const countEl = document.getElementById('catalogCount');
+    if (countEl) countEl.textContent = ' ' + String(filtered.length) + ' producto' + (filtered.length === 1 ? '' : 's');
+  }catch(_){}
+
   const mainProducts = filtered; // fallback: use full filtered list for now
 
   const frag = document.createDocumentFragment();
@@ -1417,15 +1438,17 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     const s = document.createElement('style'); s.id = '__cart_styles'; s.textContent = `
       #cartDrawer .cart-empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:26px;text-align:center;color:var(--muted)}
       .cart-empty .ce-cta{margin-top:8px}
-      .cart-item{display:flex;gap:14px;align-items:center;padding:14px;border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,0.98),rgba(250,250,250,0.98));border:1px solid rgba(0,0,0,0.04);margin-bottom:12px;box-shadow:0 8px 24px rgba(2,6,23,0.05)}
+      .cart-item{display:flex;gap:16px;align-items:center;padding:16px;border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,0.98),rgba(250,250,250,0.98));border:1px solid rgba(0,0,0,0.04);margin-bottom:14px;box-shadow:0 8px 24px rgba(2,6,23,0.05)}
       .ci-image img{width:112px;height:112px;border-radius:12px;object-fit:cover;box-shadow:0 8px 20px rgba(2,6,23,0.08)}
-      .ci-info{flex:1;display:flex;flex-direction:column;gap:8px}
-      .ci-name{font-weight:800;color:var(--deep);font-size:15px}
+      .ci-info{flex:1;display:flex;flex-direction:column;gap:10px;min-width:0}
+      .ci-name{font-weight:800;color:var(--deep);font-size:15px;display:flex;align-items:baseline;flex-wrap:wrap;column-gap:8px;row-gap:4px}
+      .ci-name-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:normal;line-height:1.2}
+      .ci-badge{flex:0 0 auto;padding:2px 8px;border-radius:999px;background:#fef3e8;color:#b86a00;font-weight:800;font-size:11px;border:1px solid rgba(242,107,56,0.18);white-space:nowrap;line-height:1.2}
       .ci-sub{font-size:13px;color:var(--muted)}
       .ci-price{margin-top:8px}
       .ci-price .price-new{color:var(--accent);font-weight:900;font-size:16px}
       .ci-price .price-old{color:var(--muted);text-decoration:line-through;margin-left:8px;font-size:12px}
-      .ci-controls{display:flex;gap:14px;align-items:center}
+      .ci-controls{display:flex;gap:12px;align-items:center;margin-left:auto;flex:0 0 auto}
       .qty{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid rgba(0,0,0,0.06);padding:8px 10px;border-radius:999px}
       .qty button{border:0;background:transparent;color:var(--accent);font-weight:800;padding:6px;width:34px;height:34px;border-radius:50%;cursor:pointer}
       .qty .val{min-width:30px;text-align:center;font-weight:800;color:var(--deep)}
@@ -1498,9 +1521,9 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     }
 
     // build name and price HTML, support promo-summary items that include multiple products
-    let nameHtml = `<div class="ci-name">${escapeHtml(item.meta?.name||prod?.nombre||'')}</div>`;
+    const isConsumo = !!(item.meta && item.meta.consumo) || String(item.key || getCartKey(item)).includes(':consumo');
+    let nameHtml = `<div class="ci-name"><span class="ci-name-text">${escapeHtml(item.meta?.name||prod?.nombre||'')}</span>${isConsumo ? ' <span class="ci-badge">Consumo inmediato</span>' : ''}</div>`;
     if (item.meta && item.meta.consumo) {
-      nameHtml += `<div class="ci-sub"><small class="badge consumo-badge" style="background:#fef3e8;color:#b86a00;border-radius:8px;padding:3px 6px;font-weight:700">Consumo inmediato</small></div>`;
       try{
         // show how much discount is applied (prefer metadata from when item was added)
         const saved = item.meta && (typeof item.meta.discount_savings === 'number') ? Number(item.meta.discount_savings) : Math.max(0, Number(productBase) - Number(unitPrice));
@@ -1640,7 +1663,16 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         // and attach a token preview snapshot so the backend can persist contact info.
         const payload = Object.assign({}, basePayload);
         try{
-          payload.items = (basePayload.items || []).map(it => ({ id: (it && (it.id || it._id)) ? (it.id || it._id) : (it && it.id) ? it.id : '', qty: Number(it.qty || 1), meta: it.meta || it.meta || (it.meta || it) }));
+          payload.items = (basePayload.items || []).map(it => {
+            const id = (it && (it.id || it._id)) ? (it.id || it._id) : (it && it.id) ? it.id : '';
+            const qty = Number(it.qty || 1);
+            let meta = {};
+            try{ meta = Object.assign({}, (it && it.meta) ? it.meta : {}); }catch(_){ meta = {}; }
+            const key = String((it && it.key) || (meta && meta.key) || '');
+            if (key) meta.key = key;
+            if (!meta.force_regular && !meta.consumo && key.includes(':consumo')) meta.consumo = true;
+            return { id, qty, meta };
+          });
         }catch(e){ payload.items = basePayload.items || []; }
         try{
           // If logged-in, include a lightweight preview from the profile we fetched above
@@ -1650,7 +1682,13 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         }catch(e){}
         // If the cart includes consumo items, mark the payload but DO NOT prompt the customer
         try{
-          const hasConsumos = Array.isArray(payload.items) && payload.items.some(i => !!(i.meta && i.meta.consumo));
+          const hasConsumos = Array.isArray(payload.items) && payload.items.some(i => {
+            try{
+              if (i && i.meta && i.meta.consumo) return true;
+              const key = String((i && i.meta && i.meta.key) || (i && i.key) || '');
+              return key.includes(':consumo');
+            }catch(_){ return false; }
+          });
           if (hasConsumos) {
             payload.contains_consumos = true;
             // No user confirmation here: consumptions are processed server-side transparently
