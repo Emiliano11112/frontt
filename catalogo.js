@@ -22,6 +22,45 @@ let countdown = AUTO_REFRESH_SECONDS;
 
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+// Units / kg options
+const KG_OPTIONS = [
+  { value: 1, label: '1 kg' },
+  { value: 0.5, label: '1/2 kg' },
+  { value: 1/3, label: '1/3 kg' },
+  { value: 0.25, label: '1/4 kg' }
+];
+
+function normalizeSaleUnit(val){
+  const v = String(val || '').trim().toLowerCase();
+  if (v === 'kg' || v === 'kilo' || v === 'kilos' || v === 'kilogram' || v === 'kilograms' || v === 'kilogramo' || v === 'kilogramos') return 'kg';
+  return 'unit';
+}
+
+function getSaleUnitFromObj(obj){
+  try{
+    return normalizeSaleUnit(obj?.sale_unit || obj?.unit_type || obj?.unit || obj?.unidad_venta || obj?.saleUnit || obj?.tipo_venta);
+  }catch(_){ return 'unit'; }
+}
+
+function formatKgLabel(qty){
+  try{
+    const num = Number(qty);
+    if (Number.isNaN(num)) return String(qty || '');
+    const match = KG_OPTIONS.find(o => Math.abs(o.value - num) < 0.0001);
+    if (match) return match.label;
+    return `${num} kg`;
+  }catch(_){ return String(qty || ''); }
+}
+
+function formatQtyLabel(qty, unitType, meta){
+  const unit = normalizeSaleUnit(unitType);
+  if (unit === 'kg'){
+    if (meta && meta.qty_label) return String(meta.qty_label);
+    return formatKgLabel(qty);
+  }
+  return String(qty);
+}
+
 // promotions support
 let promotions = [];
 // consumos (admin-managed immediate-consumption discounts)
@@ -437,6 +476,7 @@ function normalize(p) {
   const description = (p.descripcion || p.description || "").trim();
   const category = (p.categoria || p.category || "").trim();
   const price = p.precio ?? p.price ?? 0;
+  const saleUnit = getSaleUnitFromObj(p);
   let image = p.imagen || p.image || p.image_url || p.imageUrl || null;
   // Si la ruta es relativa (empieza por '/') no anteponer el origen remoto cuando los
   // datos proceden del `products.json` local — así los assets locales se resuelven correctamente
@@ -462,7 +502,7 @@ function normalize(p) {
       }
     }catch(e){ /* ignore normalization errors */ }
   }
-  return { ...p, nombre: name, descripcion: description, categoria: category, precio: price, imagen: image };
+  return { ...p, nombre: name, descripcion: description, categoria: category, precio: price, imagen: image, sale_unit: saleUnit };
 } 
 
 function showMessage(msg, level = "info") {
@@ -527,15 +567,16 @@ function renderSkeleton(count = 6) {
             const card = document.createElement('article');
             card.className = 'product-card';
             card.dataset.pid = String(p.id ?? p._id ?? i);
+            const unitSuffix = (getSaleUnitFromObj(p) === 'kg') ? ' / kg' : '';
             card.innerHTML = `
               <div class="product-image">
-                <div class="price-badge">$${Number(p.precio || p.price || 0).toFixed(2)}</div>
+                <div class="price-badge">$${Number(p.precio || p.price || 0).toFixed(2)}${unitSuffix}</div>
                 <img src="${p.imagen || 'images/placeholder.png'}" alt="${escapeHtml(p.nombre || p.name || '')}" loading="lazy">
               </div>
               <div class="product-info">
                 <h3>${escapeHtml(p.nombre || p.name || '')}</h3>
                 <p>${escapeHtml(p.descripcion || p.description || '')}</p>
-                <div class="price">$${Number(p.precio || p.price || 0).toFixed(2)}</div>
+                <div class="price">$${Number(p.precio || p.price || 0).toFixed(2)}${unitSuffix}</div>
                 <div class="card-actions"><button class="btn btn-add" data-id="${String(p.id ?? p._id ?? i)}">Agregar</button></div>
               </div>`;
             mf.appendChild(card);
@@ -802,6 +843,7 @@ function render({ animate = false } = {}) {
           const cType = getConsumoType(c);
           const rawLabel = (c.discount || c.value) ? (cType === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : `$${Number(c.value || 0).toFixed(2)}`) : 'Consumo';
           const basePrice = Number(match.precio ?? match.price ?? 0) || 0;
+          const unitSuffix = (getSaleUnitFromObj(match) === 'kg') ? ' / kg' : '';
           let discountedPrice = basePrice;
           try{
             if (c && (c.discount != null || c.value != null)) {
@@ -814,7 +856,7 @@ function render({ animate = false } = {}) {
           // show new/old price and explicit saving when discounted
           const saved = Math.max(0, +(Number(basePrice) - Number(discountedPrice)).toFixed(2));
           const savingHtml = (saved > 0) ? ('<div class="consumo-saving">Ahorra: <strong>$' + Number(saved).toFixed(2) + '</strong>' + (cType === 'percent' && (c.discount || c.value) ? ' (' + String(Math.round(Number(c.discount || c.value))) + '%)' : '') + '</div>') : '';
-          const priceHtml = '<div class="consumo-price"><span class="price-new">$' + Number(discountedPrice).toFixed(2) + '</span>' + (discountedPrice !== basePrice ? ' <span class="price-old">$' + Number(basePrice).toFixed(2) + '</span>' : '') + savingHtml + ' ' + qtyHtml + '</div>';
+          const priceHtml = '<div class="consumo-price"><span class="price-new">$' + Number(discountedPrice).toFixed(2) + unitSuffix + '</span>' + (discountedPrice !== basePrice ? ' <span class="price-old">$' + Number(basePrice).toFixed(2) + unitSuffix + '</span>' : '') + savingHtml + ' ' + qtyHtml + '</div>';
           const btnHtml = (avail == null || avail > 0) ? `<button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id) || match.name || ''))}">Agregar</button>` : `<button class="btn btn-disabled" disabled>Agotado</button>`;
           card.innerHTML = `
             <div class="consumo-badge">${escapeHtml(rawLabel)}</div>
@@ -967,6 +1009,9 @@ function render({ animate = false } = {}) {
 
     const imgSrc = p.imagen || 'images/placeholder.png';
     const pid = String(p.id ?? p._id ?? p.nombre ?? i);
+    const saleUnit = getSaleUnitFromObj(p);
+    const unitSuffix = (saleUnit === 'kg') ? ' / kg' : '';
+    const stockUnitLabel = (saleUnit === 'kg') ? ' kg' : '';
     card.dataset.pid = pid;
     const stockVal = Number(p.stock ?? p.cantidad ?? 0);
     // subtract reserved consumos from display
@@ -1082,18 +1127,18 @@ function render({ animate = false } = {}) {
     html += '<div class="product-image">';
     html += (promo && promoRibbon) ? ('<div class="promo-ribbon">' + promoRibbon + '</div>') : '';
     html += validConsumo ? ('<div class="consumo-ribbon">' + escapeHtml(consumoRibbon) + '</div>') : '';
-    html += '<div class="price-badge">' + (discounted ? ('<span class="price-new">$' + Number(discounted).toFixed(2) + '</span><span class="price-old">$' + Number(p.precio).toFixed(2) + '</span>') : ('$' + Number(p.precio).toFixed(2))) + '</div>'; 
+    html += '<div class="price-badge">' + (discounted ? ('<span class="price-new">$' + Number(discounted).toFixed(2) + unitSuffix + '</span><span class="price-old">$' + Number(p.precio).toFixed(2) + unitSuffix + '</span>') : ('$' + Number(p.precio).toFixed(2) + unitSuffix)) + '</div>'; 
     html += '<img src="' + (imgSrc) + '" alt="' + escapeHtml(p.nombre) + '" loading="lazy" fetchpriority="low">';
     html += '</div>';
     html += '<div class="product-info">';
     html += catsHtml || '';
     html += '<h3>' + escapeHtml(p.nombre) + (isNew ? ' <span class="new-badge">Nuevo</span>' : '') + '</h3>';
     html += '<p>' + escapeHtml(p.descripcion) + '</p>';
-    html += '<div class="price">' + (discounted ? ('<span class="price-new">$' + Number(discounted).toFixed(2) + '</span> <span class="price-old">$' + Number(p.precio).toFixed(2) + '</span>') : ('$' + Number(p.precio).toFixed(2))) + '</div>';
+    html += '<div class="price">' + (discounted ? ('<span class="price-new">$' + Number(discounted).toFixed(2) + unitSuffix + '</span> <span class="price-old">$' + Number(p.precio).toFixed(2) + unitSuffix + '</span>') : ('$' + Number(p.precio).toFixed(2) + unitSuffix)) + '</div>';
     // show stock info (reflect admin panel stock)
     if (!Number.isNaN(stockVal)) {
       if (stockVal > 0) {
-        html += '<div class="stock-info" style="color:#666;margin-top:6px">Stock: ' + String(displayStock) + '</div>';
+        html += '<div class="stock-info" style="color:#666;margin-top:6px">Stock: ' + String(displayStock) + stockUnitLabel + '</div>';
       } else {
         html += '<div class="stock-info" style="color:#b86a00;margin-top:6px;font-weight:700">Sin stock</div>';
       }
@@ -1236,7 +1281,13 @@ function getProductKey(obj){ return String(obj.id ?? obj._id ?? obj.nombre ?? ob
 function readCart(){ try{ return JSON.parse(localStorage.getItem(CART_KEY) || '[]'); }catch{ return []; } }
 function writeCart(cart){ localStorage.setItem(CART_KEY, JSON.stringify(cart)); updateCartBadge(); }
 
-function updateCartBadge(){ const count = readCart().reduce((s,i)=>s+i.qty,0); const el = document.getElementById('cartCount'); if(el) el.textContent = String(count); if(count>0){ el.classList.add('has-items'); el.animate?.([{ transform: 'scale(1)' },{ transform: 'scale(1.12)' },{ transform: 'scale(1)' }], { duration: 320 }); } }
+function updateCartBadge(){
+  const count = readCart().reduce((s,i)=>s+Number(i.qty || 0),0);
+  const display = Number.isInteger(count) ? String(count) : String(Number(count).toFixed(2));
+  const el = document.getElementById('cartCount');
+  if(el) el.textContent = display;
+  if(count>0){ el.classList.add('has-items'); el.animate?.([{ transform: 'scale(1)' },{ transform: 'scale(1.12)' },{ transform: 'scale(1)' }], { duration: 320 }); }
+}
 
 /* showQuantitySelector: minimal, scoped modal to choose quantity before adding to cart */
 function showQuantitySelector(productId, sourceEl = null, opts = {}){
@@ -1246,8 +1297,11 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
     if (existing) existing.remove();
 
     const prod = products.find(x => String(x.id ?? x._id) === String(productId));
-      const title = prod ? (prod.nombre || prod.name || '') : (productId || 'Producto');
+    const title = prod ? (prod.nombre || prod.name || '') : (productId || 'Producto');
+    const saleUnit = getSaleUnitFromObj(prod);
+    const isKg = saleUnit === 'kg';
     let qty = 1;
+    let qtyLabel = '1';
 
     const overlay = document.createElement('div');
     overlay.id = '__qty_selector';
@@ -1283,16 +1337,40 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
       return;
     }
 
+    // kg options (filter by available stock if present)
+    let kgOptions = KG_OPTIONS.slice();
+    if (isKg && !Number.isNaN(stockVal) && stockVal > 0) {
+      kgOptions = KG_OPTIONS.filter(o => o.value <= (stockVal + 0.0001));
+      if (kgOptions.length === 0) {
+        showAlert('actualmente no contamos con stock de este articulo', 'error');
+        return;
+      }
+    }
+    if (isKg) {
+      qty = kgOptions[0].value;
+      qtyLabel = kgOptions[0].label;
+    }
+
+    const controlsHtml = isKg ? `
+        <div class="qb-kg-controls" role="group" aria-label="Seleccionar kg">
+          <button type="button" class="qb-kg-btn qb-kg-dec" aria-label="Reducir kg">-</button>
+          <div class="qb-kg-val" aria-live="polite">${escapeHtml(qtyLabel)}</div>
+          <button type="button" class="qb-kg-btn qb-kg-inc" aria-label="Aumentar kg">+</button>
+        </div>
+      ` : `
+        <div class="qb-controls">
+          <button class="qb-dec" aria-label="Disminuir cantidad">-</button>
+          <div class="qb-val" aria-live="polite">1</div>
+          <button class="qb-inc" aria-label="Aumentar cantidad">+</button>
+        </div>
+      `;
+
     overlay.innerHTML = `
       <div class="qty-box" role="dialog" aria-modal="true" aria-label="Seleccionar cantidad">
         <div class="qb-top"><img class="qb-img" src="${imgSrc}" alt="${escapeHtml(String(title))}"></div>
         <div class="qb-head"><strong>${escapeHtml(String(title))}</strong></div>
-        <div class="qb-controls">
-          <button class="qb-dec" aria-label="Disminuir cantidad">−</button>
-          <div class="qb-val" aria-live="polite">1</div>
-          <button class="qb-inc" aria-label="Aumentar cantidad">+</button>
-        </div>
-        <div class="qb-price">Precio unitario: $${Number(unitPrice).toFixed(2)}${consumoObj ? ' <small style="color:var(--muted);margin-left:8px">Consumo inmediato</small>' : ''}</div>
+        ${controlsHtml}
+        <div class="qb-price">${isKg ? 'Precio por kg' : 'Precio unitario'}: $${Number(unitPrice).toFixed(2)}${consumoObj ? ' <small style="color:var(--muted);margin-left:8px">Consumo inmediato</small>' : ''}</div>
         <div class="qb-total">Total: $${Number(unitPrice * qty).toFixed(2)}</div>
         <div class="qb-actions"><button class="btn btn-ghost qb-cancel">Cancelar</button><button class="btn btn-primary qb-confirm">Agregar</button></div>
       </div>`;
@@ -1309,6 +1387,10 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
         .qb-controls{display:flex;align-items:center;gap:12px}
         .qb-controls .qb-val{min-width:46px;text-align:center;font-weight:800}
         .qb-controls button{width:44px;height:44px;border-radius:10px;border:1px solid rgba(6,26,43,0.06);background:#fff;font-size:20px}
+        .qb-kg-controls{display:flex;align-items:center;gap:12px;background:linear-gradient(180deg,#fff,#fbfbfd);border:1px solid rgba(6,26,43,0.06);border-radius:999px;padding:6px 10px;box-shadow:0 10px 24px rgba(6,26,43,0.06)}
+        .qb-kg-btn{width:40px;height:40px;border-radius:50%;border:1px solid rgba(6,26,43,0.08);background:#fff;font-size:20px;font-weight:800;color:var(--accent)}
+        .qb-kg-btn:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(6,26,43,0.08)}
+        .qb-kg-val{min-width:80px;text-align:center;font-weight:900;color:var(--deep);font-size:16px}
         .qb-actions{display:flex;gap:8px;justify-content:flex-end;width:100%}
       `; document.head.appendChild(s);
     }
@@ -1320,11 +1402,40 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
     const cancel = overlay.querySelector('.qb-cancel');
 
     const totalEl = overlay.querySelector('.qb-total');
-    function refresh() { valEl.textContent = String(qty); try{ totalEl.textContent = `Total: $${Number(unitPrice * qty).toFixed(2)}`; totalEl.classList.add('pulse'); setTimeout(()=> totalEl.classList.remove('pulse'), 220); }catch(_){} }
-    inc.addEventListener('click', ()=>{ if (qty < 99) qty += 1; refresh(); });
-    dec.addEventListener('click', ()=>{ if (qty > 1) qty -= 1; refresh(); });
+    function refresh() {
+      if (valEl) valEl.textContent = isKg ? String(qtyLabel) : String(qty);
+      const kgValEl = overlay.querySelector('.qb-kg-val');
+      if (kgValEl && isKg) kgValEl.textContent = String(qtyLabel);
+      try{
+        totalEl.textContent = `Total: $${Number(unitPrice * qty).toFixed(2)}`;
+        totalEl.classList.add('pulse');
+        setTimeout(()=> totalEl.classList.remove('pulse'), 220);
+      }catch(_){}
+    }
+    if (!isKg) {
+      inc.addEventListener('click', ()=>{ if (qty < 99) qty += 1; refresh(); });
+      dec.addEventListener('click', ()=>{ if (qty > 1) qty -= 1; refresh(); });
+    } else {
+      let kgIndex = 0;
+      try{
+        const idx = kgOptions.findIndex(o => Math.abs(o.value - qty) < 0.0001);
+        kgIndex = idx >= 0 ? idx : 0;
+      }catch(_){ kgIndex = 0; }
+      const kgInc = overlay.querySelector('.qb-kg-inc');
+      const kgDec = overlay.querySelector('.qb-kg-dec');
+      const setKg = (index) => {
+        const safe = Math.max(0, Math.min(kgOptions.length - 1, index));
+        kgIndex = safe;
+        const opt = kgOptions[kgIndex];
+        qty = opt.value;
+        qtyLabel = opt.label || formatKgLabel(qty);
+        refresh();
+      };
+      if (kgInc) kgInc.addEventListener('click', ()=>{ if (kgIndex > 0) setKg(kgIndex - 1); });
+      if (kgDec) kgDec.addEventListener('click', ()=>{ if (kgIndex < kgOptions.length - 1) setKg(kgIndex + 1); });
+    }
     cancel.addEventListener('click', ()=>{ overlay.remove(); });
-    confirm.addEventListener('click', ()=>{ try{ const optsLocal = {}; if (consumoObj) optsLocal.meta = { price: unitPrice, consumo: true, consumo_id: consumoObj.id }; else optsLocal.meta = { price: unitPrice, force_regular: forceRegular }; addToCart(String(productId), qty, sourceEl, optsLocal); openCart(String(productId)); }catch(e){console.error(e);} finally{ overlay.remove(); } });
+    confirm.addEventListener('click', ()=>{ try{ const optsLocal = {}; if (consumoObj) optsLocal.meta = { price: unitPrice, consumo: true, consumo_id: consumoObj.id }; else optsLocal.meta = { price: unitPrice, force_regular: forceRegular }; optsLocal.meta.unit_type = saleUnit; if (isKg) optsLocal.meta.qty_label = qtyLabel; addToCart(String(productId), qty, sourceEl, optsLocal); openCart(String(productId)); }catch(e){console.error(e);} finally{ overlay.remove(); } });
 
     const onKey = (ev)=>{ if (ev.key === 'Escape') { overlay.remove(); window.removeEventListener('keydown', onKey); } if (ev.key === 'Enter') { confirm.click(); } };
     window.addEventListener('keydown', onKey);
@@ -1340,6 +1451,14 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
     // update existing item quantity and merge provided meta (so discounts / consumo flags propagate)
     cart[idx].qty = Math.min(99, cart[idx].qty + qty);
     try{ if (opts && opts.meta){ cart[idx].meta = Object.assign({}, cart[idx].meta || {}, opts.meta); } }catch(_){ }
+    try{
+      const unitType = normalizeSaleUnit(cart[idx].meta?.unit_type || cart[idx].meta?.sale_unit || cart[idx].meta?.unit);
+      if (unitType === 'kg') {
+        const match = KG_OPTIONS.find(o => Math.abs(Number(o.value) - Number(cart[idx].qty)) < 0.0001);
+        if (match) cart[idx].meta.qty_label = match.label;
+        else if (cart[idx].meta) delete cart[idx].meta.qty_label;
+      }
+    }catch(_){ }
     cart[idx].key = key;
     writeCart(cart);
     renderCart();
@@ -1390,8 +1509,12 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
   }catch(_){ }
   if (available <= 0) { showAlert('actualmente no contamos con stock de este articulo', 'error'); return; }
   if (qty > available) { showAlert('No hay suficiente stock disponible (solo ' + String(available) + ' disponibles)', 'error'); return; }
-  const meta = { name: p?.nombre || p?.name || '', price: p?.precio ?? p?.price ?? 0, image: p?.imagen || p?.image || p?.image_url || '' };
+  const meta = { name: p?.nombre || p?.name || '', price: p?.precio ?? p?.price ?? 0, image: p?.imagen || p?.image || p?.image_url || '', unit_type: getSaleUnitFromObj(p) };
   if (opts && opts.meta) try{ Object.assign(meta, opts.meta); }catch(_){ }
+  try{
+    const unitType = normalizeSaleUnit(meta.unit_type || meta.sale_unit || meta.unit);
+    if (unitType === 'kg' && !meta.qty_label) meta.qty_label = formatKgLabel(qty);
+  }catch(_){ }
   cart.push({ id: String(productId), qty: Math.min(99, qty), meta, key: String(productId) + ((meta && meta.consumo) ? ':consumo' : ':regular') });
   writeCart(cart);
   renderCart();
@@ -1399,7 +1522,7 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
   // fly animation from the source image to cart
   if (sourceEl && !reduceMotion) animateFlyToCart(sourceEl);
 }
-function setCartItemByKey(itemKey, qty){
+function setCartItemByKey(itemKey, qty, opts = {}){
   const cart = readCart();
   const idx = cart.findIndex(i=> (i.key || getCartKey(i)) === String(itemKey));
   if(idx < 0) return;
@@ -1425,6 +1548,15 @@ function setCartItemByKey(itemKey, qty){
   const newQty = Math.min(99, qty > available ? available : qty);
   if (newQty !== qty) showAlert('Cantidad ajustada al stock disponible (' + String(available) + ')', 'info');
   cart[idx].qty = newQty;
+  try{ if (opts && opts.meta){ cart[idx].meta = Object.assign({}, cart[idx].meta || {}, opts.meta); } }catch(_){ }
+  try{
+    const unitType = normalizeSaleUnit(cart[idx].meta?.unit_type || cart[idx].meta?.sale_unit || cart[idx].meta?.unit);
+    if (unitType === 'kg') {
+      const match = KG_OPTIONS.find(o => Math.abs(Number(o.value) - Number(cart[idx].qty)) < 0.0001);
+      if (match) cart[idx].meta.qty_label = match.label;
+      else if (cart[idx].meta) delete cart[idx].meta.qty_label;
+    }
+  }catch(_){ }
   writeCart(cart); renderCart();
 }
 function removeFromCartByKey(itemKey){ const cart = readCart().filter(i=> (i.key || getCartKey(i)) !== String(itemKey)); writeCart(cart); renderCart(); }
@@ -1450,6 +1582,8 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
       .ci-price .price-old{color:var(--muted);text-decoration:line-through;margin-left:8px;font-size:12px}
       .ci-controls{display:flex;gap:12px;align-items:center;margin-left:auto;flex:0 0 auto}
       .qty{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid rgba(0,0,0,0.06);padding:8px 10px;border-radius:999px}
+      .qty-kg{padding:6px 10px}
+      .qty-select{border:0;background:transparent;font-weight:800;color:var(--deep);padding:4px 6px}
       .qty button{border:0;background:transparent;color:var(--accent);font-weight:800;padding:6px;width:34px;height:34px;border-radius:50%;cursor:pointer}
       .qty .val{min-width:30px;text-align:center;font-weight:800;color:var(--deep)}
       .btn.remove{background:transparent;border:1px solid rgba(0,0,0,0.06);padding:8px 12px;border-radius:10px;color:var(--muted)}
@@ -1538,25 +1672,55 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
       nameHtml += `<div class="ci-sub">${lines.join('<br>')}</div>`;
     }
 
+    const unitType = normalizeSaleUnit(item?.meta?.unit_type || item?.meta?.sale_unit || item?.meta?.unit || prod?.sale_unit || prod?.unit_type);
+    const unitSuffix = (unitType === 'kg') ? ' / kg' : '';
     let priceHtml = '';
     if (item.meta && item.meta.consumo) {
-      priceHtml = `<span class="price-new">$${Number(unitPrice).toFixed(2)}</span> <span class="price-old">$${Number(productBase).toFixed(2)}</span>`;
+      priceHtml = `<span class="price-new">$${Number(unitPrice).toFixed(2)}${unitSuffix}</span> <span class="price-old">$${Number(productBase).toFixed(2)}${unitSuffix}</span>`;
     } else if (promo) {
-      priceHtml = `<span class="price-new">$${Number(unitPrice).toFixed(2)}</span> <span class="price-old">$${Number(productBase).toFixed(2)}</span> <small style="color:var(--muted);margin-left:6px">(${escapeHtml(promo.name||'promo')})</small>`;
+      priceHtml = `<span class="price-new">$${Number(unitPrice).toFixed(2)}${unitSuffix}</span> <span class="price-old">$${Number(productBase).toFixed(2)}${unitSuffix}</span> <small style="color:var(--muted);margin-left:6px">(${escapeHtml(promo.name||'promo')})</small>`;
     } else {
-      priceHtml = `<span class="price-new">$${Number(unitPrice).toFixed(2)}</span>`;
+      priceHtml = `<span class="price-new">$${Number(unitPrice).toFixed(2)}${unitSuffix}</span>`;
     }
     info.innerHTML = `${nameHtml}<div class="ci-price">${priceHtml}</div>`;
 
-    const controls = document.createElement('div'); controls.className = 'ci-controls'; controls.innerHTML = `<div class="qty" role="group" aria-label="Cantidad"><button class="qty-dec" aria-label="Disminuir">−</button><div class="val" aria-live="polite">${item.qty}</div><button class="qty-inc" aria-label="Aumentar">+</button></div><button class="btn remove">Eliminar</button>`;
+    const qtyLabel = formatQtyLabel(item.qty, unitType, item.meta);
+    const controls = document.createElement('div');
+    controls.className = 'ci-controls';
+    if (unitType === 'kg') {
+      const currentQty = Number(item.qty);
+      let optsList = KG_OPTIONS.slice();
+      const hasMatch = optsList.some(o => Math.abs(Number(o.value) - currentQty) < 0.0001);
+      if (!hasMatch && Number.isFinite(currentQty)) {
+        optsList = [{ value: currentQty, label: formatKgLabel(currentQty) }].concat(optsList);
+      }
+      const optionsHtml = optsList.map(o => {
+        const selected = Math.abs(Number(o.value) - currentQty) < 0.0001;
+        return `<option value="${o.value}" ${selected ? 'selected' : ''}>${o.label}</option>`;
+      }).join('');
+      controls.innerHTML = `<div class="qty qty-kg" role="group" aria-label="Cantidad en kg"><select class="qty-select" aria-label="Seleccionar kg">${optionsHtml}</select></div><button class="btn remove">Eliminar</button>`;
+    } else {
+      controls.innerHTML = `<div class="qty" role="group" aria-label="Cantidad"><button class="qty-dec" aria-label="Disminuir">-</button><div class="val" aria-live="polite">${qtyLabel}</div><button class="qty-inc" aria-label="Aumentar">+</button></div><button class="btn remove">Eliminar</button>`;
+    }
 
     row.appendChild(img); row.appendChild(info); row.appendChild(controls); container.appendChild(row);
     subtotal += Number(unitPrice || 0) * item.qty;
 
     // bindings
     const itemKey = (item.key || getCartKey(item));
-    controls.querySelector('.qty-inc').addEventListener('click', ()=> setCartItemByKey(itemKey, item.qty+1));
-    controls.querySelector('.qty-dec').addEventListener('click', ()=> setCartItemByKey(itemKey, item.qty-1));
+    if (unitType === 'kg') {
+      const sel = controls.querySelector('.qty-select');
+      if (sel) {
+        sel.addEventListener('change', () => {
+          const val = Number(sel.value);
+          const opt = KG_OPTIONS.find(o => Math.abs(o.value - val) < 0.0001);
+          setCartItemByKey(itemKey, Number(val), { meta: { unit_type: 'kg', qty_label: (opt && opt.label) ? opt.label : formatKgLabel(val) } });
+        });
+      }
+    } else {
+      controls.querySelector('.qty-inc').addEventListener('click', ()=> setCartItemByKey(itemKey, Number(item.qty)+1));
+      controls.querySelector('.qty-dec').addEventListener('click', ()=> setCartItemByKey(itemKey, Number(item.qty)-1));
+    }
     controls.querySelector('.remove').addEventListener('click', ()=> removeFromCartByKey(itemKey));
   });
 
