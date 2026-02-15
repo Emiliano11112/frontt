@@ -24,10 +24,10 @@ const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').match
 
 // Units / kg options
 const KG_OPTIONS = [
-  { value: 1, label: '1 kg' },
-  { value: 0.5, label: '1/2 kg' },
-  { value: 1/3, label: '1/3 kg' },
-  { value: 0.25, label: '1/4 kg' }
+  { value: 1, label: '1' },
+  { value: 0.5, label: '1/2' },
+  { value: 1/3, label: '1/3' },
+  { value: 0.25, label: '1/4' }
 ];
 
 function normalizeSaleUnit(val){
@@ -42,13 +42,40 @@ function getSaleUnitFromObj(obj){
   }catch(_){ return 'unit'; }
 }
 
+function getKgPerUnitFromObj(obj){
+  try{
+    const n = Number(obj?.kg_per_unit ?? obj?.kgPerUnit ?? obj?.peso_unidad ?? obj?.unidad_kg ?? obj?.kgXUnidad ?? 1);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }catch(_){ return 1; }
+}
+
+function getStockKgFromObj(obj){
+  try{
+    const stockKg = Number(obj?.stock_kg ?? obj?.stockKg);
+    const fallback = Number(obj?.stock ?? obj?.cantidad ?? 0);
+    if (Number.isFinite(stockKg) && stockKg > 0) return stockKg;
+    if ((!Number.isFinite(stockKg) || stockKg <= 0) && Number.isFinite(fallback) && fallback > 0) return fallback;
+    if (Number.isFinite(stockKg)) return Math.max(0, stockKg);
+    return Number.isFinite(fallback) ? Math.max(0, fallback) : 0;
+  }catch(_){ return 0; }
+}
+
+function getOrderedWeightKg(qtyFraction, kgPerUnit){
+  try{
+    const q = Number(qtyFraction);
+    const k = Number(kgPerUnit);
+    if (!Number.isFinite(q) || !Number.isFinite(k) || k <= 0) return 0;
+    return Math.max(0, q * k);
+  }catch(_){ return 0; }
+}
+
 function formatKgLabel(qty){
   try{
     const num = Number(qty);
     if (Number.isNaN(num)) return String(qty || '');
     const match = KG_OPTIONS.find(o => Math.abs(o.value - num) < 0.0001);
     if (match) return match.label;
-    return `${num} kg`;
+    return String(parseFloat(num.toFixed(3)));
   }catch(_){ return String(qty || ''); }
 }
 
@@ -267,24 +294,26 @@ function renderFilterButtons(){
     // compute full list of filters: admin filters or fallbacks
     const allFilters = (filters && filters.length) ? filters.map(f => ({ value: String(f.value || f.name || '').toLowerCase(), name: String(f.name || f.value || '') })) : [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}].map(d=>({ value: d.v, name: d.t }));
 
-    // Show only the filters the user selected in the manager; if none selected, show none (only 'Todos' and 'Ver filtros' remain)
+    // Always show every admin filter button; active filters control highlighting and data filtering.
     const activeFilters = loadActiveFilters();
-    let listToShow = [];
-    if (Array.isArray(activeFilters) && activeFilters.length > 0) {
-      listToShow = allFilters.filter(f => activeFilters.includes(String(f.value).toLowerCase()));
-    } else {
-      listToShow = [];
+    const seen = new Set();
+    const listToShow = [];
+    for (const f of (allFilters || [])) {
+      const value = String(f.value || '').toLowerCase();
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      listToShow.push({ value, name: String(f.name || f.value || value) });
     }
 
-    // build buttons for selected filters only
-    for(const f of (listToShow || [])){
+    for(const f of listToShow){
       try{
         const b = document.createElement('button');
         b.dataset.filter = f.value || String(f.name || '').toLowerCase();
         b.textContent = f.name || f.value;
         b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; saveActiveFilters([String(b.dataset.filter).toLowerCase()]); render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
         // mark active if currentFilter matches
-        if (currentFilter && currentFilter.toLowerCase() === (b.dataset.filter || '').toLowerCase()){ b.classList.add('active'); allBtn.classList.remove('active'); }
+        const val = (b.dataset.filter || '').toLowerCase();
+        if ((currentFilter && currentFilter.toLowerCase() === val) || (activeFilters || []).includes(val)){ b.classList.add('active'); allBtn.classList.remove('active'); }
         container.appendChild(b);
       }catch(e){ console.warn('[catalogo] renderFilterButtons: failed creating button for filter', f, e); }
     }
@@ -502,7 +531,17 @@ function normalize(p) {
       }
     }catch(e){ /* ignore normalization errors */ }
   }
-  return { ...p, nombre: name, descripcion: description, categoria: category, precio: price, imagen: image, sale_unit: saleUnit };
+  return {
+    ...p,
+    nombre: name,
+    descripcion: description,
+    categoria: category,
+    precio: price,
+    imagen: image,
+    sale_unit: saleUnit,
+    kg_per_unit: getKgPerUnitFromObj(p),
+    stock_kg: getStockKgFromObj(p)
+  };
 } 
 
 function showMessage(msg, level = "info") {
@@ -567,7 +606,7 @@ function renderSkeleton(count = 6) {
             const card = document.createElement('article');
             card.className = 'product-card';
             card.dataset.pid = String(p.id ?? p._id ?? i);
-            const unitSuffix = (getSaleUnitFromObj(p) === 'kg') ? ' / kg' : '';
+            const unitSuffix = '';
             card.innerHTML = `
               <div class="product-image">
                 <div class="price-badge">$${Number(p.precio || p.price || 0).toFixed(2)}${unitSuffix}</div>
@@ -771,8 +810,12 @@ function render({ animate = false } = {}) {
   // Sort so products with stock appear first (in-stock before out-of-stock), preserving relative order otherwise
   try{
     filtered.sort((a,b)=>{
-      const sa = (Number(a.stock ?? a.cantidad ?? 0) > 0) ? 0 : 1;
-      const sb = (Number(b.stock ?? b.cantidad ?? 0) > 0) ? 0 : 1;
+      const aUnit = getSaleUnitFromObj(a);
+      const bUnit = getSaleUnitFromObj(b);
+      const aStock = (aUnit === 'kg') ? getStockKgFromObj(a) : Number(a.stock ?? a.cantidad ?? 0);
+      const bStock = (bUnit === 'kg') ? getStockKgFromObj(b) : Number(b.stock ?? b.cantidad ?? 0);
+      const sa = (aStock > 0) ? 0 : 1;
+      const sb = (bStock > 0) ? 0 : 1;
       if(sa !== sb) return sa - sb;
       return 0;
     });
@@ -843,7 +886,7 @@ function render({ animate = false } = {}) {
           const cType = getConsumoType(c);
           const rawLabel = (c.discount || c.value) ? (cType === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : `$${Number(c.value || 0).toFixed(2)}`) : 'Consumo';
           const basePrice = Number(match.precio ?? match.price ?? 0) || 0;
-          const unitSuffix = (getSaleUnitFromObj(match) === 'kg') ? ' / kg' : '';
+          const unitSuffix = '';
           let discountedPrice = basePrice;
           try{
             if (c && (c.discount != null || c.value != null)) {
@@ -1010,10 +1053,12 @@ function render({ animate = false } = {}) {
     const imgSrc = p.imagen || 'images/placeholder.png';
     const pid = String(p.id ?? p._id ?? p.nombre ?? i);
     const saleUnit = getSaleUnitFromObj(p);
-    const unitSuffix = (saleUnit === 'kg') ? ' / kg' : '';
+    const unitSuffix = '';
     const stockUnitLabel = (saleUnit === 'kg') ? ' kg' : '';
     card.dataset.pid = pid;
-    const stockVal = Number(p.stock ?? p.cantidad ?? 0);
+    const stockVal = (saleUnit === 'kg')
+      ? getStockKgFromObj(p)
+      : Number(p.stock ?? p.cantidad ?? 0);
     // subtract reserved consumos from display
     let reserved = 0;
     try{ if (Array.isArray(consumos) && consumos.length) {
@@ -1026,7 +1071,9 @@ function render({ animate = false } = {}) {
       });
       if (cc) reserved = Number(cc.qty || 0);
     }}catch(_){ }
-    const displayStock = Math.max(0, (Number(stockVal || 0) - Number(reserved || 0)));
+    const displayStock = (saleUnit === 'kg')
+      ? Math.max(0, Number(stockVal || 0))
+      : Math.max(0, (Number(stockVal || 0) - Number(reserved || 0)));
     const outOfStock = Number.isNaN(displayStock) ? false : (displayStock <= 0);
     if (outOfStock) {
       card.classList.add('out-of-stock');
@@ -1138,7 +1185,8 @@ function render({ animate = false } = {}) {
     // show stock info (reflect admin panel stock)
     if (!Number.isNaN(stockVal)) {
       if (stockVal > 0) {
-        html += '<div class="stock-info" style="color:#666;margin-top:6px">Stock: ' + String(displayStock) + stockUnitLabel + '</div>';
+        const stockShown = (saleUnit === 'kg') ? String(parseFloat(Number(displayStock).toFixed(3))) : String(displayStock);
+        html += '<div class="stock-info" style="color:#666;margin-top:6px">Stock: ' + stockShown + stockUnitLabel + '</div>';
       } else {
         html += '<div class="stock-info" style="color:#b86a00;margin-top:6px;font-weight:700">Sin stock</div>';
       }
@@ -1273,13 +1321,51 @@ function closeLightbox(){
 }
 
 /* CART: simple local cart with persistence, drawer UI and qty controls */
-const CART_KEY = 'catalog:cart_v1';
+// v2: kg prices are stored as "precio por unidad completa" (not per-kg)
+const CART_KEY = 'catalog:cart_v2';
 
 function getCartKey(item){ return String(item.id) + ((item.meta && item.meta.consumo) ? ':consumo' : ':regular'); }
 
 function getProductKey(obj){ return String(obj.id ?? obj._id ?? obj.nombre ?? obj.name); }
 function readCart(){ try{ return JSON.parse(localStorage.getItem(CART_KEY) || '[]'); }catch{ return []; } }
 function writeCart(cart){ localStorage.setItem(CART_KEY, JSON.stringify(cart)); updateCartBadge(); }
+
+function getItemUnitType(item, prod){
+  return normalizeSaleUnit(item?.meta?.unit_type || item?.meta?.sale_unit || item?.meta?.unit || prod?.sale_unit || prod?.unit_type);
+}
+
+function getItemKgPerUnit(item, prod){
+  try{
+    const fromMeta = Number(item?.meta?.kg_per_unit);
+    if (Number.isFinite(fromMeta) && fromMeta > 0) return fromMeta;
+  }catch(_){}
+  return getKgPerUnitFromObj(prod);
+}
+
+function getItemOrderedWeightKg(item, prod){
+  try{
+    const explicit = Number(item?.meta?.ordered_weight_kg);
+    if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  }catch(_){}
+  return getOrderedWeightKg(Number(item?.qty || 0), getItemKgPerUnit(item, prod));
+}
+
+function getItemPriceMode(item){
+  try{
+    const mode = String(item?.meta?.price_mode || '').trim().toLowerCase();
+    return mode === 'per_kg' ? 'per_kg' : 'unit';
+  }catch(_){
+    return 'unit';
+  }
+}
+
+function getItemLineFactor(item, prod){
+  const unitType = getItemUnitType(item, prod);
+  if (unitType !== 'kg') return Number(item?.qty || 0);
+  return getItemPriceMode(item) === 'per_kg'
+    ? getItemOrderedWeightKg(item, prod)
+    : Number(item?.qty || 0);
+}
 
 function updateCartBadge(){
   const count = readCart().reduce((s,i)=>s+Number(i.qty || 0),0);
@@ -1300,6 +1386,7 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
     const title = prod ? (prod.nombre || prod.name || '') : (productId || 'Producto');
     const saleUnit = getSaleUnitFromObj(prod);
     const isKg = saleUnit === 'kg';
+    const kgPerUnit = isKg ? getKgPerUnitFromObj(prod) : 1;
     let qty = 1;
     let qtyLabel = '1';
 
@@ -1331,7 +1418,7 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
       }
     }catch(_){ }
 
-    const stockVal = Number(prod?.stock ?? prod?.cantidad ?? 0);
+    const stockVal = isKg ? getStockKgFromObj(prod) : Number(prod?.stock ?? prod?.cantidad ?? 0);
     if (!isNaN(stockVal) && stockVal <= 0) {
       showAlert('actualmente no contamos con stock de este articulo', 'error');
       return;
@@ -1340,7 +1427,7 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
     // kg options (filter by available stock if present)
     let kgOptions = KG_OPTIONS.slice();
     if (isKg && !Number.isNaN(stockVal) && stockVal > 0) {
-      kgOptions = KG_OPTIONS.filter(o => o.value <= (stockVal + 0.0001));
+      kgOptions = KG_OPTIONS.filter(o => getOrderedWeightKg(o.value, kgPerUnit) <= (stockVal + 0.0001));
       if (kgOptions.length === 0) {
         showAlert('actualmente no contamos con stock de este articulo', 'error');
         return;
@@ -1352,10 +1439,10 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
     }
 
     const controlsHtml = isKg ? `
-        <div class="qb-kg-controls" role="group" aria-label="Seleccionar kg">
-          <button type="button" class="qb-kg-btn qb-kg-dec" aria-label="Reducir kg">-</button>
+        <div class="qb-kg-controls" role="group" aria-label="Seleccionar cantidad">
+          <button type="button" class="qb-kg-btn qb-kg-dec" aria-label="Reducir cantidad">-</button>
           <div class="qb-kg-val" aria-live="polite">${escapeHtml(qtyLabel)}</div>
-          <button type="button" class="qb-kg-btn qb-kg-inc" aria-label="Aumentar kg">+</button>
+          <button type="button" class="qb-kg-btn qb-kg-inc" aria-label="Aumentar cantidad">+</button>
         </div>
       ` : `
         <div class="qb-controls">
@@ -1370,7 +1457,8 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
         <div class="qb-top"><img class="qb-img" src="${imgSrc}" alt="${escapeHtml(String(title))}"></div>
         <div class="qb-head"><strong>${escapeHtml(String(title))}</strong></div>
         ${controlsHtml}
-        <div class="qb-price">${isKg ? 'Precio por kg' : 'Precio unitario'}: $${Number(unitPrice).toFixed(2)}${consumoObj ? ' <small style="color:var(--muted);margin-left:8px">Consumo inmediato</small>' : ''}</div>
+        <div class="qb-price">${isKg ? 'Precio unidad completa' : 'Precio unitario'}: $${Number(unitPrice).toFixed(2)}${consumoObj ? ' <small style="color:var(--muted);margin-left:8px">Consumo inmediato</small>' : ''}</div>
+        ${isKg ? `<div class="qb-unit-weight">1 unidad = ${String(parseFloat(Number(kgPerUnit).toFixed(3)))} kg</div>` : ''}
         <div class="qb-total">Total: $${Number(unitPrice * qty).toFixed(2)}</div>
         <div class="qb-actions"><button class="btn btn-ghost qb-cancel">Cancelar</button><button class="btn btn-primary qb-confirm">Agregar</button></div>
       </div>`;
@@ -1391,6 +1479,7 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
         .qb-kg-btn{width:40px;height:40px;border-radius:50%;border:1px solid rgba(6,26,43,0.08);background:#fff;font-size:20px;font-weight:800;color:var(--accent)}
         .qb-kg-btn:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(6,26,43,0.08)}
         .qb-kg-val{min-width:80px;text-align:center;font-weight:900;color:var(--deep);font-size:16px}
+        .qb-unit-weight{font-size:13px;color:var(--muted);font-weight:700}
         .qb-actions{display:flex;gap:8px;justify-content:flex-end;width:100%}
       `; document.head.appendChild(s);
     }
@@ -1407,7 +1496,8 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
       const kgValEl = overlay.querySelector('.qb-kg-val');
       if (kgValEl && isKg) kgValEl.textContent = String(qtyLabel);
       try{
-        totalEl.textContent = `Total: $${Number(unitPrice * qty).toFixed(2)}`;
+        const factor = qty;
+        totalEl.textContent = `Total: $${Number(unitPrice * factor).toFixed(2)}`;
         totalEl.classList.add('pulse');
         setTimeout(()=> totalEl.classList.remove('pulse'), 220);
       }catch(_){}
@@ -1435,7 +1525,24 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
       if (kgDec) kgDec.addEventListener('click', ()=>{ if (kgIndex < kgOptions.length - 1) setKg(kgIndex + 1); });
     }
     cancel.addEventListener('click', ()=>{ overlay.remove(); });
-    confirm.addEventListener('click', ()=>{ try{ const optsLocal = {}; if (consumoObj) optsLocal.meta = { price: unitPrice, consumo: true, consumo_id: consumoObj.id }; else optsLocal.meta = { price: unitPrice, force_regular: forceRegular }; optsLocal.meta.unit_type = saleUnit; if (isKg) optsLocal.meta.qty_label = qtyLabel; addToCart(String(productId), qty, sourceEl, optsLocal); openCart(String(productId)); }catch(e){console.error(e);} finally{ overlay.remove(); } });
+    confirm.addEventListener('click', ()=>{
+      try{
+        const optsLocal = {};
+        if (consumoObj) optsLocal.meta = { price: unitPrice, consumo: true, consumo_id: consumoObj.id };
+        else optsLocal.meta = { price: unitPrice, force_regular: forceRegular };
+        optsLocal.meta.unit_type = saleUnit;
+        if (isKg) {
+          const orderedWeight = getOrderedWeightKg(qty, kgPerUnit);
+          optsLocal.meta.qty_label = qtyLabel;
+          optsLocal.meta.kg_per_unit = kgPerUnit;
+          optsLocal.meta.ordered_weight_kg = orderedWeight;
+          optsLocal.meta.price_mode = 'unit';
+        }
+        addToCart(String(productId), qty, sourceEl, optsLocal);
+        openCart(String(productId));
+      }catch(e){console.error(e);}
+      finally{ overlay.remove(); }
+    });
 
     const onKey = (ev)=>{ if (ev.key === 'Escape') { overlay.remove(); window.removeEventListener('keydown', onKey); } if (ev.key === 'Enter') { confirm.click(); } };
     window.addEventListener('keydown', onKey);
@@ -1447,18 +1554,54 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
   const cart = readCart();
   const key = String(productId) + ((opts && opts.meta && opts.meta.consumo) ? ':consumo' : ':regular');
   const idx = cart.findIndex(i=> (i.key || getCartKey(i)) === key);
+  const isPromoSummary = String(productId).startsWith('promo:');
+
+  if (isPromoSummary && idx >= 0) {
+    cart[idx].qty = Math.min(99, Number(cart[idx].qty || 0) + Number(qty || 0));
+    writeCart(cart);
+    renderCart();
+    return;
+  }
+
   if(idx>=0){
-    // update existing item quantity and merge provided meta (so discounts / consumo flags propagate)
-    cart[idx].qty = Math.min(99, cart[idx].qty + qty);
-    try{ if (opts && opts.meta){ cart[idx].meta = Object.assign({}, cart[idx].meta || {}, opts.meta); } }catch(_){ }
-    try{
-      const unitType = normalizeSaleUnit(cart[idx].meta?.unit_type || cart[idx].meta?.sale_unit || cart[idx].meta?.unit);
-      if (unitType === 'kg') {
-        const match = KG_OPTIONS.find(o => Math.abs(Number(o.value) - Number(cart[idx].qty)) < 0.0001);
-        if (match) cart[idx].meta.qty_label = match.label;
-        else if (cart[idx].meta) delete cart[idx].meta.qty_label;
+    const prod = products.find(x => String(x.id ?? x._id) === String(productId));
+    const mergedMeta = Object.assign({}, cart[idx].meta || {}, (opts && opts.meta) ? opts.meta : {});
+    const unitType = getItemUnitType({ qty: cart[idx].qty, meta: mergedMeta }, prod);
+    const requestedQty = Math.max(0, Number(cart[idx].qty || 0) + Number(qty || 0));
+
+    if (unitType === 'kg') {
+      const kgPerUnit = getItemKgPerUnit({ qty: requestedQty, meta: mergedMeta }, prod);
+      const requestedWeight = getOrderedWeightKg(requestedQty, kgPerUnit);
+      const availableKg = getStockKgFromObj(prod);
+      if (availableKg <= 0 || requestedWeight > (availableKg + 0.0001)) {
+        showAlert('No hay suficiente stock disponible', 'error');
+        return;
       }
-    }catch(_){ }
+      cart[idx].qty = Math.min(99, requestedQty);
+      mergedMeta.unit_type = 'kg';
+      mergedMeta.kg_per_unit = kgPerUnit;
+      mergedMeta.ordered_weight_kg = getOrderedWeightKg(cart[idx].qty, kgPerUnit);
+      mergedMeta.qty_label = formatKgLabel(cart[idx].qty);
+      mergedMeta.price_mode = 'unit';
+    } else {
+      let available = Number(prod?.stock ?? prod?.cantidad ?? 0) || 0;
+      try {
+        if (mergedMeta && mergedMeta.consumo) {
+          const cobj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
+            const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : []));
+            return ids.includes(String(productId));
+          }) : null;
+          available = cobj ? Number(cobj.qty || 0) : 0;
+        }
+      }catch(_){ }
+      if (available <= 0 || requestedQty > available) {
+        showAlert('No hay suficiente stock disponible', 'error');
+        return;
+      }
+      cart[idx].qty = Math.min(99, requestedQty);
+    }
+
+    cart[idx].meta = mergedMeta;
     cart[idx].key = key;
     writeCart(cart);
     renderCart();
@@ -1467,7 +1610,7 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
   }
 
   // Special handling for promo-summary items (id like 'promo:123')
-  if (String(productId).startsWith('promo:')){
+  if (isPromoSummary){
     const promoId = String(productId).split(':')[1];
     const promo = promotions.find(p => String(p.id) === String(promoId));
     if (promo) {
@@ -1487,7 +1630,7 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
       writeCart(cart);
       renderCart();
       // no per-product pulse animation; briefly pulse cart instead
-      try{ document.getElementById('cartButton')?.animate?.([{ transform: 'scale(1)' },{ transform: 'scale(1.06)' },{ transform: 'scale(1)' }], { duration: 380 }); }catch(_){}
+      try{ document.getElementById('cartButton')?.animate?.([{ transform: 'scale(1)' },{ transform: 'scale(1.06)' },{ transform: 'scale(1)' }], { duration: 380 }); }catch(_){ }
       return;
     }
     return;
@@ -1496,25 +1639,38 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
   // Default single product add
   const p = products.find(x => String(x.id ?? x._id) === String(productId));
   if (!p) return; // avoid adding unknown ids
-  // Validate stock before adding (if consumo meta provided use consumo availability)
-  let available = Number(p?.stock ?? p?.cantidad ?? 0) || 0;
-  try {
-    if (opts && opts.meta && opts.meta.consumo) {
-      const cobj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
-        const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : []));
-        return ids.includes(String(productId));
-      }) : null;
-      available = cobj ? Number(cobj.qty || 0) : 0;
-    }
-  }catch(_){ }
-  if (available <= 0) { showAlert('actualmente no contamos con stock de este articulo', 'error'); return; }
-  if (qty > available) { showAlert('No hay suficiente stock disponible (solo ' + String(available) + ' disponibles)', 'error'); return; }
   const meta = { name: p?.nombre || p?.name || '', price: p?.precio ?? p?.price ?? 0, image: p?.imagen || p?.image || p?.image_url || '', unit_type: getSaleUnitFromObj(p) };
   if (opts && opts.meta) try{ Object.assign(meta, opts.meta); }catch(_){ }
-  try{
-    const unitType = normalizeSaleUnit(meta.unit_type || meta.sale_unit || meta.unit);
-    if (unitType === 'kg' && !meta.qty_label) meta.qty_label = formatKgLabel(qty);
-  }catch(_){ }
+
+  const unitType = getItemUnitType({ qty, meta }, p);
+  if (unitType === 'kg') {
+    const kgPerUnit = getItemKgPerUnit({ qty, meta }, p);
+    const availableKg = getStockKgFromObj(p);
+    const requestedWeight = getOrderedWeightKg(qty, kgPerUnit);
+    if (availableKg <= 0 || requestedWeight > (availableKg + 0.0001)) {
+      showAlert('No hay suficiente stock disponible', 'error');
+      return;
+    }
+    if (!meta.qty_label) meta.qty_label = formatKgLabel(qty);
+    meta.kg_per_unit = kgPerUnit;
+    meta.ordered_weight_kg = requestedWeight;
+    meta.price_mode = 'unit';
+  } else {
+    // Validate stock before adding (if consumo meta provided use consumo availability)
+    let available = Number(p?.stock ?? p?.cantidad ?? 0) || 0;
+    try {
+      if (opts && opts.meta && opts.meta.consumo) {
+        const cobj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
+          const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : []));
+          return ids.includes(String(productId));
+        }) : null;
+        available = cobj ? Number(cobj.qty || 0) : 0;
+      }
+    }catch(_){ }
+    if (available <= 0) { showAlert('actualmente no contamos con stock de este articulo', 'error'); return; }
+    if (qty > available) { showAlert('No hay suficiente stock disponible (solo ' + String(available) + ' disponibles)', 'error'); return; }
+  }
+
   cart.push({ id: String(productId), qty: Math.min(99, qty), meta, key: String(productId) + ((meta && meta.consumo) ? ':consumo' : ':regular') });
   writeCart(cart);
   renderCart();
@@ -1530,33 +1686,50 @@ function setCartItemByKey(itemKey, qty, opts = {}){
     cart.splice(idx, 1);
     writeCart(cart); renderCart(); return;
   }
-  // enforce stock limits
+
   const ci = cart[idx];
   const prod = products.find(x => String(x.id ?? x._id) === String(ci.id));
-  let available = Number(prod?.stock ?? prod?.cantidad ?? 0) || 0;
-  try{ if (ci && ci.meta && ci.meta.consumo) {
-    const cobj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
-      const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : []));
-      return ids.includes(String(ci.id));
-    }) : null;
-    available = cobj ? Number(cobj.qty || 0) : 0;
-  }}catch(_){ }
-  if (available <= 0) {
-    showAlert('actualmente no contamos con stock de este articulo', 'error');
-    return;
-  }
-  const newQty = Math.min(99, qty > available ? available : qty);
-  if (newQty !== qty) showAlert('Cantidad ajustada al stock disponible (' + String(available) + ')', 'info');
-  cart[idx].qty = newQty;
-  try{ if (opts && opts.meta){ cart[idx].meta = Object.assign({}, cart[idx].meta || {}, opts.meta); } }catch(_){ }
-  try{
-    const unitType = normalizeSaleUnit(cart[idx].meta?.unit_type || cart[idx].meta?.sale_unit || cart[idx].meta?.unit);
-    if (unitType === 'kg') {
-      const match = KG_OPTIONS.find(o => Math.abs(Number(o.value) - Number(cart[idx].qty)) < 0.0001);
-      if (match) cart[idx].meta.qty_label = match.label;
-      else if (cart[idx].meta) delete cart[idx].meta.qty_label;
+  const mergedMeta = Object.assign({}, ci.meta || {}, (opts && opts.meta) ? opts.meta : {});
+  const unitType = getItemUnitType({ qty, meta: mergedMeta }, prod);
+
+  if (unitType === 'kg') {
+    const kgPerUnit = getItemKgPerUnit({ qty, meta: mergedMeta }, prod);
+    const availableKg = getStockKgFromObj(prod);
+    if (availableKg <= 0) {
+      showAlert('actualmente no contamos con stock de este articulo', 'error');
+      return;
     }
-  }catch(_){ }
+    let newQty = Number(qty || 0);
+    const requestedWeight = getOrderedWeightKg(newQty, kgPerUnit);
+    if (requestedWeight > (availableKg + 0.0001)) {
+      newQty = availableKg / kgPerUnit;
+      showAlert('Cantidad ajustada al stock disponible', 'info');
+    }
+    cart[idx].qty = Math.min(99, Math.max(0, newQty));
+    mergedMeta.unit_type = 'kg';
+    mergedMeta.kg_per_unit = kgPerUnit;
+    mergedMeta.ordered_weight_kg = getOrderedWeightKg(cart[idx].qty, kgPerUnit);
+    mergedMeta.qty_label = formatKgLabel(cart[idx].qty);
+    mergedMeta.price_mode = 'unit';
+  } else {
+    let available = Number(prod?.stock ?? prod?.cantidad ?? 0) || 0;
+    try{ if (ci && mergedMeta && mergedMeta.consumo) {
+      const cobj = (Array.isArray(consumos) && consumos.length) ? consumos.find(x => {
+        const ids = Array.isArray(x.productIds) ? x.productIds.map(String) : (x.productId ? [String(x.productId)] : (x.id ? [String(x.id)] : []));
+        return ids.includes(String(ci.id));
+      }) : null;
+      available = cobj ? Number(cobj.qty || 0) : 0;
+    }}catch(_){ }
+    if (available <= 0) {
+      showAlert('actualmente no contamos con stock de este articulo', 'error');
+      return;
+    }
+    const newQty = Math.min(99, qty > available ? available : qty);
+    if (newQty !== qty) showAlert('Cantidad ajustada al stock disponible (' + String(available) + ')', 'info');
+    cart[idx].qty = newQty;
+  }
+
+  cart[idx].meta = mergedMeta;
   writeCart(cart); renderCart();
 }
 function removeFromCartByKey(itemKey){ const cart = readCart().filter(i=> (i.key || getCartKey(i)) !== String(itemKey)); writeCart(cart); renderCart(); }
@@ -1672,8 +1845,8 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
       nameHtml += `<div class="ci-sub">${lines.join('<br>')}</div>`;
     }
 
-    const unitType = normalizeSaleUnit(item?.meta?.unit_type || item?.meta?.sale_unit || item?.meta?.unit || prod?.sale_unit || prod?.unit_type);
-    const unitSuffix = (unitType === 'kg') ? ' / kg' : '';
+    const unitType = getItemUnitType(item, prod);
+    const unitSuffix = (unitType === 'kg') ? ' / unidad' : '';
     let priceHtml = '';
     if (item.meta && item.meta.consumo) {
       priceHtml = `<span class="price-new">$${Number(unitPrice).toFixed(2)}${unitSuffix}</span> <span class="price-old">$${Number(productBase).toFixed(2)}${unitSuffix}</span>`;
@@ -1682,9 +1855,14 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     } else {
       priceHtml = `<span class="price-new">$${Number(unitPrice).toFixed(2)}${unitSuffix}</span>`;
     }
+    const qtyLabel = formatQtyLabel(item.qty, unitType, item.meta);
+    if (unitType === 'kg') {
+      const orderedWeight = getItemOrderedWeightKg(item, prod);
+      const weightLabel = String(parseFloat(Number(orderedWeight || 0).toFixed(3)));
+      nameHtml += `<div class="ci-sub">Peso: ${weightLabel} kg</div>`;
+    }
     info.innerHTML = `${nameHtml}<div class="ci-price">${priceHtml}</div>`;
 
-    const qtyLabel = formatQtyLabel(item.qty, unitType, item.meta);
     const controls = document.createElement('div');
     controls.className = 'ci-controls';
     if (unitType === 'kg') {
@@ -1698,13 +1876,14 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
         const selected = Math.abs(Number(o.value) - currentQty) < 0.0001;
         return `<option value="${o.value}" ${selected ? 'selected' : ''}>${o.label}</option>`;
       }).join('');
-      controls.innerHTML = `<div class="qty qty-kg" role="group" aria-label="Cantidad en kg"><select class="qty-select" aria-label="Seleccionar kg">${optionsHtml}</select></div><button class="btn remove">Eliminar</button>`;
+      controls.innerHTML = `<div class="qty qty-kg" role="group" aria-label="Cantidad"><select class="qty-select" aria-label="Seleccionar cantidad">${optionsHtml}</select></div><button class="btn remove">Eliminar</button>`;
     } else {
       controls.innerHTML = `<div class="qty" role="group" aria-label="Cantidad"><button class="qty-dec" aria-label="Disminuir">-</button><div class="val" aria-live="polite">${qtyLabel}</div><button class="qty-inc" aria-label="Aumentar">+</button></div><button class="btn remove">Eliminar</button>`;
     }
 
     row.appendChild(img); row.appendChild(info); row.appendChild(controls); container.appendChild(row);
-    subtotal += Number(unitPrice || 0) * item.qty;
+    const lineFactor = getItemLineFactor(item, prod);
+    subtotal += Number(unitPrice || 0) * Number(lineFactor || 0);
 
     // bindings
     const itemKey = (item.key || getCartKey(item));
@@ -1714,7 +1893,8 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
         sel.addEventListener('change', () => {
           const val = Number(sel.value);
           const opt = KG_OPTIONS.find(o => Math.abs(o.value - val) < 0.0001);
-          setCartItemByKey(itemKey, Number(val), { meta: { unit_type: 'kg', qty_label: (opt && opt.label) ? opt.label : formatKgLabel(val) } });
+          const kgPerUnit = getItemKgPerUnit(item, prod);
+          setCartItemByKey(itemKey, Number(val), { meta: { unit_type: 'kg', kg_per_unit: kgPerUnit, ordered_weight_kg: getOrderedWeightKg(Number(val), kgPerUnit), qty_label: (opt && opt.label) ? opt.label : formatKgLabel(val), price_mode: 'unit' } });
         });
       }
     } else {
@@ -1774,7 +1954,11 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
     checkout.addEventListener('click', async () => {
         const cart = readCart();
         if (!cart || cart.length === 0) return showAlert('El carrito está vacío');
-        const basePayload = { items: cart, total: cart.reduce((s, i) => s + (Number(i.meta?.price || 0) * i.qty), 0) };
+        const basePayload = { items: cart, total: cart.reduce((s, i) => {
+          const prod = products.find(p => String(p.id ?? p._id) === String(i.id));
+          const factor = getItemLineFactor(i, prod);
+          return s + (Number(i.meta?.price || 0) * Number(factor || 0));
+        }, 0) };
 
         // attach user info if logged in; validate presence of contact fields and confirm
         const token = getToken();
@@ -1835,6 +2019,18 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
             const key = String((it && it.key) || (meta && meta.key) || '');
             if (key) meta.key = key;
             if (!meta.force_regular && !meta.consumo && key.includes(':consumo')) meta.consumo = true;
+            try{
+              const prod = products.find(p => String(p.id ?? p._id) === String(id));
+              const unitType = getItemUnitType({ qty, meta }, prod);
+              if (unitType === 'kg') {
+                const kgPerUnit = getItemKgPerUnit({ qty, meta }, prod);
+                meta.unit_type = 'kg';
+                meta.kg_per_unit = kgPerUnit;
+                meta.ordered_weight_kg = getOrderedWeightKg(qty, kgPerUnit);
+                if (!meta.qty_label) meta.qty_label = formatKgLabel(qty);
+                if (!meta.price_mode) meta.price_mode = 'unit';
+              }
+            }catch(_){ }
             return { id, qty, meta };
           });
         }catch(e){ payload.items = basePayload.items || []; }
@@ -1935,7 +2131,11 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       const modal = document.createElement('div');
       modal.id = '__order_modal';
       modal.className = 'order-modal-overlay';
-      const itemsHtml = (payload.items || []).map(i=>`<li style="margin:8px 0"><strong>${escapeHtml(String(i.meta?.name||i.id))}</strong> — ${i.qty} × $${Number(i.meta?.price||0).toFixed(2)}</li>`).join('');
+      const itemsHtml = (payload.items || []).map(i=>{
+        const unitType = normalizeSaleUnit(i?.meta?.unit_type || i?.meta?.sale_unit || i?.meta?.unit);
+        const qtyLabel = formatQtyLabel(i?.qty, unitType, i?.meta || {});
+        return `<li style="margin:8px 0"><strong>${escapeHtml(String(i.meta?.name||i.id))}</strong> — ${escapeHtml(qtyLabel)} × $${Number(i.meta?.price||0).toFixed(2)}</li>`;
+      }).join('');
       modal.innerHTML = `
         <div class="order-modal" role="dialog" aria-modal="true" aria-label="Resumen del pedido">
           <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
@@ -1989,7 +2189,11 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
 
   function copyOrderToClipboard(payload){
     try{
-      const lines = (payload.items||[]).map(i=>`${i.qty} × ${i.meta?.name || i.id} — $${Number(i.meta?.price||0).toFixed(2)}`);
+      const lines = (payload.items||[]).map(i=>{
+        const unitType = normalizeSaleUnit(i?.meta?.unit_type || i?.meta?.sale_unit || i?.meta?.unit);
+        const qtyLabel = formatQtyLabel(i?.qty, unitType, i?.meta || {});
+        return `${qtyLabel} × ${i.meta?.name || i.id} — $${Number(i.meta?.price||0).toFixed(2)}`;
+      });
       const txt = `Pedido:\n${lines.join('\n')}\n\nTotal: $${Number(payload.total||0).toFixed(2)}`;
       navigator.clipboard?.writeText ? navigator.clipboard.writeText(txt) : (function(){ const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); })();
       showToast('Resumen del pedido copiado al portapapeles.');
