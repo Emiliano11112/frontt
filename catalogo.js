@@ -1997,14 +1997,18 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
             if (wantLogin) { openAuthModal(); try{ checkout.disabled = false; }catch(_){ } return; }
             // Collect minimal guest details via modal
             const guestInfo = await showGuestModal();
-            if (guestInfo) {
-              if (guestInfo.name) basePayload.user_full_name = guestInfo.name;
-              if (guestInfo.email) basePayload.user_email = guestInfo.email;
-              if (guestInfo.barrio) basePayload.user_barrio = guestInfo.barrio;
-              if (guestInfo.calle) basePayload.user_calle = guestInfo.calle;
-              if (guestInfo.numero) basePayload.user_numeracion = guestInfo.numero;
-            }
+            if (!guestInfo || !guestInfo.email) { try{ checkout.disabled = false; }catch(_){ } return; }
+            if (guestInfo.name) basePayload.user_full_name = guestInfo.name;
+            if (guestInfo.email) basePayload.user_email = guestInfo.email;
+            if (guestInfo.barrio) basePayload.user_barrio = guestInfo.barrio;
+            if (guestInfo.calle) basePayload.user_calle = guestInfo.calle;
+            if (guestInfo.numero) basePayload.user_numeracion = guestInfo.numero;
           } catch (e) { console.warn('guest info prompt failed', e); }
+        }
+        if (!basePayload.user_email) {
+          try { await showAlert('Necesitamos tu email para enviarte la confirmacion del pedido.'); } catch(_){}
+          try { checkout.disabled = false; } catch(_){}
+          return;
         }
 
         // Ensure items are sent as a clean JSON array of simple objects
@@ -2637,7 +2641,7 @@ function showGuestModal(){
           <div class="dialog-body">
             <div style="display:flex;flex-direction:column;gap:10px">
               <input id="__gname" type="text" placeholder="Nombre (opcional)" />
-              <input id="__gemail" type="email" placeholder="Email (opcional)" />
+              <input id="__gemail" type="email" placeholder="Email (obligatorio)" />
               <input id="__gbarrio" type="text" placeholder="Barrio (opcional)" />
               <input id="__gcalle" type="text" placeholder="Calle (opcional)" />
               <input id="__gnumero" type="text" placeholder="Numeración (opcional)" />
@@ -2670,9 +2674,16 @@ function showGuestModal(){
       const cleanup = ()=>{ try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ } };
       cancelBtn.addEventListener('click', ()=>{ cleanup(); resolve(null); });
       saveBtn.addEventListener('click', ()=>{
+        const emailRaw = (document.getElementById('__gemail')?.value || '').trim();
+        const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw);
+        if (!emailOk) {
+          try { showAlert('Para enviarte la confirmacion, ingresa un email valido.'); } catch(_){}
+          try { document.getElementById('__gemail')?.focus(); } catch(_){}
+          return;
+        }
         const o = {
           name: (document.getElementById('__gname')?.value || '').trim(),
-          email: (document.getElementById('__gemail')?.value || '').trim(),
+          email: emailRaw,
           barrio: (document.getElementById('__gbarrio')?.value || '').trim(),
           calle: (document.getElementById('__gcalle')?.value || '').trim(),
           numero: (document.getElementById('__gnumero')?.value || '').trim()
