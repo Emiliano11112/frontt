@@ -48,11 +48,16 @@ body{
 .filters{display:flex;gap:8px}
 .filters button{background:transparent;border:1px solid rgba(6,26,43,0.06);padding:8px 12px;border-radius:999px;cursor:pointer;transition:all .15s ease}
 .filters button.active{background:linear-gradient(90deg,var(--accent),var(--accent-2));color:#fff;border-color:transparent;box-shadow:0 12px 30px rgba(242,107,56,0.18)}
+#repeatLastOrderBtn{white-space:nowrap}
+#repeatLastOrderBtn[hidden]{display:none !important}
+.promo-validity{margin-top:6px;font-size:12px;color:var(--muted);font-weight:700}
+.promo-validity.expiring{color:#b86a00}
+.promo-validity.expired{color:#b42318}
 
  #catalogGrid{max-width:1180px;margin:12px auto;padding:0 12px 40px;display:grid;grid-template-columns:repeat(4,1fr);gap:var(--gap)}
 
-/* promotions row: separate container above the products grid */
-.promotions-row{max-width:1180px;margin:12px auto;padding:0 12px 12px;display:flex;gap:12px;align-items:flex-start;overflow-x:auto}
+/* promotions row inside promotions section */
+.promotions-row{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;margin:0;padding:0 2px 6px}
 .promotions-row .promotion-card{flex:0 0 320px;min-width:240px}
 .promotions-row::-webkit-scrollbar{height:8px}
 .promotions-row::-webkit-scrollbar-thumb{background:rgba(10,34,64,0.08);border-radius:8px}
@@ -125,7 +130,7 @@ body{
 @media (max-width:1024px){#catalogGrid{grid-template-columns:repeat(2,1fr)}}
 @media (max-width:700px){#catalogGrid{grid-template-columns:1fr;padding:0 12px}.controls{flex-direction:column;align-items:stretch}.product-image{height:140px}}
 @media (max-width:700px){
-  .promotions-row{padding-left:12px;padding-right:12px;gap:10px}
+  .promotions-row{padding-left:0;padding-right:0;gap:10px}
   .promotions-row .promotion-card{flex:0 0 260px;min-width:220px}
 }
 
@@ -364,7 +369,7 @@ body{
    mobile skin to ensure products are visible while keeping the original look. */
 @media (max-width:740px){
   #catalogGrid{ display:block; padding:12px; max-width:640px; margin:8px auto; }
-  .promotions-row{ padding:6px 12px; display:flex; gap:10px; overflow-x:auto; }
+  .promotions-row{ padding:6px 0; display:flex; gap:10px; overflow-x:auto; }
   .product-card{ display:block; width:100%; background:#fff; border-radius:14px; padding:10px; margin-bottom:14px; box-shadow:none; border:1px solid rgba(6,26,43,0.04); overflow:visible; }
   .product-card .product-image{ height:160px; border-radius:12px; overflow:hidden; display:block; background:#fff; }
   .product-card .product-image img{ width:100%; height:100%; object-fit:cover; display:block; border-radius:8px; opacity:1 !important; visibility:visible !important; }
@@ -408,6 +413,13 @@ body{
 .catalog-title{font-size:20px;font-weight:900;color:var(--deep)}
 .catalog-sub{font-size:13px;color:var(--muted);font-weight:600}
 .catalog-grid-wrap{padding:0}
+
+/* --- Promociones header (same visual language as catalog) --- */
+.promotions-section{max-width:1180px;margin:18px auto 10px;padding:18px;border-radius:14px;background:linear-gradient(180deg,#fff,#fffaf6);box-shadow:0 20px 60px rgba(2,6,23,0.05);border:1px solid rgba(6,26,43,0.04)}
+.promotions-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+.promotions-title{font-size:20px;font-weight:900;color:var(--deep);margin:0}
+.promotions-sub{font-size:13px;color:var(--muted);font-weight:600}
+.promotions-wrap{padding:0}
 
 /* explicit saving display for consumos */
 .consumo-saving{color:#b86a00;font-weight:700;margin-top:6px;font-size:13px}
@@ -509,6 +521,78 @@ body.modal-open{overflow:hidden}
 .product-actions .btn-add:active,
 .product-actions .btn-primary:active{
   transform:translateY(1px) scale(0.99);
+}
+
+/* Promotions card layout fix: avoid overlap and keep CTA text visible */
+.promotions-row .promotion-card{
+  align-items:flex-start;
+}
+
+.promotions-row .promotion-card .product-info{
+  min-width:0;
+  padding:4px 0 0 8px;
+  gap:8px;
+}
+
+.promotions-row .promotion-card .promo-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+}
+
+.promotions-row .promotion-card .product-title{
+  margin:0;
+  line-height:1.2;
+  flex:1 1 auto;
+  min-width:0;
+}
+
+.promotions-row .promotion-card .price-display{
+  position:static !important;
+  margin:0 !important;
+  flex:0 0 auto;
+  white-space:nowrap;
+}
+
+.promotions-row .promotion-card .product-sub{
+  white-space:normal !important;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  display:-webkit-box;
+  -webkit-line-clamp:2;
+  -webkit-box-orient:vertical;
+}
+
+.promotions-row .promotion-card .product-actions{
+  margin-top:8px;
+  width:100%;
+}
+
+.promotions-row .promotion-card .promo-view{
+  width:100%;
+  min-height:46px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:15px;
+  font-weight:900;
+  line-height:1.2;
+  color:#fff !important;
+  text-shadow:0 1px 0 rgba(0,0,0,0.08);
+}
+
+@media (max-width:740px){
+  .promotions-row .promotion-card{
+    min-width:260px;
+  }
+  .promotions-row .promotion-card .product-thumb{
+    flex:0 0 92px;
+    height:92px;
+  }
+  .promotions-row .promotion-card .product-title{
+    font-size:20px;
+  }
 }
 
 

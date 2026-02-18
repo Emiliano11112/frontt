@@ -1,4 +1,4 @@
-// API: prefer the real endpoint but tolerate variations (English/Spanish)
+﻿// API: prefer the real endpoint but tolerate variations (English/Spanish)
 const API_URL = "https://backend-0lcs.onrender.com";
 const API_ORIGIN = new URL(API_URL).origin;
 // Auth endpoints
@@ -92,6 +92,85 @@ function formatQtyLabel(qty, unitType, meta){
 let promotions = [];
 // consumos (admin-managed immediate-consumption discounts)
 let consumos = [];
+
+function parsePromoDate(value){
+  if (!value) return null;
+  try{
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const dt = new Date(raw);
+    if (Number.isNaN(dt.getTime())) return null;
+    return dt;
+  }catch(_){ return null; }
+}
+
+function normalizePromotionItem(item){
+  if (!item || typeof item !== 'object') return null;
+  const idsRaw = Array.isArray(item.productIds) ? item.productIds : (Array.isArray(item.product_ids) ? item.product_ids : []);
+  const productIds = idsRaw
+    .map(v => (v === null || v === undefined) ? '' : String(v).trim())
+    .filter(Boolean);
+  if (!productIds.length) return null;
+
+  const idVal = item.id != null ? item.id : ('promo-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+  const typeVal = String(item.type || 'percent').trim().toLowerCase();
+  const valueNum = (item.value !== null && item.value !== undefined && item.value !== '') ? Number(item.value) : null;
+  const validUntilRaw = item.valid_until ?? item.validUntil ?? item.expires_at ?? item.ends_at ?? null;
+  const validUntilDate = parsePromoDate(validUntilRaw);
+
+  return {
+    id: idVal,
+    name: String(item.name || 'Promocion').trim(),
+    description: String(item.description || '').trim(),
+    productIds,
+    type: typeVal,
+    value: Number.isFinite(valueNum) ? valueNum : null,
+    valid_until: validUntilDate ? validUntilDate.toISOString() : null
+  };
+}
+
+function normalizePromotionsList(items){
+  if (!Array.isArray(items)) return [];
+  const out = [];
+  for (const it of items){
+    const normalized = normalizePromotionItem(it);
+    if (normalized) out.push(normalized);
+  }
+  return out;
+}
+
+function isPromotionExpired(promo, nowTs = Date.now()){
+  const dt = parsePromoDate(promo && promo.valid_until);
+  if (!dt) return false;
+  return dt.getTime() < nowTs;
+}
+
+function isPromotionActive(promo, nowTs = Date.now()){
+  return !isPromotionExpired(promo, nowTs);
+}
+
+function getPromotionValidityInfo(promo){
+  const dt = parsePromoDate(promo && promo.valid_until);
+  if (!dt) return { text: '', className: '' };
+  const nowTs = Date.now();
+  const remainingMs = dt.getTime() - nowTs;
+  const dateLabel = dt.toLocaleString('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  if (remainingMs <= 0){
+    return { text: 'Vencida: ' + dateLabel, className: 'expired' };
+  }
+  const remainingHours = Math.ceil(remainingMs / (1000 * 60 * 60));
+  if (remainingHours <= 48){
+    return { text: 'Valida hasta ' + dateLabel + ' (' + remainingHours + 'h)', className: 'expiring' };
+  }
+  return { text: 'Valida hasta ' + dateLabel, className: '' };
+}
+
 // helper: infer consumo type when admin data doesn't include `type`
 function getConsumoType(c){
   if (!c) return null;
@@ -144,7 +223,8 @@ async function fetchPromotions(){
       else if (data && Array.isArray(data.promotions)) list = data.promotions;
       else if (data && Array.isArray(data.data)) list = data.data;
 
-      if (list.length > 0){ promotions = list; return promotions; }
+      const normalized = normalizePromotionsList(list);
+      if (normalized.length > 0){ promotions = normalized; return promotions; }
     } catch (err) { /* ignore and try next */ }
   }
   // fallback: try promotions saved by the admin UI in localStorage (same-origin admin)
@@ -152,8 +232,9 @@ async function fetchPromotions(){
     const stored = localStorage.getItem('admin_promotions_v1');
     if (stored) {
       const data = JSON.parse(stored);
-      if (Array.isArray(data) && data.length > 0) {
-        promotions = data;
+      const normalized = normalizePromotionsList(data);
+      if (normalized.length > 0) {
+        promotions = normalized;
         return promotions;
       }
     }
@@ -172,7 +253,7 @@ try{
         if (!ev.data) return;
         // admin posts { action: 'promotions-updated', promos }
         if (ev.data.action === 'promotions-updated' && Array.isArray(ev.data.promos)){
-          promotions = ev.data.promos;
+          promotions = normalizePromotionsList(ev.data.promos);
           console.log('[catalogo] promotions updated via BroadcastChannel', promotions);
           // re-render catalog to reflect promotion changes
           try{ render({ animate: true }); }catch(e){}
@@ -292,7 +373,7 @@ function renderFilterButtons(){
     container.appendChild(manageBtn);
 
     // compute full list of filters: admin filters or fallbacks
-    const allFilters = (filters && filters.length) ? filters.map(f => ({ value: String(f.value || f.name || '').toLowerCase(), name: String(f.name || f.value || '') })) : [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}].map(d=>({ value: d.v, name: d.t }));
+    const allFilters = (filters && filters.length) ? filters.map(f => ({ value: String(f.value || f.name || '').toLowerCase(), name: String(f.name || f.value || '') })) : [{v:'lacteos', t:'LÃ¡cteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}].map(d=>({ value: d.v, name: d.t }));
 
     // Show only selected filters (active). Non-selected filters stay hidden until chosen from modal.
     const activeFilters = loadActiveFilters();
@@ -354,7 +435,7 @@ async function showFilterManagerModal(){
 
     if(document.getElementById('__filters_modal')) return document.getElementById('__filters_modal').classList.add('open');
     const filters = loadAdminFilters();
-    const defaults = [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}];
+    const defaults = [{v:'lacteos', t:'LÃ¡cteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}];
     const all = (filters && filters.length) ? filters.map(f=>({ value: String(f.value||f.name||'').toLowerCase(), name: String(f.name||f.value||'') })) : defaults.map(d=>({ value: d.v, name: d.t }));
     const active = loadActiveFilters();
 
@@ -366,7 +447,7 @@ async function showFilterManagerModal(){
           return '<label class="f-item"><input type="checkbox" value="' + escapeHtml(f.value) + '" ' + checked + '><div style="flex:1">' + escapeHtml(f.name) + '</div></label>';
         }).join('');
       }
-      return '<div style="color:var(--muted);padding:12px">No hay filtros disponibles desde el panel de administración.</div>';
+      return '<div style="color:var(--muted);padding:12px">No hay filtros disponibles desde el panel de administraciÃ³n.</div>';
     })();
 
     overlay.innerHTML = `
@@ -374,9 +455,9 @@ async function showFilterManagerModal(){
         <header>
           <div style="display:flex;flex-direction:column">
             <h3 style="margin:0">Administrar filtros</h3>
-            <div class="subtitle">Seleccioná uno o varios filtros para aplicar a la vista de productos.</div>
+            <div class="subtitle">SeleccionÃ¡ uno o varios filtros para aplicar a la vista de productos.</div>
           </div>
-          <button class="fm-close" aria-label="Cerrar">✕</button>
+          <button class="fm-close" aria-label="Cerrar">âœ•</button>
         </header>
         <div class="filters-list">
           ${itemsHtml}
@@ -421,7 +502,7 @@ async function showFilterManagerModal(){
     overlay.querySelector('.fm-close').addEventListener('click', ()=> overlay.remove());
     overlay.querySelector('.fm-cancel').addEventListener('click', ()=> overlay.remove());
     overlay.querySelector('.fm-select-all').addEventListener('click', ()=>{ overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = true); });
-    overlay.querySelector('.fm-reset').addEventListener('click', ()=>{ saveActiveFilters([]); overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = false); showToast('Configuración de filtros restaurada (ninguno seleccionado)'); if (overlay.querySelector('.fm-save')) overlay.querySelector('.fm-save').disabled = false; });
+    overlay.querySelector('.fm-reset').addEventListener('click', ()=>{ saveActiveFilters([]); overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = false); showToast('ConfiguraciÃ³n de filtros restaurada (ninguno seleccionado)'); if (overlay.querySelector('.fm-save')) overlay.querySelector('.fm-save').disabled = false; });
 
     overlay.querySelector('.fm-save').addEventListener('click', ()=>{
       try{
@@ -463,6 +544,7 @@ try{ fetchAndSyncProductCategories(); setInterval(fetchAndSyncProductCategories,
 
 function getBestPromotionForProduct(product){
   if (!promotions || promotions.length===0) return null;
+  const nowTs = Date.now();
   // allow passing either a product object or an id/string
   let candidates = [];
   const prodObj = (typeof product === 'object' && product !== null) ? product : null;
@@ -471,6 +553,7 @@ function getBestPromotionForProduct(product){
   const pidStr = prodId !== undefined && prodId !== null ? String(prodId) : null;
 
   const matches = promotions.filter(pr => {
+    if (!isPromotionActive(pr, nowTs)) return false;
     if (!pr || !Array.isArray(pr.productIds)) return false;
     return pr.productIds.some(x => {
       if (x === undefined || x === null) return false;
@@ -504,8 +587,108 @@ function getDiscountedPrice(price, promo){
   return price;
 }
 
+function getPromotionProducts(promo){
+  try{
+    const promoIds = Array.isArray(promo && promo.productIds) ? promo.productIds : [];
+    if (!promoIds.length) return [];
+    const out = [];
+    const seen = new Set();
+    for (const rawId of promoIds){
+      const idStr = String(rawId == null ? '' : rawId).trim();
+      if (!idStr) continue;
+      const found = (products || []).find((p) => {
+        const pid = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '').trim();
+        if (!pid) return false;
+        if (pid === idStr) return true;
+        if (!Number.isNaN(Number(pid)) && !Number.isNaN(Number(idStr)) && Number(pid) === Number(idStr)) return true;
+        const pname = String(p.nombre || p.name || '').trim().toLowerCase();
+        return !!pname && pname === idStr.toLowerCase();
+      });
+      if (!found) continue;
+      const productKey = String(found.id ?? found._id ?? found.nombre ?? found.name ?? idStr);
+      if (seen.has(productKey)) continue;
+      seen.add(productKey);
+      const basePrice = Number(found.precio ?? found.price ?? 0) || 0;
+      const finalPrice = Number(getDiscountedPrice(basePrice, promo) || basePrice);
+      out.push({
+        id: productKey,
+        name: found.nombre || found.name || idStr,
+        description: found.descripcion || found.description || '',
+        image: found.imagen || found.image || found.image_url || 'images/placeholder.png',
+        basePrice,
+        finalPrice
+      });
+    }
+    return out;
+  }catch(_){
+    return [];
+  }
+}
+
+async function openPromotionDetail(promoId){
+  const promo = (promotions || []).find((p) => String(p.id) === String(promoId) && isPromotionActive(p));
+  if (!promo){
+    await showAlert('Esta promocion ya no esta vigente', 'warning');
+    return;
+  }
+  const included = getPromotionProducts(promo);
+  if (!included.length){
+    await showAlert('No encontramos productos disponibles para esta promocion', 'warning');
+    return;
+  }
+
+  const validityInfo = getPromotionValidityInfo(promo);
+  const totalBase = included.reduce((sum, item) => sum + Number(item.basePrice || 0), 0);
+  const totalFinal = included.reduce((sum, item) => sum + Number(item.finalPrice || 0), 0);
+  const savings = Math.max(0, totalBase - totalFinal);
+  const itemsHtml = included.map((item) => {
+    const hasDiscount = Number(item.finalPrice) < Number(item.basePrice);
+    const priceHtml = hasDiscount
+      ? ('<span style="font-weight:900;color:var(--accent)">$' + Number(item.finalPrice).toFixed(2) + '</span> <span style="text-decoration:line-through;color:var(--muted);font-size:12px;margin-left:6px">$' + Number(item.basePrice).toFixed(2) + '</span>')
+      : ('<span style="font-weight:900;color:var(--deep)">$' + Number(item.finalPrice).toFixed(2) + '</span>');
+    const descText = String(item.description || '').trim();
+    const safeDesc = descText ? ('<div style="font-size:12px;color:var(--muted);margin-top:2px">' + escapeHtml(descText) + '</div>') : '';
+    return '<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(10,34,64,0.06)">' +
+      '<img src="' + escapeHtml(item.image) + '" alt="' + escapeHtml(item.name) + '" style="width:54px;height:54px;border-radius:10px;object-fit:cover;border:1px solid rgba(10,34,64,0.08)">' +
+      '<div style="flex:1;min-width:0">' +
+      '<div style="font-weight:800;color:var(--deep);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(item.name) + '</div>' +
+      safeDesc +
+      '</div>' +
+      '<div style="text-align:right;white-space:nowrap">' + priceHtml + '</div>' +
+      '</div>';
+  }).join('');
+
+  const detailHtml =
+    '<div style="display:flex;flex-direction:column;gap:10px">' +
+      '<div style="font-size:13px;color:var(--muted)">' + escapeHtml(promo.description || '') + '</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        '<span style="background:rgba(10,34,64,0.06);padding:4px 8px;border-radius:999px;font-size:12px;font-weight:700;color:var(--deep)">Incluye ' + String(included.length) + ' producto' + (included.length === 1 ? '' : 's') + '</span>' +
+        (validityInfo.text ? ('<span style="background:rgba(10,34,64,0.06);padding:4px 8px;border-radius:999px;font-size:12px;font-weight:700;color:var(--deep)">' + escapeHtml(validityInfo.text) + '</span>') : '') +
+      '</div>' +
+      '<div style="border:1px solid rgba(10,34,64,0.08);border-radius:12px;padding:10px 12px;max-height:42vh;overflow:auto;background:#fff">' + itemsHtml + '</div>' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:14px">' +
+        '<strong style="color:var(--deep)">Total promo: $' + Number(totalFinal).toFixed(2) + '</strong>' +
+        (savings > 0 ? ('<span style="color:var(--accent);font-weight:800">Ahorro: $' + Number(savings).toFixed(2) + '</span>') : '') +
+      '</div>' +
+    '</div>';
+
+  const accepted = await showDialog({
+    title: promo.name || 'Promocion',
+    html: detailHtml,
+    type: 'info',
+    buttons: [
+      { label: 'Cerrar', value: false, primary: false },
+      { label: 'Agregar promocion', value: true, primary: true }
+    ]
+  });
+  if (!accepted) return;
+  const promoCartId = 'promo:' + String(promo.id);
+  addToCart(promoCartId, 1, null);
+  openCart();
+}
+
 function normalize(p) {
-  // soporta respuesta en español o inglés y normaliza valores
+  // soporta respuesta en espaÃ±ol o inglÃ©s y normaliza valores
   const name = (p.nombre || p.name || "").trim();
   const description = (p.descripcion || p.description || "").trim();
   const category = (p.categoria || p.category || "").trim();
@@ -513,7 +696,7 @@ function normalize(p) {
   const saleUnit = getSaleUnitFromObj(p);
   let image = p.imagen || p.image || p.image_url || p.imageUrl || null;
   // Si la ruta es relativa (empieza por '/') no anteponer el origen remoto cuando los
-  // datos proceden del `products.json` local — así los assets locales se resuelven correctamente
+  // datos proceden del `products.json` local â€” asÃ­ los assets locales se resuelven correctamente
   if (image) {
     // Normalize local uploads path so it resolves correctly when the page
     // is served from `/frontend/` (dev server) or from site root.
@@ -591,45 +774,7 @@ function renderSkeleton(count = 6) {
     });
   }catch(e){/* ignore */}
 
-  // Wire promotion card buttons (filter to promo products when clicked)
-  try{
-    document.querySelectorAll('.promotion-card .promo-view').forEach(btn => {
-      btn.addEventListener('click', (ev) => {
-        ev.preventDefault();
-        const pid = btn.getAttribute('data-pid');
-        const promo = promotions.find(p => String(p.id) === String(pid));
-        if (!promo) return;
-        // set filter to show only products in this promotion
-        const ids = Array.isArray(promo.productIds) ? promo.productIds.map(x => String(x)) : [];
-        // narrow products to those matching ids (or names)
-        const matched = products.filter(p => ids.includes(String(p.id ?? p._id ?? p.nombre ?? p.name ?? '')) || ids.includes(String(p.nombre || p.name || '')));
-        if (matched.length) {
-          // temporarily render only matched products
-          grid.innerHTML = '';
-          const mf = document.createDocumentFragment();
-          matched.forEach((p,i) => {
-            const card = document.createElement('article');
-            card.className = 'product-card';
-            card.dataset.pid = String(p.id ?? p._id ?? i);
-            const unitSuffix = '';
-            card.innerHTML = `
-              <div class="product-image">
-                <div class="price-badge">$${Number(p.precio || p.price || 0).toFixed(2)}${unitSuffix}</div>
-                <img src="${p.imagen || 'images/placeholder.png'}" alt="${escapeHtml(p.nombre || p.name || '')}" loading="lazy">
-              </div>
-              <div class="product-info">
-                <h3>${escapeHtml(p.nombre || p.name || '')}</h3>
-                <p>${escapeHtml(p.descripcion || p.description || '')}</p>
-                <div class="price">$${Number(p.precio || p.price || 0).toFixed(2)}${unitSuffix}</div>
-                <div class="card-actions"><button class="btn btn-add" data-id="${String(p.id ?? p._id ?? i)}">Agregar</button></div>
-              </div>`;
-            mf.appendChild(card);
-          });
-          grid.appendChild(mf);
-        }
-      });
-    });
-  }catch(e){/* ignore promo wiring errors */}
+  // Promotion click handlers are wired in render() after cards are created.
 }
 
 async function fetchProducts({ showSkeleton = true } = {}) {
@@ -703,12 +848,12 @@ async function fetchProducts({ showSkeleton = true } = {}) {
         await fetchPromotions();
         await fetchConsumos();
         render({ animate: true });
-        showMessage('Mostrando catálogo desde caché local (offline).', 'info');
+        showMessage('Mostrando catÃ¡logo desde cachÃ© local (offline).', 'info');
         return;
       }
     } catch (cacheErr) { console.warn('cache read failed', cacheErr); }
 
-    showMessage('No se pudieron cargar productos desde el backend. Usando catálogo local si está disponible. ⚠️', 'warning');
+    showMessage('No se pudieron cargar productos desde el backend. Usando catÃ¡logo local si estÃ¡ disponible. âš ï¸', 'warning');
     try {
       const local = await (await fetch('products.json')).json();
       productsSource = 'local';
@@ -831,22 +976,34 @@ function render({ animate = false } = {}) {
   }catch(e){ /* ignore sorting errors */ }
 
   grid.innerHTML = '';
-  // ensure promotions container exists (separate from product grid)
+  // ensure promotions section exists (styled like catalog) and contains the promos row
+  let promotionsSection = document.getElementById('promotionsSection');
+  if (!promotionsSection) {
+    promotionsSection = document.createElement('section');
+    promotionsSection.id = 'promotionsSection';
+    promotionsSection.className = 'promotions-section';
+    promotionsSection.innerHTML = '<div class="promotions-header"><h2 class="promotions-title">Promociones <small id="promotionsCount" class="promotions-sub"></small></h2></div><div class="promotions-wrap"><div id="promotionsRow" class="promotions-row"></div></div>';
+  }
+  if (!promotionsSection.parentNode) {
+    try{
+      if (grid.parentNode) grid.parentNode.insertBefore(promotionsSection, grid);
+      else document.body.insertBefore(promotionsSection, grid);
+    }catch(e){ document.body.appendChild(promotionsSection); }
+  }
   let promosRow = document.getElementById('promotionsRow');
   if (!promosRow) {
     promosRow = document.createElement('div');
     promosRow.id = 'promotionsRow';
     promosRow.className = 'promotions-row';
-    // insert promotions container before the grid to keep products always visible below
     try{
-      if (grid.parentNode) grid.parentNode.insertBefore(promosRow, grid);
-      else document.body.insertBefore(promosRow, grid);
+      promotionsSection.appendChild(promosRow);
     }catch(e){ document.body.appendChild(promosRow); }
   }
 
   if (filtered.length === 0) {
     grid.innerHTML = '<p class="message">No hay resultados</p>';
     promosRow.innerHTML = ''; // clear promos when no results
+    if (promotionsSection) promotionsSection.style.display = 'none';
     return;
   }
 
@@ -859,7 +1016,8 @@ function render({ animate = false } = {}) {
     consumosSection.className = 'consumos-section';
     consumosSection.innerHTML = '<div class="consumos-header"><h2 class="consumos-title">Consumos inmediatos <small id="consumosCount" class="consumos-sub"></small></h2></div><div class="consumos-grid" id="consumosGrid"></div>';
     try{
-      if (promosRow && promosRow.parentNode) promosRow.parentNode.insertBefore(consumosSection, promosRow);
+      const promosAnchor = document.getElementById('promotionsSection') || promosRow;
+      if (promosAnchor && promosAnchor.parentNode) promosAnchor.parentNode.insertBefore(consumosSection, promosAnchor);
       else if (grid.parentNode) grid.parentNode.insertBefore(consumosSection, grid);
       else document.body.insertBefore(consumosSection, grid);
     }catch(e){ document.body.appendChild(consumosSection); }
@@ -955,7 +1113,7 @@ function render({ animate = false } = {}) {
               if (discountedPrice === null) discountedPrice = base;
             }catch(_){ discountedPrice = null; }
             const available = cobj ? Number(cobj.qty || 0) : null;
-            if (available !== null && available <= 0) { showAlert('Este consumo está agotado', 'error'); return; }
+            if (available !== null && available <= 0) { showAlert('Este consumo estÃ¡ agotado', 'error'); return; }
             try{ 
               // Use quantity selector so consumos can be added properly to cart
               if (typeof showQuantitySelector === 'function') {
@@ -974,13 +1132,13 @@ function render({ animate = false } = {}) {
     }
   }catch(e){ /* ignore consumos rendering errors */ }
 
-  /* Catálogo: show a dedicated header with product count */
+  /* CatÃ¡logo: show a dedicated header with product count */
   let catalogSection = document.getElementById('catalogSection');
   if (!catalogSection) {
     catalogSection = document.createElement('section');
     catalogSection.id = 'catalogSection';
     catalogSection.className = 'catalog-section';
-    catalogSection.innerHTML = '<div class="catalog-header"><h2 class="catalog-title">Catálogo <small id="catalogCount" class="catalog-sub"></small></h2></div><div class="catalog-grid-wrap" id="catalogGridWrap"></div>';
+    catalogSection.innerHTML = '<div class="catalog-header"><h2 class="catalog-title">CatÃ¡logo <small id="catalogCount" class="catalog-sub"></small></h2></div><div class="catalog-grid-wrap" id="catalogGridWrap"></div>';
     try{
       if (grid && grid.parentNode) grid.parentNode.insertBefore(catalogSection, grid);
       else document.body.appendChild(catalogSection);
@@ -1001,28 +1159,38 @@ function render({ animate = false } = {}) {
 
   // Render simple promotion cards for promotions that apply to the currently filtered products
   // Put promotions into a separate horizontal row so they don't push or hide products on mobile.
-  if (Array.isArray(promotions) && promotions.length) {
+  const activePromotions = Array.isArray(promotions) ? promotions.filter(pr => isPromotionActive(pr)) : [];
+  if (activePromotions.length) {
+    if (promotionsSection) promotionsSection.style.display = '';
     const promoFrag = document.createDocumentFragment();
     // clear previous promos container
     promosRow.innerHTML = '';
     const seen = new Set();
-    promotions.forEach(pr => {
+    activePromotions.forEach(pr => {
       try {
         const prIds = Array.isArray(pr.productIds) ? pr.productIds.map(x => String(x)) : [];
-        const match = filtered.find(p => {
+        const sourceProducts = (Array.isArray(products) && products.length) ? products : filtered;
+        const match = sourceProducts.find(p => {
           const pid = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '');
           if (prIds.length && prIds.includes(pid)) return true;
           // fallback: try matching by product name
           if (prIds.length && prIds.some(x => x.toLowerCase() === String(p.nombre || p.name || '').toLowerCase())) return true;
           return false;
         });
-        if (!match || seen.has(pr.id)) return;
+        if (seen.has(pr.id)) return;
         seen.add(pr.id);
         const card = document.createElement('article');
         card.className = 'promotion-card reveal';
-        const imgSrc = match.imagen || match.image || 'images/placeholder.png';
+        card.dataset.pid = String(pr.id);
+        card.setAttribute('tabindex', '0');
+        card.setAttribute('role', 'button');
+        card.setAttribute('aria-label', 'Ver detalle de la promocion ' + String(pr.name || ''));
+        const imgSrc = (match && (match.imagen || match.image)) ? (match.imagen || match.image) : 'images/placeholder.png';
         // compute readable promo label: support percent as fraction (0.12) or as whole number (12)
         let promoLabel = 'Oferta';
+        const validityInfo = getPromotionValidityInfo(pr);
+        const validityClass = validityInfo.className ? (' promo-validity ' + validityInfo.className) : ' promo-validity';
+        const includedCount = Array.isArray(pr.productIds) ? pr.productIds.length : 0;
         try {
           if (pr.type === 'percent') {
             const raw = Number(pr.value || 0);
@@ -1033,25 +1201,36 @@ function render({ animate = false } = {}) {
           }
         } catch (e) { promoLabel = 'Oferta'; }
         card.innerHTML = `
-          <div class="product-thumb"><img src="${imgSrc}" alt="${escapeHtml(match.nombre || match.name || '')}"></div>
+          <div class="product-thumb"><img src="${imgSrc}" alt="${escapeHtml(pr.name || 'Promocion')}"></div>
           <div class="product-info">
-            <h3 class="product-title">${escapeHtml(pr.name || 'Promoción')}</h3>
-            <div class="product-sub">${escapeHtml(pr.description || match.descripcion || '')}</div>
-            <div class="price-display">${promoLabel}</div>
-            <div class="product-actions"><button class="btn btn-primary promo-view" data-pid="${escapeHtml(String(pr.id))}">Agregar</button></div>
+            <div class="promo-head">
+              <h3 class="product-title">${escapeHtml(pr.name || 'PromociÃ³n')}</h3>
+              <div class="price-display">${promoLabel}</div>
+            </div>
+            <div class="product-sub">${escapeHtml(pr.description || (match ? (match.descripcion || '') : ''))}</div>
+            <div class="promo-count">Incluye ${includedCount} producto${includedCount === 1 ? '' : 's'}</div>
+            ${validityInfo.text ? ('<div class="' + validityClass + '">' + escapeHtml(validityInfo.text) + '</div>') : ''}
+            <div class="product-actions"><button class="btn btn-primary promo-view" data-pid="${escapeHtml(String(pr.id))}">Ver promo</button></div>
           </div>`;
         promoFrag.appendChild(card);
       } catch (e) { /* ignore individual promo errors */ }
     });
     // append promos into the promotionsRow (separate from product grid)
     promosRow.appendChild(promoFrag);
+    try{
+      const promotionsCountEl = document.getElementById('promotionsCount');
+      if (promotionsCountEl) promotionsCountEl.textContent = ' ' + String(activePromotions.length) + ' activa' + (activePromotions.length === 1 ? '' : 's');
+    }catch(_){ }
+  } else {
+    promosRow.innerHTML = '';
+    if (promotionsSection) promotionsSection.style.display = 'none';
   }
   mainProducts.forEach((p, i) => {
     const card = document.createElement('article');
     card.className = 'product-card';
     card.setAttribute('tabindex','0');
     card.setAttribute('role','button');
-    card.setAttribute('aria-label', `${p.nombre || 'producto'} — ver imagen`);
+    card.setAttribute('aria-label', `${p.nombre || 'producto'} â€” ver imagen`);
 
     if (animate && !reduceMotion) {
       card.classList.add('reveal');
@@ -1086,16 +1265,14 @@ function render({ animate = false } = {}) {
     const outOfStock = Number.isNaN(displayStock) ? false : (displayStock <= 0);
     if (outOfStock) {
       card.classList.add('out-of-stock');
-      card.setAttribute('aria-label', `${p.nombre || 'producto'} — sin stock`);
+      card.setAttribute('aria-label', `${p.nombre || 'producto'} â€” sin stock`);
     }
 
-    // check promotion for this product
-    const promo = getBestPromotionForProduct(p);
     // find per-product discount if present on the product object
     let perProductDiscount = null;
     try{ const d = Number(p.discount ?? p.descuento ?? 0); if(!Number.isNaN(d) && d > 0) perProductDiscount = d; }catch(_){ perProductDiscount = null; }
 
-    // Honor per-product discount or admin-configured consumos for product cards. Prefer admin consumos when present.
+    // Product cards only honor per-product discounts.
     let validConsumo = null;
     const basePrice = Number(p.precio ?? p.price ?? 0);
 
@@ -1108,7 +1285,6 @@ function render({ animate = false } = {}) {
       }
     }catch(_){ validConsumo = null; }
 
-    const discountedPromo = promo ? getDiscountedPrice(basePrice, promo) : null;
     let discountedConsumo = null;
     try{
       if (validConsumo){
@@ -1120,45 +1296,27 @@ function render({ animate = false } = {}) {
       }
     }catch(_){ discountedConsumo = null; }
 
-    // choose the best (lowest) final price for the customer when multiple discounts exist
-    let discounted = null;
-    if (discountedPromo !== null && discountedConsumo !== null) discounted = Math.min(discountedPromo, discountedConsumo);
-    else discounted = discountedPromo !== null ? discountedPromo : discountedConsumo;
+    const discounted = discountedConsumo;
 
-    // Sync cart items for this product (non-consumo) so the cart always reflects current discounts
+    // Sync cart items for this product (non-consumo) so the cart always reflects current pricing rules.
     try{
-      if (discounted != null) {
-        const cart = readCart();
-        let changed = false;
-        for (let ci of cart) {
-          if (String(ci.id) === String(pid) && !(ci.meta && ci.meta.consumo)) {
-            const current = Number(ci.meta && ci.meta.price != null ? ci.meta.price : (ci.meta && ci.meta.price === 0 ? 0 : null));
-            if (Number.isFinite(current) ? Number(current) !== Number(discounted) : true) {
-              if (!ci.meta) ci.meta = {};
-              ci.meta.price = Number(discounted);
-              changed = true;
-            }
+      const targetPrice = discounted != null ? Number(discounted) : Number(basePrice);
+      const cart = readCart();
+      let changed = false;
+      for (let ci of cart) {
+        if (String(ci.id) === String(pid) && !(ci.meta && ci.meta.consumo)) {
+          const current = Number(ci.meta && ci.meta.price != null ? ci.meta.price : (ci.meta && ci.meta.price === 0 ? 0 : null));
+          if (Number.isFinite(current) ? Number(current) !== Number(targetPrice) : true) {
+            if (!ci.meta) ci.meta = {};
+            ci.meta.price = Number(targetPrice);
+            changed = true;
           }
         }
-        if (changed) { try{ writeCart(cart); }catch(_){ } }
       }
+      if (changed) { try{ writeCart(cart); }catch(_){ } }
     }catch(_){ }
 
     const isNew = p.created_at ? (Date.now() - new Date(p.created_at).getTime()) < (1000 * 60 * 60 * 24 * 7) : false;
-
-    // build promo ribbon label robustly (supports fractional percent values)
-    let promoRibbon = '';
-    if (promo) {
-      try {
-        if (promo.type === 'percent') {
-          const raw = Number(promo.value || 0);
-          const pct = (raw > 0 && raw <= 1) ? Math.round(raw * 100) : Math.round(raw);
-          promoRibbon = `-${pct}%`;
-        } else if (promo.value) {
-          promoRibbon = `$${Number(promo.value).toFixed(2)}`;
-        }
-      } catch (e) { promoRibbon = '' }
-    }
 
     // product categories assigned by admin
     const pid2 = pid;
@@ -1181,7 +1339,6 @@ function render({ animate = false } = {}) {
     // build card HTML using concatenation to avoid nested template literal parsing issues
     let html = '';
     html += '<div class="product-image">';
-    html += (promo && promoRibbon) ? ('<div class="promo-ribbon">' + promoRibbon + '</div>') : '';
     html += validConsumo ? ('<div class="consumo-ribbon">' + escapeHtml(consumoRibbon) + '</div>') : '';
     html += '<div class="price-badge">' + (discounted ? ('<span class="price-new">$' + Number(discounted).toFixed(2) + unitSuffix + '</span><span class="price-old">$' + Number(p.precio).toFixed(2) + unitSuffix + '</span>') : ('$' + Number(p.precio).toFixed(2) + unitSuffix)) + '</div>'; 
     html += '<img src="' + (imgSrc) + '" alt="' + escapeHtml(p.nombre) + '" loading="lazy" fetchpriority="low">';
@@ -1256,7 +1413,7 @@ function render({ animate = false } = {}) {
       addBtn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); addBtn.click(); } });
     }
 
-    // accessible interactions: no lightbox on click — emulate lift animation on click/tap
+    // accessible interactions: no lightbox on click â€” emulate lift animation on click/tap
     card.addEventListener('click', (ev) => {
       // ignore clicks originating from interactive controls inside the card
       if (ev.target.closest && ev.target.closest('.btn')) return;
@@ -1275,17 +1432,37 @@ function render({ animate = false } = {}) {
     revealed.forEach((el) => el.addEventListener('animationend', () => el.classList.remove('reveal'), { once: true }));
   }
 
-  // Wire promotion buttons: add a single promo-summary item to cart
+  // Wire promotion cards/buttons: open promo detail with all included products.
   try {
+    const openPromoById = (pid) => {
+      if (!pid) return;
+      openPromotionDetail(String(pid));
+    };
     document.querySelectorAll('.promotion-card .promo-view').forEach(btn => {
       btn.addEventListener('click', (ev) => {
         ev.preventDefault();
+        ev.stopPropagation();
         const pid = btn.getAttribute('data-pid');
-        const promo = promotions.find(p => String(p.id) === String(pid));
-        if (!promo) return;
-        const promoCartId = `promo:${String(promo.id)}`;
-        addToCart(promoCartId, 1, null);
-        openCart();
+        openPromoById(pid);
+      });
+      btn.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          ev.stopPropagation();
+          openPromoById(btn.getAttribute('data-pid'));
+        }
+      });
+    });
+    document.querySelectorAll('.promotion-card').forEach(card => {
+      card.addEventListener('click', (ev) => {
+        if (ev.target && ev.target.closest && ev.target.closest('.btn')) return;
+        openPromoById(card.getAttribute('data-pid'));
+      });
+      card.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          openPromoById(card.getAttribute('data-pid'));
+        }
       });
     });
   } catch (e) { /* ignore wiring errors */ }
@@ -1621,7 +1798,7 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
   // Special handling for promo-summary items (id like 'promo:123')
   if (isPromoSummary){
     const promoId = String(productId).split(':')[1];
-    const promo = promotions.find(p => String(p.id) === String(promoId));
+    const promo = promotions.find(p => String(p.id) === String(promoId) && isPromotionActive(p));
     if (promo) {
       const included = (Array.isArray(promo.productIds) ? promo.productIds : []).map(pidItem => {
         const prod = products.find(p => String(p.id ?? p._id) === String(pidItem) || String(p.nombre || p.name || '') === String(pidItem));
@@ -1635,13 +1812,26 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
       if (included.length === 0) return;
 
       const total = included.reduce((s,i) => s + Number(i.price || 0), 0);
-      cart.push({ id: String(productId), qty: Math.min(99, qty), meta: { name: promo.name || 'Promoción', price: Number(total.toFixed(2)), image: included[0].image || '', products: included } });
+      cart.push({
+        id: String(productId),
+        qty: Math.min(99, qty),
+        meta: {
+          name: promo.name || 'PromociÃ³n',
+          promo_name: promo.name || 'PromociÃ³n',
+          promo_id: promo.id != null ? String(promo.id) : null,
+          is_promo: true,
+          price: Number(total.toFixed(2)),
+          image: included[0].image || '',
+          products: included
+        }
+      });
       writeCart(cart);
       renderCart();
       // no per-product pulse animation; briefly pulse cart instead
       try{ document.getElementById('cartButton')?.animate?.([{ transform: 'scale(1)' },{ transform: 'scale(1.06)' },{ transform: 'scale(1)' }], { duration: 380 }); }catch(_){ }
       return;
     }
+    showAlert('Esta promocion ya no esta vigente', 'warning');
     return;
   }
 
@@ -1794,7 +1984,7 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     `; document.head.appendChild(s);
   }
 
-  if(cart.length===0){ container.innerHTML = `<div class="cart-empty"><div style="font-size:36px;opacity:0.9">🛒</div><div style="font-weight:800">Tu carrito está vacío</div><div style="color:var(--muted)">Agregá productos para comenzar</div><div class="ce-cta"><button class="btn btn-primary" onclick="closeCart()">Seguir comprando</button></div></div>`; subtotalEl.textContent = '$0.00'; updateCartBadge(); return; }
+  if(cart.length===0){ container.innerHTML = `<div class="cart-empty"><div style="font-size:36px;opacity:0.9">ðŸ›’</div><div style="font-weight:800">Tu carrito estÃ¡ vacÃ­o</div><div style="color:var(--muted)">AgregÃ¡ productos para comenzar</div><div class="ce-cta"><button class="btn btn-primary" onclick="closeCart()">Seguir comprando</button></div></div>`; subtotalEl.textContent = '$0.00'; updateCartBadge(); return; }
 
   let subtotal = 0; cart.forEach(item=>{
     const row = document.createElement('div'); row.className = 'cart-item'; row.dataset.pid = item.id; row.dataset.key = (item.key || getCartKey(item));
@@ -1804,7 +1994,6 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     // prefer item.meta.price when provided; try to reconcile with current `consumos` (admin changes may occur after item entered)
     const prod = products.find(x => String(x.id ?? x._id) === String(item.id));
     const productBase = prod ? (prod.precio ?? prod.price ?? 0) : (item.meta?.price ?? 0);
-    const promo = getBestPromotionForProduct(prod || item);
 
     // If a consumo config currently exists for this product, compute its discounted price and prefer that (this lets cart reflect admin changes even for pre-existing cart items)
     let unitPrice = null;
@@ -1831,9 +2020,9 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     } catch(e){ /* ignore */ }
 
     if (unitPrice === null) {
-      // fallback: prefer stored meta.price when present (non-consumo), otherwise promo or product base
+      // fallback: prefer stored meta.price when present (non-consumo), otherwise product base
       const livePriceBase = (item.meta && item.meta.price != null) ? Number(item.meta.price) : productBase;
-      unitPrice = (item.meta && item.meta.consumo && item.meta.price != null) ? Number(item.meta.price) : (promo ? getDiscountedPrice(productBase, promo) : livePriceBase);
+      unitPrice = (item.meta && item.meta.consumo && item.meta.price != null) ? Number(item.meta.price) : livePriceBase;
     }
 
     // build name and price HTML, support promo-summary items that include multiple products
@@ -1850,7 +2039,7 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
       }catch(_){ }
     }
     if (Array.isArray(item.meta?.products) && item.meta.products.length) {
-      const lines = item.meta.products.map(x => `${escapeHtml(x.name || x.id)} — $${Number(x.price || 0).toFixed(2)}`);
+      const lines = item.meta.products.map(x => `${escapeHtml(x.name || x.id)} â€” $${Number(x.price || 0).toFixed(2)}`);
       nameHtml += `<div class="ci-sub">${lines.join('<br>')}</div>`;
     }
 
@@ -1859,8 +2048,6 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     let priceHtml = '';
     if (item.meta && item.meta.consumo) {
       priceHtml = `<span class="price-new">$${Number(unitPrice).toFixed(2)}${unitSuffix}</span> <span class="price-old">$${Number(productBase).toFixed(2)}${unitSuffix}</span>`;
-    } else if (promo) {
-      priceHtml = `<span class="price-new">$${Number(unitPrice).toFixed(2)}${unitSuffix}</span> <span class="price-old">$${Number(productBase).toFixed(2)}${unitSuffix}</span> <small style="color:var(--muted);margin-left:6px">(${escapeHtml(promo.name||'promo')})</small>`;
     } else {
       priceHtml = `<span class="price-new">$${Number(unitPrice).toFixed(2)}${unitSuffix}</span>`;
     }
@@ -1962,7 +2149,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
     checkout.setAttribute('aria-label', 'Hacer pedido');
     checkout.addEventListener('click', async () => {
         const cart = readCart();
-        if (!cart || cart.length === 0) return showAlert('El carrito está vacío');
+        if (!cart || cart.length === 0) return showAlert('El carrito estÃ¡ vacÃ­o');
         const basePayload = { items: cart, total: cart.reduce((s, i) => {
           const prod = products.find(p => String(p.id ?? p._id) === String(i.id));
           const factor = getItemLineFactor(i, prod);
@@ -1982,9 +2169,9 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
               if (!profile.email) missing.push('email');
               if (!profile.barrio) missing.push('barrio');
               if (!profile.calle) missing.push('calle');
-              if (!profile.numeracion) missing.push('numeración');
+              if (!profile.numeracion) missing.push('numeraciÃ³n');
               if (missing.length) {
-                const ok = await showConfirm('Tu perfil está incompleto (faltan: ' + missing.join(', ') + '). ¿Deseas continuar y enviar el pedido igualmente?');
+                const ok = await showConfirm('Tu perfil estÃ¡ incompleto (faltan: ' + missing.join(', ') + '). Â¿Deseas continuar y enviar el pedido igualmente?');
                 if (!ok) { try { document.getElementById('checkoutBtn').disabled = false; } catch(e){}; return; }
               }
               basePayload.user_id = profile.id;
@@ -1997,12 +2184,12 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           } catch (e) { /* ignore profile fetch errors */ }
         }
 
-        // Proceed — checkout button reference created later
+        // Proceed â€” checkout button reference created later
 
         // If there's no user info attached (guest checkout), offer to login or collect minimal contact info
         if (!basePayload.user_full_name && !basePayload.user_email) {
           try {
-            const wantLogin = await showConfirm('No estás logueado. ¿Iniciar sesión para adjuntar tus datos al pedido? (Aceptar = login, Cancelar = enviar como invitado)');
+            const wantLogin = await showConfirm('No estÃ¡s logueado. Â¿Iniciar sesiÃ³n para adjuntar tus datos al pedido? (Aceptar = login, Cancelar = enviar como invitado)');
             if (wantLogin) { openAuthModal(); try{ checkout.disabled = false; }catch(_){ } return; }
             // Collect minimal guest details via modal
             const guestInfo = await showGuestModal();
@@ -2120,15 +2307,15 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       try {
         if (succeeded) {
           // confirm visually and clear
-          await showAlert('Pedido enviado — el panel de administración recibirá la orden.');
+          await showAlert('Pedido enviado â€” el panel de administraciÃ³n recibirÃ¡ la orden.');
           clearCart(); closeCart();
         } else {
           // graceful fallback: keep el carrito (NO WhatsApp), mostrar modal con opciones al usuario
-          console.warn('Checkout failed — showing fallback modal and keeping cart locally.', _attemptErrors);
+          console.warn('Checkout failed â€” showing fallback modal and keeping cart locally.', _attemptErrors);
           try{ console.error('[checkout] attempts', _attemptErrors); }catch(_){ }
           // show modal and persist the failed payload so the user can retry later
           try{ showOrderModal(payload); saveFailedOrder(payload); }catch(e){ showOrderModal(payload); }
-          try{ showToast('No se pudo enviar el pedido. Se guardó localmente para reintento.', 5000); }catch(_){ }
+          try{ showToast('No se pudo enviar el pedido. Se guardÃ³ localmente para reintento.', 5000); }catch(_){ }
         }
       } catch (err) {
         console.error('post-checkout-handling', err);
@@ -2147,18 +2334,18 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       const itemsHtml = (payload.items || []).map(i=>{
         const unitType = normalizeSaleUnit(i?.meta?.unit_type || i?.meta?.sale_unit || i?.meta?.unit);
         const qtyLabel = formatQtyLabel(i?.qty, unitType, i?.meta || {});
-        return `<li style="margin:8px 0"><strong>${escapeHtml(String(i.meta?.name||i.id))}</strong> — ${escapeHtml(qtyLabel)} × $${Number(i.meta?.price||0).toFixed(2)}</li>`;
+        return `<li style="margin:8px 0"><strong>${escapeHtml(String(i.meta?.name||i.id))}</strong> â€” ${escapeHtml(qtyLabel)} Ã— $${Number(i.meta?.price||0).toFixed(2)}</li>`;
       }).join('');
       modal.innerHTML = `
         <div class="order-modal" role="dialog" aria-modal="true" aria-label="Resumen del pedido">
           <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
             <h3 style="margin:0">Pedido (guardado localmente)</h3>
-            <button class="om-close" aria-label="Cerrar">✕</button>
+            <button class="om-close" aria-label="Cerrar">âœ•</button>
           </header>
           <div style="max-height:52vh;overflow:auto;padding:6px 2px;margin-bottom:12px;color:var(--deep);">
-            <ul style="list-style:none;padding:0;margin:0 0 8px">${itemsHtml || '<li style="color:var(--muted)">(sin ítems)</li>'}</ul>
+            <ul style="list-style:none;padding:0;margin:0 0 8px">${itemsHtml || '<li style="color:var(--muted)">(sin Ã­tems)</li>'}</ul>
             <div style="font-weight:800;margin-top:8px">Total: <span>$${Number(payload.total||0).toFixed(2)}</span></div>
-            <p style="color:var(--muted);margin-top:8px">No se pudo enviar la orden al servidor — puedes <strong>reintentar</strong>, <strong>copiar</strong> o <strong>descargar</strong> el pedido.</p>
+            <p style="color:var(--muted);margin-top:8px">No se pudo enviar la orden al servidor â€” puedes <strong>reintentar</strong>, <strong>copiar</strong> o <strong>descargar</strong> el pedido.</p>
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
             <button class="btn btn-ghost om-copy">Copiar pedido</button>
@@ -2167,7 +2354,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           </div>
         </div>`;
       document.body.appendChild(modal);
-      // styles for modal (scoped minimal) — won't override global theme
+      // styles for modal (scoped minimal) â€” won't override global theme
       const ss = document.createElement('style'); ss.id = '__order_modal_styles'; ss.textContent = `
         .order-modal-overlay{ position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.36);backdrop-filter:blur(3px);z-index:1400;opacity:0;pointer-events:none;transition:opacity .18s ease}
         .order-modal-overlay.open{opacity:1;pointer-events:auto}
@@ -2188,7 +2375,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         ev.target.disabled = true;
         const ok = await reAttemptOrder(payload);
         ev.target.disabled = false;
-        if (ok) { modal.remove(); await showAlert('Pedido enviado — el panel de administración recibirá la orden.'); clearCart(); closeCart(); }
+        if (ok) { modal.remove(); await showAlert('Pedido enviado â€” el panel de administraciÃ³n recibirÃ¡ la orden.'); clearCart(); closeCart(); }
         else { await showAlert('No se pudo enviar la orden. Puedes copiar o descargar el pedido y enviarlo manualmente.'); saveFailedOrder(payload); }
       });
       // focus
@@ -2197,7 +2384,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       // close on Esc
       const onKey = (ev)=>{ if (ev.key === 'Escape') { modal.remove(); window.removeEventListener('keydown', onKey); } };
       window.addEventListener('keydown', onKey);
-    }catch(err){ console.error('showOrderModal', err); showAlert('No se pudo mostrar el modal del pedido — revisa la consola.'); }
+    }catch(err){ console.error('showOrderModal', err); showAlert('No se pudo mostrar el modal del pedido â€” revisa la consola.'); }
   }
 
   function copyOrderToClipboard(payload){
@@ -2205,12 +2392,12 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       const lines = (payload.items||[]).map(i=>{
         const unitType = normalizeSaleUnit(i?.meta?.unit_type || i?.meta?.sale_unit || i?.meta?.unit);
         const qtyLabel = formatQtyLabel(i?.qty, unitType, i?.meta || {});
-        return `${qtyLabel} × ${i.meta?.name || i.id} — $${Number(i.meta?.price||0).toFixed(2)}`;
+        return `${qtyLabel} Ã— ${i.meta?.name || i.id} â€” $${Number(i.meta?.price||0).toFixed(2)}`;
       });
       const txt = `Pedido:\n${lines.join('\n')}\n\nTotal: $${Number(payload.total||0).toFixed(2)}`;
       navigator.clipboard?.writeText ? navigator.clipboard.writeText(txt) : (function(){ const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); })();
       showToast('Resumen del pedido copiado al portapapeles.');
-    }catch(e){ console.error('copyOrder', e); showAlert('No se pudo copiar el pedido automáticamente.'); }
+    }catch(e){ console.error('copyOrder', e); showAlert('No se pudo copiar el pedido automÃ¡ticamente.'); }
   }
 
   async function  reAttemptOrder(payload){
@@ -2310,7 +2497,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         }catch(e){ console.warn('retryStoredOrders item failed', e); }
       }
       if(successCount > 0){
-        // remove only those that were successfully sent: simplest approach — clear all if any succeeded
+        // remove only those that were successfully sent: simplest approach â€” clear all if any succeeded
         clearFailedOrders();
         showToast(`Reintentos completados: ${successCount}`, 4000);
         // give server a moment then refresh to let admin see them
@@ -2318,7 +2505,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       } else {
         showToast('No se pudo enviar ninguno de los pedidos guardados', 4000);
       }
-    }catch(e){ console.warn('retryStoredOrders failed', e); showToast('Reintento falló', 3000); }
+    }catch(e){ console.warn('retryStoredOrders failed', e); showToast('Reintento fallÃ³', 3000); }
   }
 
   // Try to sync locally-stored failed orders directly to the server backup endpoint.
@@ -2380,7 +2567,7 @@ function startAutoRefresh() {
   const modeEl = document.getElementById('autoMode');
   if (modeEl) modeEl.textContent = mode;
   if (!enabled) {
-    if (countdownEl) countdownEl.textContent = '—';
+    if (countdownEl) countdownEl.textContent = 'â€”';
     return;
   }
   countdown = AUTO_REFRESH_SECONDS;
@@ -2411,12 +2598,12 @@ function stopAutoRefresh() {
 
 function updateLastUpdated(local = false) {
   const el = document.getElementById('lastUpdated');
-  if (!el) return; // element removed — nothing to do
+  if (!el) return; // element removed â€” nothing to do
   const when = new Date();
-  el.textContent = `Última actualización: ${when.toLocaleTimeString()} ${local ? '(local)' : ''}`;
+  el.textContent = `Ãšltima actualizaciÃ³n: ${when.toLocaleTimeString()} ${local ? '(local)' : ''}`;
 }
 
-// UI bindings for auto-refresh control — resilient when the visible toggle is removed
+// UI bindings for auto-refresh control â€” resilient when the visible toggle is removed
 (function bindAutoControls(){
   const toggle = document.getElementById('autoRefreshToggle');
   const modeEl = document.getElementById('autoMode');
@@ -2449,7 +2636,7 @@ function updateLastUpdated(local = false) {
     return;
   }
 
-  // Legacy path: toggle exists — keep original behavior but defensive
+  // Legacy path: toggle exists â€” keep original behavior but defensive
   try{
     const enabled = (storedEnabled === null) ? true : (storedEnabled === 'true');
     toggle.checked = enabled;
@@ -2499,7 +2686,7 @@ async function checkBackendConnectivity(){
     // show a non-intrusive banner so the user knows filters/promotions may not load
     try{
       if (!document.getElementById('__backend_status')){
-        const b = document.createElement('div'); b.id='__backend_status'; b.style.position='fixed'; b.style.top='72px'; b.style.left='50%'; b.style.transform='translateX(-50%)'; b.style.zIndex='3500'; b.style.background='linear-gradient(90deg,#fff7ed,#fff)'; b.style.border='1px solid rgba(242,107,56,0.12)'; b.style.padding='8px 12px'; b.style.borderRadius='8px'; b.style.boxShadow='0 10px 30px rgba(2,6,23,0.06)'; b.textContent='Advertencia: no se pudo conectar al backend — algunas funciones (filtros, promos) pueden no funcionar.'; document.body.appendChild(b);
+        const b = document.createElement('div'); b.id='__backend_status'; b.style.position='fixed'; b.style.top='72px'; b.style.left='50%'; b.style.transform='translateX(-50%)'; b.style.zIndex='3500'; b.style.background='linear-gradient(90deg,#fff7ed,#fff)'; b.style.border='1px solid rgba(242,107,56,0.12)'; b.style.padding='8px 12px'; b.style.borderRadius='8px'; b.style.boxShadow='0 10px 30px rgba(2,6,23,0.06)'; b.textContent='Advertencia: no se pudo conectar al backend â€” algunas funciones (filtros, promos) pueden no funcionar.'; document.body.appendChild(b);
       }
     }catch(e){/* ignore DOM errors */}
   } else {
@@ -2526,6 +2713,140 @@ function parseJwt(token){
     const json = decodeURIComponent(atob(b).split('').map(function(c){ return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2); }).join(''));
     return JSON.parse(json);
   }catch(e){ return null; }
+}
+
+function getTokenEmail(){
+  try{
+    const token = getToken();
+    if (!token) return null;
+    const payload = parseJwt(token) || {};
+    const email = payload.sub || payload.email || null;
+    return email ? String(email).trim().toLowerCase() : null;
+  }catch(_){ return null; }
+}
+
+function getOrderEmail(order){
+  if (!order || typeof order !== 'object') return null;
+  try{
+    const direct = order.user_email || order.userEmail;
+    if (direct) return String(direct).trim().toLowerCase();
+  }catch(_){ }
+  try{
+    const preview = order._token_preview || order.token_preview || null;
+    const email = preview && (preview.email || preview.sub);
+    if (email) return String(email).trim().toLowerCase();
+  }catch(_){ }
+  return null;
+}
+
+function normalizeOrderItemForCart(item){
+  if (!item || typeof item !== 'object') return null;
+  const idRaw = item.id ?? item.product_id ?? item.productId ?? null;
+  if (idRaw === null || idRaw === undefined || String(idRaw).trim() === '') return null;
+  const qtyRaw = Number(item.qty ?? item.quantity ?? 1);
+  const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1;
+  const meta = (item.meta && typeof item.meta === 'object') ? Object.assign({}, item.meta) : {};
+  const normalized = {
+    id: String(idRaw),
+    qty,
+    meta
+  };
+  normalized.key = String(item.key || meta.key || getCartKey(normalized));
+  if (!normalized.meta.name) {
+    const prod = products.find(p => String(p.id ?? p._id) === normalized.id);
+    if (prod) normalized.meta.name = prod.nombre || prod.name || normalized.id;
+  }
+  return normalized;
+}
+
+async function fetchOrdersForRepeat(token){
+  const headers = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const tryUrls = [];
+  try{
+    const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
+    if (typeof API_ORIGIN === 'string' && API_ORIGIN) {
+      if (pageOrigin && pageOrigin !== API_ORIGIN) {
+        tryUrls.push(API_ORIGIN + '/orders?source=web&limit=200');
+        tryUrls.push(pageOrigin + '/orders?source=web&limit=200');
+      } else {
+        tryUrls.push((pageOrigin || API_ORIGIN) + '/orders?source=web&limit=200');
+      }
+    } else if (pageOrigin) {
+      tryUrls.push(pageOrigin + '/orders?source=web&limit=200');
+    }
+  }catch(_){ }
+  tryUrls.push('/orders?source=web&limit=200');
+
+  for (const url of tryUrls){
+    try{
+      const res = await fetch(url, { method: 'GET', headers, mode: 'cors', cache: 'no-store' });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (Array.isArray(data)) return data;
+    }catch(_){ }
+  }
+  return [];
+}
+
+function updateRepeatOrderButton(){
+  const btn = document.getElementById('repeatLastOrderBtn');
+  if (!btn) return;
+  const email = getTokenEmail();
+  if (!email){
+    btn.hidden = true;
+    btn.disabled = true;
+    return;
+  }
+  btn.hidden = false;
+  btn.disabled = false;
+  btn.textContent = 'Repetir ultimo pedido';
+}
+
+async function repeatLastOrder(){
+  const btn = document.getElementById('repeatLastOrderBtn');
+  const token = getToken();
+  const email = getTokenEmail();
+  if (!token || !email){
+    await showAlert('Inicia sesion para repetir un pedido anterior.', 'warning');
+    return;
+  }
+
+  const previousText = btn ? btn.textContent : '';
+  try{
+    if (btn){ btn.disabled = true; btn.textContent = 'Buscando pedido...'; }
+    const rows = await fetchOrdersForRepeat(token);
+    const ownOrders = (rows || []).filter(r => getOrderEmail(r) === email);
+    ownOrders.sort((a, b) => {
+      const ta = new Date(a && a.created_at ? a.created_at : 0).getTime();
+      const tb = new Date(b && b.created_at ? b.created_at : 0).getTime();
+      return tb - ta;
+    });
+    const latest = ownOrders[0];
+    if (!latest){
+      await showAlert('No encontramos pedidos anteriores para tu cuenta.', 'info');
+      return;
+    }
+    const items = (Array.isArray(latest.items) ? latest.items : [])
+      .map(normalizeOrderItemForCart)
+      .filter(Boolean);
+    if (!items.length){
+      await showAlert('Tu ultimo pedido no tiene items reutilizables.', 'warning');
+      return;
+    }
+    writeCart(items);
+    renderCart();
+    openCart();
+    showToast('Cargamos tu ultimo pedido en el carrito.', 3500);
+  }catch(e){
+    console.warn('repeatLastOrder failed', e);
+    await showAlert('No se pudo repetir el ultimo pedido en este momento.', 'error');
+  }finally{
+    if (btn){
+      btn.disabled = false;
+      btn.textContent = previousText || 'Repetir ultimo pedido';
+    }
+  }
 }
 
 // Quick server-side token validator for debugging
@@ -2572,7 +2893,7 @@ function showToast(message, timeout = 3000){
   }catch(e){ console.warn('showToast failed', e); }
 }
 
-// Modal / dialog helpers (reusable) — enhanced styles and variants
+// Modal / dialog helpers (reusable) â€” enhanced styles and variants
 function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', value: true, primary: true }], dismissible = true, type = ''} = {}){
   return new Promise((resolve) => {
     try{
@@ -2601,8 +2922,8 @@ function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', v
         document.head.appendChild(s);
       }
 
-      // small map for emoji icons — keeps things fast and dependency-free
-      const iconMap = { info: 'ℹ️', success: '✔️', warning: '⚠️', danger: '✖️' };
+      // small map for emoji icons â€” keeps things fast and dependency-free
+      const iconMap = { info: 'â„¹ï¸', success: 'âœ”ï¸', warning: 'âš ï¸', danger: 'âœ–ï¸' };
       const iconHtml = type ? ('<span class="dialog-icon">' + (iconMap[type] || '') + '</span>') : '';
 
       const overlay = document.createElement('div'); overlay.className = '__dialog_overlay'; overlay.id = '__dialog_overlay';
@@ -2646,14 +2967,14 @@ function showGuestModal(){
       const overlay = document.createElement('div'); overlay.className='__dialog_overlay'; overlay.style.zIndex = 3300;
       overlay.innerHTML = `
         <div class="__dialog __dialog--info" role="dialog" aria-modal="true" aria-label="Datos de contacto (invitado)">
-          <div class="dialog-header"><span class="dialog-icon">ℹ️</span><h3>Datos de contacto (invitado)</h3></div>
+          <div class="dialog-header"><span class="dialog-icon">â„¹ï¸</span><h3>Datos de contacto (invitado)</h3></div>
           <div class="dialog-body">
             <div style="display:flex;flex-direction:column;gap:10px">
               <input id="__gname" type="text" placeholder="Nombre (opcional)" />
               <input id="__gemail" type="email" placeholder="Email (obligatorio)" />
               <input id="__gbarrio" type="text" placeholder="Barrio (opcional)" />
               <input id="__gcalle" type="text" placeholder="Calle (opcional)" />
-              <input id="__gnumero" type="text" placeholder="Numeración (opcional)" />
+              <input id="__gnumero" type="text" placeholder="NumeraciÃ³n (opcional)" />
             </div>
           </div>
           <div class="actions">
@@ -2721,13 +3042,27 @@ async function fetchWithTimeout(resource, options = {}, timeout = 10000){
   }
 }
 
-function updateAuthUI(){ const btn = document.getElementById('authButton'); const token = getToken(); if (!btn) return; if (token){ const payload = parseJwt(token) || {}; const email = payload.sub || payload.email || 'Cuenta'; btn.textContent = `Hola ${email}`; btn.classList.add('logged'); } else { btn.textContent = 'Login'; btn.classList.remove('logged'); } }
-async function doRegister(){ const name=document.getElementById('regName').value.trim(); const email=document.getElementById('regEmail').value.trim(); const barrio=document.getElementById('regBarrio').value.trim(); const calle=document.getElementById('regCalle').value.trim(); const numero=document.getElementById('regNumero').value.trim(); const password=document.getElementById('regPassword').value; const err=document.getElementById('regError'); err.textContent=''; if(!name||!email||!password){ err.textContent='Nombre, email y contraseña son obligatorios'; return; } try{ const res=await fetchWithTimeout(AUTH_REGISTER,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({full_name:name,email,barrio,calle,numeracion:numero,password})},10000); if(res.status===400){ const js=await res.json().catch(()=>({})); err.textContent=js.detail||'Error'; return; } if(!res.ok){ err.textContent='Registro falló'; return; } await doLogin(email,password); closeAuthModal(); }catch(e){ if (e && e.name === 'AbortError') err.textContent = 'Tiempo de espera agotado'; else err.textContent='No se pudo conectar con el servidor'; } }
+function updateAuthUI(){
+  const btn = document.getElementById('authButton');
+  const token = getToken();
+  if (!btn) return;
+  if (token){
+    const payload = parseJwt(token) || {};
+    const email = payload.sub || payload.email || 'Cuenta';
+    btn.textContent = `Hola ${email}`;
+    btn.classList.add('logged');
+  } else {
+    btn.textContent = 'Login';
+    btn.classList.remove('logged');
+  }
+  updateRepeatOrderButton();
+}
+async function doRegister(){ const name=document.getElementById('regName').value.trim(); const email=document.getElementById('regEmail').value.trim(); const barrio=document.getElementById('regBarrio').value.trim(); const calle=document.getElementById('regCalle').value.trim(); const numero=document.getElementById('regNumero').value.trim(); const password=document.getElementById('regPassword').value; const err=document.getElementById('regError'); err.textContent=''; if(!name||!email||!password){ err.textContent='Nombre, email y contraseÃ±a son obligatorios'; return; } try{ const res=await fetchWithTimeout(AUTH_REGISTER,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({full_name:name,email,barrio,calle,numeracion:numero,password})},10000); if(res.status===400){ const js=await res.json().catch(()=>({})); err.textContent=js.detail||'Error'; return; } if(!res.ok){ err.textContent='Registro fallÃ³'; return; } await doLogin(email,password); closeAuthModal(); }catch(e){ if (e && e.name === 'AbortError') err.textContent = 'Tiempo de espera agotado'; else err.textContent='No se pudo conectar con el servidor'; } }
 async function doLogin(emailArg,passwordArg){
   const email = emailArg || document.getElementById('loginEmail').value.trim();
   const password = passwordArg || document.getElementById('loginPassword').value;
   const err = document.getElementById('loginError'); err.textContent = '';
-  if (!email || !password) { err.textContent = 'Email y contraseña son obligatorios'; return; }
+  if (!email || !password) { err.textContent = 'Email y contraseÃ±a son obligatorios'; return; }
   try {
     const form = new URLSearchParams(); form.append('username', email); form.append('password', password);
     const res = await fetchWithTimeout(AUTH_TOKEN, { method: 'POST', body: form }, 10000);
@@ -2737,7 +3072,7 @@ async function doLogin(emailArg,passwordArg){
       saveToken(data.access_token);
       updateAuthUI();
       // perform quick token check against the server so we can surface any mismatch early
-      try{ debugWhoami().then(d => { try{ console.debug('[debugWhoami] result', d); if (d && d.ok && d.payload) { showToast(`Bienvenido, ${d.payload.full_name || d.payload.sub || email}`); } else { showToast('Bienvenido — pero el token no fue validado en el servidor', 'warning'); } }catch(_){}}).catch(e=>{ console.warn('debugWhoami failed', e); }); }catch(_){ }
+      try{ debugWhoami().then(d => { try{ console.debug('[debugWhoami] result', d); if (d && d.ok && d.payload) { showToast(`Bienvenido, ${d.payload.full_name || d.payload.sub || email}`); } else { showToast('Bienvenido â€” pero el token no fue validado en el servidor', 'warning'); } }catch(_){}}).catch(e=>{ console.warn('debugWhoami failed', e); }); }catch(_){ }
       // derive display name from token if available
       let name = email;
       try { const p = parseJwt(data.access_token); if (p) name = p.full_name || p.name || p.sub || p.email || email; } catch (e) {}
@@ -2757,7 +3092,7 @@ function logout(){
   // ensure modal closed and UI refreshed
   try{ if(typeof closeAuthModal==='function') closeAuthModal(); }catch(e){}
   updateAuthUI();
-  try{ showToast('Sesión cerrada'); }catch(e){}
+  try{ showToast('SesiÃ³n cerrada'); }catch(e){}
 }
 function _authOutsideClick(e){
   const m = document.getElementById('authModal');
@@ -2797,11 +3132,16 @@ function closeAuthModal(){
 document.addEventListener('DOMContentLoaded', ()=>{
   updateAuthUI();
   const authBtn = document.getElementById('authButton');
+  const repeatBtn = document.getElementById('repeatLastOrderBtn');
   if (authBtn) authBtn.addEventListener('click', async ()=>{
     const token = getToken();
-    if (token){ if (await showConfirm('Cerrar sesión?')) { logout(); } return; }
+    if (token){ if (await showConfirm('Cerrar sesiÃ³n?')) { logout(); } return; }
     openAuthModal();
   });
+  if (repeatBtn && !repeatBtn.dataset.bound) {
+    repeatBtn.dataset.bound = '1';
+    repeatBtn.addEventListener('click', ()=>{ repeatLastOrder(); });
+  }
   const authClose = document.getElementById('authClose'); if (authClose) authClose.addEventListener('click', closeAuthModal);
   const tabLogin = document.getElementById('tabLogin'); const tabRegister = document.getElementById('tabRegister');
   if (tabLogin && tabRegister){
