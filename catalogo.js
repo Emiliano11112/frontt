@@ -277,7 +277,7 @@ function renderFilterButtons(){
     const active = loadActiveFilters();
 
     const allBtn = document.createElement('button'); allBtn.dataset.filter = 'all'; allBtn.textContent = 'Todos';
-    allBtn.addEventListener('click', ()=>{ currentFilter = 'all'; saveActiveFilters([]); render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(b=>b.classList.remove('active')); allBtn.classList.add('active'); });
+    allBtn.addEventListener('click', ()=>{ currentFilter = 'all'; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(b=>b.classList.remove('active')); allBtn.classList.add('active'); });
     container.appendChild(allBtn);
 
     // Manage filters button (opens modal to choose which filters to apply)
@@ -294,15 +294,21 @@ function renderFilterButtons(){
     // compute full list of filters: admin filters or fallbacks
     const allFilters = (filters && filters.length) ? filters.map(f => ({ value: String(f.value || f.name || '').toLowerCase(), name: String(f.name || f.value || '') })) : [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}].map(d=>({ value: d.v, name: d.t }));
 
-    // Always show every admin filter button; active filters control highlighting and data filtering.
+    // Show only selected filters (active). Non-selected filters stay hidden until chosen from modal.
     const activeFilters = loadActiveFilters();
-    const seen = new Set();
-    const listToShow = [];
+    const byValue = new Map();
     for (const f of (allFilters || [])) {
       const value = String(f.value || '').toLowerCase();
-      if (!value || seen.has(value)) continue;
-      seen.add(value);
-      listToShow.push({ value, name: String(f.name || f.value || value) });
+      if (!value || byValue.has(value)) continue;
+      byValue.set(value, { value, name: String(f.name || f.value || value) });
+    }
+    const listToShow = [];
+    const seenSelected = new Set();
+    for (const valRaw of (activeFilters || [])) {
+      const val = String(valRaw || '').toLowerCase();
+      if (!val || seenSelected.has(val) || !byValue.has(val)) continue;
+      seenSelected.add(val);
+      listToShow.push(byValue.get(val));
     }
 
     for(const f of listToShow){
@@ -310,17 +316,16 @@ function renderFilterButtons(){
         const b = document.createElement('button');
         b.dataset.filter = f.value || String(f.name || '').toLowerCase();
         b.textContent = f.name || f.value;
-        b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; saveActiveFilters([String(b.dataset.filter).toLowerCase()]); render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
+        b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
         // mark active if currentFilter matches
         const val = (b.dataset.filter || '').toLowerCase();
-        if ((currentFilter && currentFilter.toLowerCase() === val) || (activeFilters || []).includes(val)){ b.classList.add('active'); allBtn.classList.remove('active'); }
+        if ((currentFilter && currentFilter.toLowerCase() === val)){ b.classList.add('active'); allBtn.classList.remove('active'); }
         container.appendChild(b);
       }catch(e){ console.warn('[catalogo] renderFilterButtons: failed creating button for filter', f, e); }
     }
 
-    // mark 'Todos' active when there is no specific current filter and there are no active filters
-    const _act = loadActiveFilters();
-    if((!currentFilter || currentFilter === 'all') && !(_act && _act.length)){
+    // mark 'Todos' active when there is no specific current filter
+    if(!currentFilter || currentFilter === 'all'){
       Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active'));
       allBtn.classList.add('active');
     }
@@ -802,8 +807,12 @@ function render({ animate = false } = {}) {
     const prodCats = (p.categoria || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
     const activeFilters = loadActiveFilters();
-    // If no active filters selected, treat as no filtering (show all). Otherwise match any selected filter.
-    const matchesFilter = (!activeFilters || activeFilters.length === 0) || activeFilters.some(fv => ((assigned && assigned.includes(fv)) || prodCats.includes(fv)));
+    const focusedFilter = (currentFilter && String(currentFilter).toLowerCase() !== 'all')
+      ? String(currentFilter).toLowerCase()
+      : '';
+    const filtersToMatch = focusedFilter ? [focusedFilter] : activeFilters;
+    // If no selected filters, show all. If one chip is focused, filter only by that chip.
+    const matchesFilter = (!filtersToMatch || filtersToMatch.length === 0) || filtersToMatch.some(fv => ((assigned && assigned.includes(fv)) || prodCats.includes(fv)));
     return matchesSearch && matchesFilter;
   });
 

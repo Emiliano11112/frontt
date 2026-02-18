@@ -473,5 +473,43 @@ body{
 /* lock body scroll when modal open */
 body.modal-open{overflow:hidden}
 
+/* Shared CTA tuning: same Add button style on mobile and desktop */
+.product-actions,
+.card-actions{
+  display:flex;
+  align-items:stretch;
+  gap:10px;
+}
+
+.card-actions .btn-add,
+.product-actions .btn-add,
+.product-actions .btn-primary{
+  width:100%;
+  min-height:48px;
+  padding:12px 16px;
+  border-radius:14px;
+  font-size:16px;
+  font-weight:800;
+  line-height:1;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  touch-action:manipulation;
+  letter-spacing:0.2px;
+  box-shadow:0 14px 30px rgba(6,95,70,0.18);
+}
+
+.card-actions .btn-add{
+  background:linear-gradient(90deg,#10b981,#059669);
+  color:#fff;
+  border:0;
+}
+
+.card-actions .btn-add:active,
+.product-actions .btn-add:active,
+.product-actions .btn-primary:active{
+  transform:translateY(1px) scale(0.99);
+}
+
 
 
