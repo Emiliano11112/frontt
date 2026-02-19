@@ -92,6 +92,25 @@ function formatQtyLabel(qty, unitType, meta){
 let promotions = [];
 // consumos (admin-managed immediate-consumption discounts)
 let consumos = [];
+const DEFAULT_FALLBACK_IMAGE = 'images/icon.png';
+const PROMOTIONS_CACHE_KEY = 'catalog:promotions_cache_v2';
+
+function loadPromotionsCache(){
+  try{
+    const raw = localStorage.getItem(PROMOTIONS_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    const items = Array.isArray(parsed?.items) ? parsed.items : (Array.isArray(parsed) ? parsed : []);
+    return normalizePromotionsList(items);
+  }catch(_){ return []; }
+}
+
+function savePromotionsCache(items){
+  try{
+    const normalized = normalizePromotionsList(Array.isArray(items) ? items : []);
+    localStorage.setItem(PROMOTIONS_CACHE_KEY, JSON.stringify({ ts: Date.now(), items: normalized }));
+  }catch(_){ }
+}
 
 function parsePromoDate(value){
   if (!value) return null;
@@ -202,43 +221,46 @@ async function fetchConsumos(){
 }
 
 async function fetchPromotions(){
+  // Only use promotions endpoints (NOT /api/promos, which is promo images).
+  // Prefer backend canonical source first.
   const tryUrls = [
-    '/api/promos',
-    '/promotions',
-    '/promociones',
-    `${API_ORIGIN}/api/promos`,
     `${API_ORIGIN}/promotions`,
     `${API_ORIGIN}/promociones`,
-    'promotions.json',
-    'promotions.json' // fallback to local file in workspace
+    '/promotions',
+    '/promociones'
   ];
+  const seenUrls = new Set();
   for (const url of tryUrls){
+    if (!url || seenUrls.has(url)) continue;
+    seenUrls.add(url);
     try {
-      const res = await fetch(url, { mode: 'cors' });
+      const res = await fetch(url, { mode: 'cors', cache: 'no-store' });
       if (!res.ok) continue;
+      const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+      if (!contentType.includes('application/json')) continue;
       const data = await res.json();
       // tolerate different payload shapes: array, { promotions: [...] }, { data: [...] }
-      let list = [];
+      let list = null;
       if (Array.isArray(data)) list = data;
       else if (data && Array.isArray(data.promotions)) list = data.promotions;
       else if (data && Array.isArray(data.data)) list = data.data;
+      if (!Array.isArray(list)) continue;
 
+      // Important: if backend intentionally returns [] we keep it as authoritative
+      // and do not resurrect stale local promos.
       const normalized = normalizePromotionsList(list);
-      if (normalized.length > 0){ promotions = normalized; return promotions; }
+      promotions = normalized;
+      savePromotionsCache(normalized);
+      return promotions;
     } catch (err) { /* ignore and try next */ }
   }
-  // fallback: try promotions saved by the admin UI in localStorage (same-origin admin)
-  try {
-    const stored = localStorage.getItem('admin_promotions_v1');
-    if (stored) {
-      const data = JSON.parse(stored);
-      const normalized = normalizePromotionsList(data);
-      if (normalized.length > 0) {
-        promotions = normalized;
-        return promotions;
-      }
-    }
-  } catch (err) { /* ignore parsing errors */ }
+
+  // fallback: use last known-good backend snapshot cache only
+  const cached = loadPromotionsCache();
+  if (cached.length){
+    promotions = cached;
+    return promotions;
+  }
 
   promotions = [];
   return promotions;
@@ -254,6 +276,7 @@ try{
         // admin posts { action: 'promotions-updated', promos }
         if (ev.data.action === 'promotions-updated' && Array.isArray(ev.data.promos)){
           promotions = normalizePromotionsList(ev.data.promos);
+          savePromotionsCache(promotions);
           console.log('[catalogo] promotions updated via BroadcastChannel', promotions);
           // re-render catalog to reflect promotion changes
           try{ render({ animate: true }); }catch(e){}
@@ -373,7 +396,7 @@ function renderFilterButtons(){
     container.appendChild(manageBtn);
 
     // compute full list of filters: admin filters or fallbacks
-    const allFilters = (filters && filters.length) ? filters.map(f => ({ value: String(f.value || f.name || '').toLowerCase(), name: String(f.name || f.value || '') })) : [{v:'lacteos', t:'LÃ¡cteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}].map(d=>({ value: d.v, name: d.t }));
+    const allFilters = (filters && filters.length) ? filters.map(f => ({ value: String(f.value || f.name || '').toLowerCase(), name: String(f.name || f.value || '') })) : [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}].map(d=>({ value: d.v, name: d.t }));
 
     // Show only selected filters (active). Non-selected filters stay hidden until chosen from modal.
     const activeFilters = loadActiveFilters();
@@ -435,7 +458,7 @@ async function showFilterManagerModal(){
 
     if(document.getElementById('__filters_modal')) return document.getElementById('__filters_modal').classList.add('open');
     const filters = loadAdminFilters();
-    const defaults = [{v:'lacteos', t:'LÃ¡cteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}];
+    const defaults = [{v:'lacteos', t:'Lácteos'},{v:'fiambres', t:'Fiambres'},{v:'complementos', t:'Complementos'}];
     const all = (filters && filters.length) ? filters.map(f=>({ value: String(f.value||f.name||'').toLowerCase(), name: String(f.name||f.value||'') })) : defaults.map(d=>({ value: d.v, name: d.t }));
     const active = loadActiveFilters();
 
@@ -447,7 +470,7 @@ async function showFilterManagerModal(){
           return '<label class="f-item"><input type="checkbox" value="' + escapeHtml(f.value) + '" ' + checked + '><div style="flex:1">' + escapeHtml(f.name) + '</div></label>';
         }).join('');
       }
-      return '<div style="color:var(--muted);padding:12px">No hay filtros disponibles desde el panel de administraciÃ³n.</div>';
+      return '<div style="color:var(--muted);padding:12px">No hay filtros disponibles desde el panel de administración.</div>';
     })();
 
     overlay.innerHTML = `
@@ -455,9 +478,9 @@ async function showFilterManagerModal(){
         <header>
           <div style="display:flex;flex-direction:column">
             <h3 style="margin:0">Administrar filtros</h3>
-            <div class="subtitle">SeleccionÃ¡ uno o varios filtros para aplicar a la vista de productos.</div>
+            <div class="subtitle">Seleccioná uno o varios filtros para aplicar a la vista de productos.</div>
           </div>
-          <button class="fm-close" aria-label="Cerrar">âœ•</button>
+          <button class="fm-close" aria-label="Cerrar">✕</button>
         </header>
         <div class="filters-list">
           ${itemsHtml}
@@ -502,7 +525,7 @@ async function showFilterManagerModal(){
     overlay.querySelector('.fm-close').addEventListener('click', ()=> overlay.remove());
     overlay.querySelector('.fm-cancel').addEventListener('click', ()=> overlay.remove());
     overlay.querySelector('.fm-select-all').addEventListener('click', ()=>{ overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = true); });
-    overlay.querySelector('.fm-reset').addEventListener('click', ()=>{ saveActiveFilters([]); overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = false); showToast('ConfiguraciÃ³n de filtros restaurada (ninguno seleccionado)'); if (overlay.querySelector('.fm-save')) overlay.querySelector('.fm-save').disabled = false; });
+    overlay.querySelector('.fm-reset').addEventListener('click', ()=>{ saveActiveFilters([]); overlay.querySelectorAll('.filters-list input[type=checkbox]').forEach(i=>i.checked = false); showToast('Configuración de filtros restaurada (ninguno seleccionado)'); if (overlay.querySelector('.fm-save')) overlay.querySelector('.fm-save').disabled = false; });
 
     overlay.querySelector('.fm-save').addEventListener('click', ()=>{
       try{
@@ -688,7 +711,7 @@ async function openPromotionDetail(promoId){
 }
 
 function normalize(p) {
-  // soporta respuesta en espaÃ±ol o inglÃ©s y normaliza valores
+  // soporta respuesta en español o inglés y normaliza valores
   const name = (p.nombre || p.name || "").trim();
   const description = (p.descripcion || p.description || "").trim();
   const category = (p.categoria || p.category || "").trim();
@@ -696,7 +719,7 @@ function normalize(p) {
   const saleUnit = getSaleUnitFromObj(p);
   let image = p.imagen || p.image || p.image_url || p.imageUrl || null;
   // Si la ruta es relativa (empieza por '/') no anteponer el origen remoto cuando los
-  // datos proceden del `products.json` local â€” asÃ­ los assets locales se resuelven correctamente
+  // datos proceden del `products.json` local — así los assets locales se resuelven correctamente
   if (image) {
     // Normalize local uploads path so it resolves correctly when the page
     // is served from `/frontend/` (dev server) or from site root.
@@ -848,12 +871,12 @@ async function fetchProducts({ showSkeleton = true } = {}) {
         await fetchPromotions();
         await fetchConsumos();
         render({ animate: true });
-        showMessage('Mostrando catÃ¡logo desde cachÃ© local (offline).', 'info');
+        showMessage('Mostrando catálogo desde caché local (offline).', 'info');
         return;
       }
     } catch (cacheErr) { console.warn('cache read failed', cacheErr); }
 
-    showMessage('No se pudieron cargar productos desde el backend. Usando catÃ¡logo local si estÃ¡ disponible. âš ï¸', 'warning');
+    showMessage('No se pudieron cargar productos desde el backend. Usando catálogo local si está disponible. ⚠️', 'warning');
     try {
       const local = await (await fetch('products.json')).json();
       productsSource = 'local';
@@ -1049,7 +1072,7 @@ function render({ animate = false } = {}) {
 
           const card = document.createElement('article');
           card.className = 'consumo-card reveal';
-          const imgSrc = match.imagen || match.image || 'images/placeholder.png';
+          const imgSrc = match.imagen || match.image || DEFAULT_FALLBACK_IMAGE;
           const cType = getConsumoType(c);
           const rawLabel = (c.discount || c.value) ? (cType === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : `$${Number(c.value || 0).toFixed(2)}`) : 'Consumo';
           const basePrice = Number(match.precio ?? match.price ?? 0) || 0;
@@ -1113,7 +1136,7 @@ function render({ animate = false } = {}) {
               if (discountedPrice === null) discountedPrice = base;
             }catch(_){ discountedPrice = null; }
             const available = cobj ? Number(cobj.qty || 0) : null;
-            if (available !== null && available <= 0) { showAlert('Este consumo estÃ¡ agotado', 'error'); return; }
+            if (available !== null && available <= 0) { showAlert('Este consumo está agotado', 'error'); return; }
             try{ 
               // Use quantity selector so consumos can be added properly to cart
               if (typeof showQuantitySelector === 'function') {
@@ -1132,13 +1155,13 @@ function render({ animate = false } = {}) {
     }
   }catch(e){ /* ignore consumos rendering errors */ }
 
-  /* CatÃ¡logo: show a dedicated header with product count */
+  /* Catálogo: show a dedicated header with product count */
   let catalogSection = document.getElementById('catalogSection');
   if (!catalogSection) {
     catalogSection = document.createElement('section');
     catalogSection.id = 'catalogSection';
     catalogSection.className = 'catalog-section';
-    catalogSection.innerHTML = '<div class="catalog-header"><h2 class="catalog-title">CatÃ¡logo <small id="catalogCount" class="catalog-sub"></small></h2></div><div class="catalog-grid-wrap" id="catalogGridWrap"></div>';
+    catalogSection.innerHTML = '<div class="catalog-header"><h2 class="catalog-title">Catálogo <small id="catalogCount" class="catalog-sub"></small></h2></div><div class="catalog-grid-wrap" id="catalogGridWrap"></div>';
     try{
       if (grid && grid.parentNode) grid.parentNode.insertBefore(catalogSection, grid);
       else document.body.appendChild(catalogSection);
@@ -1185,7 +1208,7 @@ function render({ animate = false } = {}) {
         card.setAttribute('tabindex', '0');
         card.setAttribute('role', 'button');
         card.setAttribute('aria-label', 'Ver detalle de la promocion ' + String(pr.name || ''));
-        const imgSrc = (match && (match.imagen || match.image)) ? (match.imagen || match.image) : 'images/placeholder.png';
+        const imgSrc = (match && (match.imagen || match.image)) ? (match.imagen || match.image) : DEFAULT_FALLBACK_IMAGE;
         // compute readable promo label: support percent as fraction (0.12) or as whole number (12)
         let promoLabel = 'Oferta';
         const validityInfo = getPromotionValidityInfo(pr);
@@ -1202,9 +1225,9 @@ function render({ animate = false } = {}) {
         } catch (e) { promoLabel = 'Oferta'; }
         card.innerHTML = `
           <div class="product-thumb"><img src="${imgSrc}" alt="${escapeHtml(pr.name || 'Promocion')}"></div>
-          <div class="product-info">
+            <div class="product-info">
             <div class="promo-head">
-              <h3 class="product-title">${escapeHtml(pr.name || 'PromociÃ³n')}</h3>
+              <h3 class="product-title">${escapeHtml(pr.name || 'Promoción')}</h3>
               <div class="price-display">${promoLabel}</div>
             </div>
             <div class="product-sub">${escapeHtml(pr.description || (match ? (match.descripcion || '') : ''))}</div>
@@ -1212,6 +1235,10 @@ function render({ animate = false } = {}) {
             ${validityInfo.text ? ('<div class="' + validityClass + '">' + escapeHtml(validityInfo.text) + '</div>') : ''}
             <div class="product-actions"><button class="btn btn-primary promo-view" data-pid="${escapeHtml(String(pr.id))}">Ver promo</button></div>
           </div>`;
+        try{
+          const promoImg = card.querySelector('img');
+          if (promoImg) promoImg.addEventListener('error', () => { promoImg.src = DEFAULT_FALLBACK_IMAGE; });
+        }catch(_){ }
         promoFrag.appendChild(card);
       } catch (e) { /* ignore individual promo errors */ }
     });
@@ -1230,7 +1257,7 @@ function render({ animate = false } = {}) {
     card.className = 'product-card';
     card.setAttribute('tabindex','0');
     card.setAttribute('role','button');
-    card.setAttribute('aria-label', `${p.nombre || 'producto'} â€” ver imagen`);
+    card.setAttribute('aria-label', `${p.nombre || 'producto'} — ver imagen`);
 
     if (animate && !reduceMotion) {
       card.classList.add('reveal');
@@ -1265,7 +1292,7 @@ function render({ animate = false } = {}) {
     const outOfStock = Number.isNaN(displayStock) ? false : (displayStock <= 0);
     if (outOfStock) {
       card.classList.add('out-of-stock');
-      card.setAttribute('aria-label', `${p.nombre || 'producto'} â€” sin stock`);
+      card.setAttribute('aria-label', `${p.nombre || 'producto'} — sin stock`);
     }
 
     // find per-product discount if present on the product object
@@ -1413,7 +1440,7 @@ function render({ animate = false } = {}) {
       addBtn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); addBtn.click(); } });
     }
 
-    // accessible interactions: no lightbox on click â€” emulate lift animation on click/tap
+    // accessible interactions: no lightbox on click — emulate lift animation on click/tap
     card.addEventListener('click', (ev) => {
       // ignore clicks originating from interactive controls inside the card
       if (ev.target.closest && ev.target.closest('.btn')) return;
@@ -1816,8 +1843,8 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
         id: String(productId),
         qty: Math.min(99, qty),
         meta: {
-          name: promo.name || 'PromociÃ³n',
-          promo_name: promo.name || 'PromociÃ³n',
+          name: promo.name || 'Promoción',
+          promo_name: promo.name || 'Promoción',
           promo_id: promo.id != null ? String(promo.id) : null,
           is_promo: true,
           price: Number(total.toFixed(2)),
@@ -1978,13 +2005,42 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
         #cartDrawer #checkoutBtn{width:100%}
         #cartDrawer #clearCart{width:100%}
         #cartDrawer .cart-actions .btn{padding:12px;border-radius:12px}
-        #cartDrawer .cart-item{padding:12px;gap:12px}
-        #cartDrawer .ci-image img{width:88px;height:88px}
+        #cartDrawer .cart-item{
+          padding:12px;
+          gap:10px;
+          display:grid;
+          grid-template-columns:84px minmax(0,1fr);
+          grid-template-areas:
+            "img info"
+            "controls controls";
+          align-items:start;
+        }
+        #cartDrawer .cart-item .ci-image{grid-area:img}
+        #cartDrawer .cart-item .ci-info{grid-area:info;min-width:0}
+        #cartDrawer .cart-item .ci-controls{
+          grid-area:controls;
+          margin-left:0;
+          width:100%;
+          justify-content:space-between;
+          gap:10px;
+        }
+        #cartDrawer .cart-item .ci-name{font-size:14px;line-height:1.25}
+        #cartDrawer .cart-item .ci-name-text{display:block;white-space:normal;word-break:break-word}
+        #cartDrawer .cart-item .ci-sub{font-size:12px;line-height:1.3}
+        #cartDrawer .cart-item .qty{flex:1;justify-content:center;min-width:0}
+        #cartDrawer .cart-item .btn.remove{white-space:nowrap;padding:8px 10px}
+        #cartDrawer .ci-image img{width:84px;height:84px}
+      }
+      @media(max-width:420px){
+        #cartDrawer .cart-item{grid-template-columns:74px minmax(0,1fr)}
+        #cartDrawer .ci-image img{width:74px;height:74px}
+        #cartDrawer .cart-item .ci-controls{gap:8px}
+        #cartDrawer .cart-item .btn.remove{font-size:13px;padding:8px 10px}
       }
     `; document.head.appendChild(s);
   }
 
-  if(cart.length===0){ container.innerHTML = `<div class="cart-empty"><div style="font-size:36px;opacity:0.9">ðŸ›’</div><div style="font-weight:800">Tu carrito estÃ¡ vacÃ­o</div><div style="color:var(--muted)">AgregÃ¡ productos para comenzar</div><div class="ce-cta"><button class="btn btn-primary" onclick="closeCart()">Seguir comprando</button></div></div>`; subtotalEl.textContent = '$0.00'; updateCartBadge(); return; }
+  if(cart.length===0){ container.innerHTML = `<div class="cart-empty"><div style="font-size:36px;opacity:0.9">🛒</div><div style="font-weight:800">Tu carrito está vacío</div><div style="color:var(--muted)">Agregá productos para comenzar</div><div class="ce-cta"><button class="btn btn-primary" onclick="closeCart()">Seguir comprando</button></div></div>`; subtotalEl.textContent = '$0.00'; updateCartBadge(); return; }
 
   let subtotal = 0; cart.forEach(item=>{
     const row = document.createElement('div'); row.className = 'cart-item'; row.dataset.pid = item.id; row.dataset.key = (item.key || getCartKey(item));
@@ -2039,7 +2095,7 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
       }catch(_){ }
     }
     if (Array.isArray(item.meta?.products) && item.meta.products.length) {
-      const lines = item.meta.products.map(x => `${escapeHtml(x.name || x.id)} â€” $${Number(x.price || 0).toFixed(2)}`);
+      const lines = item.meta.products.map(x => `${escapeHtml(x.name || x.id)} — $${Number(x.price || 0).toFixed(2)}`);
       nameHtml += `<div class="ci-sub">${lines.join('<br>')}</div>`;
     }
 
@@ -2149,7 +2205,9 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
     checkout.setAttribute('aria-label', 'Hacer pedido');
     checkout.addEventListener('click', async () => {
         const cart = readCart();
-        if (!cart || cart.length === 0) return showAlert('El carrito estÃ¡ vacÃ­o');
+        if (!cart || cart.length === 0) return showAlert('El carrito está vacío');
+        const selectedPaymentMethod = await showPaymentMethodModal();
+        if (!selectedPaymentMethod) return;
         const basePayload = { items: cart, total: cart.reduce((s, i) => {
           const prod = products.find(p => String(p.id ?? p._id) === String(i.id));
           const factor = getItemLineFactor(i, prod);
@@ -2169,9 +2227,9 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
               if (!profile.email) missing.push('email');
               if (!profile.barrio) missing.push('barrio');
               if (!profile.calle) missing.push('calle');
-              if (!profile.numeracion) missing.push('numeraciÃ³n');
+              if (!profile.numeracion) missing.push('numeración');
               if (missing.length) {
-                const ok = await showConfirm('Tu perfil estÃ¡ incompleto (faltan: ' + missing.join(', ') + '). Â¿Deseas continuar y enviar el pedido igualmente?');
+                const ok = await showConfirm('Tu perfil está incompleto (faltan: ' + missing.join(', ') + '). ¿Deseas continuar y enviar el pedido igualmente?');
                 if (!ok) { try { document.getElementById('checkoutBtn').disabled = false; } catch(e){}; return; }
               }
               basePayload.user_id = profile.id;
@@ -2184,12 +2242,12 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           } catch (e) { /* ignore profile fetch errors */ }
         }
 
-        // Proceed â€” checkout button reference created later
+        // Proceed — checkout button reference created later
 
         // If there's no user info attached (guest checkout), offer to login or collect minimal contact info
         if (!basePayload.user_full_name && !basePayload.user_email) {
           try {
-            const wantLogin = await showConfirm('No estÃ¡s logueado. Â¿Iniciar sesiÃ³n para adjuntar tus datos al pedido? (Aceptar = login, Cancelar = enviar como invitado)');
+            const wantLogin = await showConfirm('No estás logueado. ¿Iniciar sesión para adjuntar tus datos al pedido? (Aceptar = login, Cancelar = enviar como invitado)');
             if (wantLogin) { openAuthModal(); try{ checkout.disabled = false; }catch(_){ } return; }
             // Collect minimal guest details via modal
             const guestInfo = await showGuestModal();
@@ -2240,6 +2298,8 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
             payload._token_preview = payload._token_preview || { name: basePayload.user_full_name || null, email: basePayload.user_email || null };
           }
         }catch(e){}
+        payload.payment_method = selectedPaymentMethod === 'mercadopago' ? 'mercadopago' : 'cash';
+        payload.payment_status = selectedPaymentMethod === 'mercadopago' ? 'mp_pending' : 'cash_pending';
         // If the cart includes consumo items, mark the payload but DO NOT prompt the customer
         try{
           const hasConsumos = Array.isArray(payload.items) && payload.items.some(i => {
@@ -2284,6 +2344,8 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       for (let i = tryUrls.length - 1; i >= 0; i--) if (!tryUrls[i]) tryUrls.splice(i, 1);
 
       let succeeded = false;
+      let createdOrder = null;
+      let successfulUrl = null;
       // Attach Authorization header when token present
       const authToken = getToken();
       const baseHeaders = { 'Content-Type': 'application/json' };
@@ -2295,7 +2357,9 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         try {
           const res = await fetch(url, { method: 'POST', headers: baseHeaders, body: JSON.stringify(payload), mode: 'cors' });
           if (!res.ok) { const txt = await res.text().catch(()=>null); _attemptErrors.push({ url, status: res.status, statusText: res.statusText, body: txt }); throw new Error(`status:${res.status}`); }
+          createdOrder = await res.json().catch(() => null);
           succeeded = true;
+          successfulUrl = url;
           break;
         } catch (err) {
           console.warn('checkout attempt failed for', url, err);
@@ -2306,16 +2370,133 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
 
       try {
         if (succeeded) {
-          // confirm visually and clear
-          await showAlert('Pedido enviado â€” el panel de administraciÃ³n recibirÃ¡ la orden.');
+          if (selectedPaymentMethod === 'mercadopago') {
+            const orderId = (createdOrder && createdOrder.id) ? createdOrder.id : null;
+            if (!orderId) {
+              await showAlert('El pedido se creó, pero no pudimos preparar el pago de Mercado Pago.');
+              clearCart(); closeCart();
+              return;
+            }
+
+            const preferencePayload = {
+              order_id: orderId,
+              external_reference: String(orderId),
+              total: Number(payload.total || 0),
+              items: (payload.items || []).map(i => {
+                const prod = products.find(p => String(p.id ?? p._id) === String(i.id));
+                const factor = getItemLineFactor(i, prod);
+                const lineTotal = Number(i?.meta?.price || 0) * Number(factor || 0);
+                return {
+                  id: i.id,
+                  title: String(i?.meta?.name || ('Producto ' + String(i.id))),
+                  quantity: 1,
+                  unit_price: Number(lineTotal.toFixed(2)),
+                  currency_id: 'ARS'
+                };
+              }).filter(i => Number(i.unit_price) > 0),
+              payer: {
+                name: payload.user_full_name || '',
+                email: payload.user_email || ''
+              }
+            };
+            if (!preferencePayload.items.length && Number(preferencePayload.total || 0) > 0) {
+              preferencePayload.items = [{
+                id: 'order-' + String(orderId),
+                title: 'Pedido #' + String(orderId),
+                quantity: 1,
+                unit_price: Number(Number(preferencePayload.total).toFixed(2)),
+                currency_id: 'ARS'
+              }];
+            }
+
+            try{
+              if (location && location.protocol && location.protocol.startsWith('http') && location.origin) {
+                const returnPathRaw = String(location.pathname || '/catalogo').trim() || '/catalogo';
+                const returnPath = returnPathRaw.startsWith('/') ? returnPathRaw : ('/' + returnPathRaw);
+                preferencePayload.back_urls = {
+                  success: location.origin + returnPath + '?payment=success',
+                  failure: location.origin + returnPath + '?payment=failure',
+                  pending: location.origin + returnPath + '?payment=pending'
+                };
+              }
+            }catch(_){ }
+
+            const prefUrls = [];
+            try{
+              if (successfulUrl) {
+                const base = new URL(successfulUrl, location.href).origin;
+                prefUrls.push(base + '/payments/mercadopago/preference');
+              }
+            }catch(_){ }
+            try{
+              const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
+              if (typeof API_ORIGIN === 'string' && API_ORIGIN) prefUrls.push(API_ORIGIN + '/payments/mercadopago/preference');
+              // Avoid noisy 405s on static hosts: only try page origin when it matches API_ORIGIN.
+              if (pageOrigin && (!API_ORIGIN || pageOrigin === API_ORIGIN)) {
+                prefUrls.push(pageOrigin + '/payments/mercadopago/preference');
+              }
+            }catch(_){ }
+            prefUrls.push('/payments/mercadopago/preference');
+
+            const seenPref = new Set();
+            const orderedPrefUrls = prefUrls.filter(u => { if(!u || seenPref.has(u)) return false; seenPref.add(u); return true; });
+            let pref = null;
+            const prefErrors = [];
+            for (const prefUrl of orderedPrefUrls){
+              try{
+                const prefRes = await fetch(prefUrl, { method: 'POST', headers: baseHeaders, body: JSON.stringify(preferencePayload), mode: 'cors' });
+                let prefJson = null;
+                let prefText = '';
+                try{
+                  const ct = String(prefRes.headers.get('content-type') || '').toLowerCase();
+                  if (ct.includes('application/json')) {
+                    prefJson = await prefRes.json().catch(() => null);
+                  } else {
+                    prefText = await prefRes.text().catch(() => '');
+                    try { prefJson = prefText ? JSON.parse(prefText) : null; } catch(_){ }
+                  }
+                }catch(_){ }
+                if (!prefRes.ok) {
+                  let reason = '';
+                  try{
+                    reason = String((prefJson && (prefJson.detail || prefJson.message || prefJson.error)) || prefText || '').trim();
+                  }catch(_){ reason = ''; }
+                  prefErrors.push(`[${prefRes.status}] ${reason || 'respuesta no exitosa'}`);
+                  continue;
+                }
+                if (prefJson && (prefJson.init_point || prefJson.sandbox_init_point)) {
+                  pref = prefJson;
+                  break;
+                }
+                prefErrors.push('Respuesta de MP sin init_point');
+              }catch(err){
+                prefErrors.push(String(err || 'error de red'));
+              }
+            }
+
+            if (pref && (pref.init_point || pref.sandbox_init_point)) {
+              clearCart(); closeCart();
+              const target = pref.init_point || pref.sandbox_init_point;
+              window.location.href = target;
+              return;
+            }
+
+            const prefDetail = prefErrors.filter(Boolean).slice(0, 3).join(' | ');
+            await showAlert(`Pedido #${orderId} creado, pero no pudimos abrir Mercado Pago.${prefDetail ? ('\n\nDetalle: ' + prefDetail) : ''}`, 'warning');
+            clearCart(); closeCart();
+            return;
+          }
+
+          // efectivo
+          await showAlert('Pedido enviado — el panel de administración recibirá la orden.');
           clearCart(); closeCart();
         } else {
           // graceful fallback: keep el carrito (NO WhatsApp), mostrar modal con opciones al usuario
-          console.warn('Checkout failed â€” showing fallback modal and keeping cart locally.', _attemptErrors);
+          console.warn('Checkout failed — showing fallback modal and keeping cart locally.', _attemptErrors);
           try{ console.error('[checkout] attempts', _attemptErrors); }catch(_){ }
           // show modal and persist the failed payload so the user can retry later
           try{ showOrderModal(payload); saveFailedOrder(payload); }catch(e){ showOrderModal(payload); }
-          try{ showToast('No se pudo enviar el pedido. Se guardÃ³ localmente para reintento.', 5000); }catch(_){ }
+          try{ showToast('No se pudo enviar el pedido. Se guardó localmente para reintento.', 5000); }catch(_){ }
         }
       } catch (err) {
         console.error('post-checkout-handling', err);
@@ -2334,18 +2515,18 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       const itemsHtml = (payload.items || []).map(i=>{
         const unitType = normalizeSaleUnit(i?.meta?.unit_type || i?.meta?.sale_unit || i?.meta?.unit);
         const qtyLabel = formatQtyLabel(i?.qty, unitType, i?.meta || {});
-        return `<li style="margin:8px 0"><strong>${escapeHtml(String(i.meta?.name||i.id))}</strong> â€” ${escapeHtml(qtyLabel)} Ã— $${Number(i.meta?.price||0).toFixed(2)}</li>`;
+        return `<li style="margin:8px 0"><strong>${escapeHtml(String(i.meta?.name||i.id))}</strong> — ${escapeHtml(qtyLabel)} × $${Number(i.meta?.price||0).toFixed(2)}</li>`;
       }).join('');
       modal.innerHTML = `
         <div class="order-modal" role="dialog" aria-modal="true" aria-label="Resumen del pedido">
           <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
             <h3 style="margin:0">Pedido (guardado localmente)</h3>
-            <button class="om-close" aria-label="Cerrar">âœ•</button>
+            <button class="om-close" aria-label="Cerrar">✕</button>
           </header>
           <div style="max-height:52vh;overflow:auto;padding:6px 2px;margin-bottom:12px;color:var(--deep);">
-            <ul style="list-style:none;padding:0;margin:0 0 8px">${itemsHtml || '<li style="color:var(--muted)">(sin Ã­tems)</li>'}</ul>
+            <ul style="list-style:none;padding:0;margin:0 0 8px">${itemsHtml || '<li style="color:var(--muted)">(sin ítems)</li>'}</ul>
             <div style="font-weight:800;margin-top:8px">Total: <span>$${Number(payload.total||0).toFixed(2)}</span></div>
-            <p style="color:var(--muted);margin-top:8px">No se pudo enviar la orden al servidor â€” puedes <strong>reintentar</strong>, <strong>copiar</strong> o <strong>descargar</strong> el pedido.</p>
+            <p style="color:var(--muted);margin-top:8px">No se pudo enviar la orden al servidor — puedes <strong>reintentar</strong>, <strong>copiar</strong> o <strong>descargar</strong> el pedido.</p>
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
             <button class="btn btn-ghost om-copy">Copiar pedido</button>
@@ -2354,7 +2535,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           </div>
         </div>`;
       document.body.appendChild(modal);
-      // styles for modal (scoped minimal) â€” won't override global theme
+      // styles for modal (scoped minimal) — won't override global theme
       const ss = document.createElement('style'); ss.id = '__order_modal_styles'; ss.textContent = `
         .order-modal-overlay{ position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.36);backdrop-filter:blur(3px);z-index:1400;opacity:0;pointer-events:none;transition:opacity .18s ease}
         .order-modal-overlay.open{opacity:1;pointer-events:auto}
@@ -2375,7 +2556,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         ev.target.disabled = true;
         const ok = await reAttemptOrder(payload);
         ev.target.disabled = false;
-        if (ok) { modal.remove(); await showAlert('Pedido enviado â€” el panel de administraciÃ³n recibirÃ¡ la orden.'); clearCart(); closeCart(); }
+        if (ok) { modal.remove(); await showAlert('Pedido enviado — el panel de administración recibirá la orden.'); clearCart(); closeCart(); }
         else { await showAlert('No se pudo enviar la orden. Puedes copiar o descargar el pedido y enviarlo manualmente.'); saveFailedOrder(payload); }
       });
       // focus
@@ -2384,7 +2565,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       // close on Esc
       const onKey = (ev)=>{ if (ev.key === 'Escape') { modal.remove(); window.removeEventListener('keydown', onKey); } };
       window.addEventListener('keydown', onKey);
-    }catch(err){ console.error('showOrderModal', err); showAlert('No se pudo mostrar el modal del pedido â€” revisa la consola.'); }
+    }catch(err){ console.error('showOrderModal', err); showAlert('No se pudo mostrar el modal del pedido — revisa la consola.'); }
   }
 
   function copyOrderToClipboard(payload){
@@ -2392,12 +2573,12 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       const lines = (payload.items||[]).map(i=>{
         const unitType = normalizeSaleUnit(i?.meta?.unit_type || i?.meta?.sale_unit || i?.meta?.unit);
         const qtyLabel = formatQtyLabel(i?.qty, unitType, i?.meta || {});
-        return `${qtyLabel} Ã— ${i.meta?.name || i.id} â€” $${Number(i.meta?.price||0).toFixed(2)}`;
+        return `${qtyLabel} × ${i.meta?.name || i.id} — $${Number(i.meta?.price||0).toFixed(2)}`;
       });
       const txt = `Pedido:\n${lines.join('\n')}\n\nTotal: $${Number(payload.total||0).toFixed(2)}`;
       navigator.clipboard?.writeText ? navigator.clipboard.writeText(txt) : (function(){ const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); })();
       showToast('Resumen del pedido copiado al portapapeles.');
-    }catch(e){ console.error('copyOrder', e); showAlert('No se pudo copiar el pedido automÃ¡ticamente.'); }
+    }catch(e){ console.error('copyOrder', e); showAlert('No se pudo copiar el pedido automáticamente.'); }
   }
 
   async function  reAttemptOrder(payload){
@@ -2497,7 +2678,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         }catch(e){ console.warn('retryStoredOrders item failed', e); }
       }
       if(successCount > 0){
-        // remove only those that were successfully sent: simplest approach â€” clear all if any succeeded
+        // remove only those that were successfully sent: simplest approach — clear all if any succeeded
         clearFailedOrders();
         showToast(`Reintentos completados: ${successCount}`, 4000);
         // give server a moment then refresh to let admin see them
@@ -2505,7 +2686,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       } else {
         showToast('No se pudo enviar ninguno de los pedidos guardados', 4000);
       }
-    }catch(e){ console.warn('retryStoredOrders failed', e); showToast('Reintento fallÃ³', 3000); }
+    }catch(e){ console.warn('retryStoredOrders failed', e); showToast('Reintento falló', 3000); }
   }
 
   // Try to sync locally-stored failed orders directly to the server backup endpoint.
@@ -2552,7 +2733,19 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
   ensureRetryButton();
 
   // close on outside click
-  document.addEventListener('pointerdown', (ev)=>{ const drawer = document.getElementById('cartDrawer'); const fab = document.getElementById('cartButton'); if(!drawer || drawer.getAttribute('aria-hidden')==='true') return; if(ev.target.closest && (ev.target.closest('#cartDrawer') || ev.target.closest('#cartButton'))) return; closeCart(); });
+  document.addEventListener('pointerdown', (ev)=>{
+    const drawer = document.getElementById('cartDrawer');
+    const fab = document.getElementById('cartButton');
+    if(!drawer || drawer.getAttribute('aria-hidden')==='true') return;
+    if(ev.target.closest && (
+      ev.target.closest('#cartDrawer') ||
+      ev.target.closest('#cartButton') ||
+      ev.target.closest('.__pay_overlay') ||
+      ev.target.closest('#__order_modal') ||
+      ev.target.closest('.__dialog_overlay')
+    )) return;
+    closeCart();
+  });
   // initialize badge
   updateCartBadge();
 })();
@@ -2567,7 +2760,7 @@ function startAutoRefresh() {
   const modeEl = document.getElementById('autoMode');
   if (modeEl) modeEl.textContent = mode;
   if (!enabled) {
-    if (countdownEl) countdownEl.textContent = 'â€”';
+    if (countdownEl) countdownEl.textContent = '—';
     return;
   }
   countdown = AUTO_REFRESH_SECONDS;
@@ -2598,12 +2791,12 @@ function stopAutoRefresh() {
 
 function updateLastUpdated(local = false) {
   const el = document.getElementById('lastUpdated');
-  if (!el) return; // element removed â€” nothing to do
+  if (!el) return; // element removed — nothing to do
   const when = new Date();
-  el.textContent = `Ãšltima actualizaciÃ³n: ${when.toLocaleTimeString()} ${local ? '(local)' : ''}`;
+  el.textContent = `Última actualización: ${when.toLocaleTimeString()} ${local ? '(local)' : ''}`;
 }
 
-// UI bindings for auto-refresh control â€” resilient when the visible toggle is removed
+// UI bindings for auto-refresh control — resilient when the visible toggle is removed
 (function bindAutoControls(){
   const toggle = document.getElementById('autoRefreshToggle');
   const modeEl = document.getElementById('autoMode');
@@ -2636,7 +2829,7 @@ function updateLastUpdated(local = false) {
     return;
   }
 
-  // Legacy path: toggle exists â€” keep original behavior but defensive
+  // Legacy path: toggle exists — keep original behavior but defensive
   try{
     const enabled = (storedEnabled === null) ? true : (storedEnabled === 'true');
     toggle.checked = enabled;
@@ -2686,7 +2879,7 @@ async function checkBackendConnectivity(){
     // show a non-intrusive banner so the user knows filters/promotions may not load
     try{
       if (!document.getElementById('__backend_status')){
-        const b = document.createElement('div'); b.id='__backend_status'; b.style.position='fixed'; b.style.top='72px'; b.style.left='50%'; b.style.transform='translateX(-50%)'; b.style.zIndex='3500'; b.style.background='linear-gradient(90deg,#fff7ed,#fff)'; b.style.border='1px solid rgba(242,107,56,0.12)'; b.style.padding='8px 12px'; b.style.borderRadius='8px'; b.style.boxShadow='0 10px 30px rgba(2,6,23,0.06)'; b.textContent='Advertencia: no se pudo conectar al backend â€” algunas funciones (filtros, promos) pueden no funcionar.'; document.body.appendChild(b);
+        const b = document.createElement('div'); b.id='__backend_status'; b.style.position='fixed'; b.style.top='72px'; b.style.left='50%'; b.style.transform='translateX(-50%)'; b.style.zIndex='3500'; b.style.background='linear-gradient(90deg,#fff7ed,#fff)'; b.style.border='1px solid rgba(242,107,56,0.12)'; b.style.padding='8px 12px'; b.style.borderRadius='8px'; b.style.boxShadow='0 10px 30px rgba(2,6,23,0.06)'; b.textContent='Advertencia: no se pudo conectar al backend — algunas funciones (filtros, promos) pueden no funcionar.'; document.body.appendChild(b);
       }
     }catch(e){/* ignore DOM errors */}
   } else {
@@ -2800,7 +2993,48 @@ function updateRepeatOrderButton(){
   }
   btn.hidden = false;
   btn.disabled = false;
-  btn.textContent = 'Repetir ultimo pedido';
+  btn.textContent = 'Repetir último pedido';
+}
+
+function initCatalogHeaderLogo(){
+  try{
+    const link = document.querySelector('.site-header .brand-logo');
+    const img = document.getElementById('siteBrandLogo');
+    if (!link || !img) return;
+
+    const fallbackSrcs = [
+      'images/distriar.png',
+      './images/distriar.png',
+      '/images/distriar.png',
+      '/catalogo/images/distriar.png',
+      'frontend/images/distriar.png',
+      '/frontend/images/distriar.png'
+    ];
+    let idx = 0;
+    const tried = new Set();
+
+    const tryNext = () => {
+      while (idx < fallbackSrcs.length) {
+        const next = String(fallbackSrcs[idx++] || '').trim();
+        if (!next || tried.has(next)) continue;
+        tried.add(next);
+        img.setAttribute('src', next);
+        return;
+      }
+      link.classList.add('is-broken');
+      img.removeEventListener('error', onError);
+    };
+
+    const onError = () => { tryNext(); };
+    img.addEventListener('error', onError);
+    img.addEventListener('load', () => { link.classList.remove('is-broken'); });
+
+    const current = String(img.getAttribute('src') || '').trim();
+    if (current) tried.add(current);
+    if (img.complete && !img.naturalWidth) {
+      tryNext();
+    }
+  }catch(_){ }
 }
 
 async function repeatLastOrder(){
@@ -2808,7 +3042,7 @@ async function repeatLastOrder(){
   const token = getToken();
   const email = getTokenEmail();
   if (!token || !email){
-    await showAlert('Inicia sesion para repetir un pedido anterior.', 'warning');
+    await showAlert('Inicia sesión para repetir un pedido anterior.', 'warning');
     return;
   }
 
@@ -2831,20 +3065,20 @@ async function repeatLastOrder(){
       .map(normalizeOrderItemForCart)
       .filter(Boolean);
     if (!items.length){
-      await showAlert('Tu ultimo pedido no tiene items reutilizables.', 'warning');
+      await showAlert('Tu último pedido no tiene ítems reutilizables.', 'warning');
       return;
     }
     writeCart(items);
     renderCart();
     openCart();
-    showToast('Cargamos tu ultimo pedido en el carrito.', 3500);
+    showToast('Cargamos tu último pedido en el carrito.', 3500);
   }catch(e){
     console.warn('repeatLastOrder failed', e);
-    await showAlert('No se pudo repetir el ultimo pedido en este momento.', 'error');
+    await showAlert('No se pudo repetir el último pedido en este momento.', 'error');
   }finally{
     if (btn){
       btn.disabled = false;
-      btn.textContent = previousText || 'Repetir ultimo pedido';
+      btn.textContent = previousText || 'Repetir último pedido';
     }
   }
 }
@@ -2893,7 +3127,7 @@ function showToast(message, timeout = 3000){
   }catch(e){ console.warn('showToast failed', e); }
 }
 
-// Modal / dialog helpers (reusable) â€” enhanced styles and variants
+// Modal / dialog helpers (reusable) — enhanced styles and variants
 function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', value: true, primary: true }], dismissible = true, type = ''} = {}){
   return new Promise((resolve) => {
     try{
@@ -2922,8 +3156,8 @@ function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', v
         document.head.appendChild(s);
       }
 
-      // small map for emoji icons â€” keeps things fast and dependency-free
-      const iconMap = { info: 'â„¹ï¸', success: 'âœ”ï¸', warning: 'âš ï¸', danger: 'âœ–ï¸' };
+      // small map for emoji icons — keeps things fast and dependency-free
+      const iconMap = { info: 'ℹ️', success: '✔️', warning: '⚠️', danger: '✖️' };
       const iconHtml = type ? ('<span class="dialog-icon">' + (iconMap[type] || '') + '</span>') : '';
 
       const overlay = document.createElement('div'); overlay.className = '__dialog_overlay'; overlay.id = '__dialog_overlay';
@@ -2956,6 +3190,139 @@ function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', v
 
 function showAlert(message, type = 'info'){ return showDialog({ message, type, buttons: [{ label: 'OK', value: true, primary: true }] }); }
 function showConfirm(message, type = 'warning'){ return showDialog({ message, type, buttons: [{ label: 'Cancelar', value: false }, { label: 'Aceptar', value: true, primary: true }] }); }
+let __mpHealthCache = null;
+let __mpHealthCacheTs = 0;
+async function getMercadoPagoHealth(force = false){
+  try{
+    if (!force && __mpHealthCache && (Date.now() - __mpHealthCacheTs) < 60000) return __mpHealthCache;
+  }catch(_){ }
+
+  const tryUrls = [];
+  try{
+    const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
+    if (typeof API_ORIGIN === 'string' && API_ORIGIN) {
+      if (pageOrigin && pageOrigin !== API_ORIGIN) {
+        tryUrls.push(API_ORIGIN + '/payments/mercadopago/health');
+        tryUrls.push(pageOrigin + '/payments/mercadopago/health');
+      } else {
+        tryUrls.push((pageOrigin || API_ORIGIN) + '/payments/mercadopago/health');
+      }
+    } else if (pageOrigin) {
+      tryUrls.push(pageOrigin + '/payments/mercadopago/health');
+    }
+  }catch(_){ }
+  tryUrls.push('/payments/mercadopago/health');
+
+  const seen = new Set();
+  const ordered = tryUrls.filter(u => { if(!u || seen.has(u)) return false; seen.add(u); return true; });
+  for (const url of ordered){
+    try{
+      const res = await fetchWithTimeout(url, { cache: 'no-store', mode: 'cors' }, 6000);
+      if (!res || !res.ok) continue;
+      const data = await res.json().catch(() => null);
+      if (data && typeof data === 'object'){
+        __mpHealthCache = data;
+        __mpHealthCacheTs = Date.now();
+        return data;
+      }
+    }catch(_){ }
+  }
+  return null;
+}
+
+async function showPaymentMethodModal(){
+  let mpEnabled = true;
+  let mpDesc = 'Pagar online con checkout';
+  try{
+    const health = await getMercadoPagoHealth();
+    if (health && health.configured === false){
+      mpEnabled = false;
+      mpDesc = 'No disponible en este momento';
+    }
+  }catch(_){ }
+  return new Promise((resolve) => {
+    try{
+      if (!document.getElementById('__payment_method_styles')){
+        const s = document.createElement('style');
+        s.id = '__payment_method_styles';
+        s.textContent = `
+.__pay_overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:14px;background:rgba(2,6,23,0.42);backdrop-filter:blur(3px);z-index:5200;overflow:auto;-webkit-overflow-scrolling:touch}
+.__pay_dialog{width:560px;max-width:calc(100% - 4px);max-height:calc(100dvh - 28px);overflow:auto;background:linear-gradient(180deg, rgba(255,255,255,0.98), var(--surface));border-radius:14px;padding:16px;border:1px solid rgba(10,34,64,0.08);box-shadow:0 18px 48px rgba(2,6,23,0.18)}
+.__pay_title{margin:0;font-size:18px;color:var(--deep)}
+.__pay_sub{margin:6px 0 14px 0;color:var(--muted);font-size:14px}
+.__pay_cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.__pay_card{border:1px solid rgba(0,0,0,0.08);background:#fff;border-radius:12px;padding:14px;display:flex;align-items:center;gap:10px;cursor:pointer;text-align:left;min-height:78px}
+.__pay_card:hover{border-color:rgba(242,107,56,0.35);box-shadow:0 8px 20px rgba(2,6,23,0.08)}
+.__pay_card[disabled]{opacity:.55;cursor:not-allowed;box-shadow:none}
+.__pay_logo{width:42px;height:42px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;font-weight:900;font-size:14px;color:#fff;flex-shrink:0}
+.__pay_logo.mp{background:linear-gradient(135deg,#009ee3,#005ac2)}
+.__pay_logo.cash{background:linear-gradient(135deg,#10b981,#0f766e)}
+.__pay_name{font-weight:800;color:var(--deep)}
+.__pay_desc{font-size:12px;color:var(--muted)}
+.__pay_name, .__pay_desc{display:block}
+.__pay_actions{display:flex;justify-content:flex-end;margin-top:12px}
+.__pay_cancel{background:transparent;border:1px solid rgba(0,0,0,0.08);padding:8px 12px;border-radius:10px;color:var(--deep)}
+@media(max-width:640px){
+  .__pay_overlay{align-items:flex-start;padding:12px}
+  .__pay_dialog{width:100%;max-width:none;max-height:calc(100dvh - 24px)}
+  .__pay_cards{grid-template-columns:1fr}
+}
+`;
+        document.head.appendChild(s);
+      }
+
+      const overlay = document.createElement('div');
+      overlay.className = '__pay_overlay';
+      overlay.innerHTML = `
+        <div class="__pay_dialog" role="dialog" aria-modal="true" aria-label="Método de pago">
+          <h3 class="__pay_title">Selecciona método de pago</h3>
+          <p class="__pay_sub">Elige cómo quieres pagar tu pedido.</p>
+          <div class="__pay_cards">
+            <button type="button" class="__pay_card" data-method="mercadopago" ${mpEnabled ? '' : 'disabled aria-disabled="true"'}>
+              <span class="__pay_logo mp">MP</span>
+              <span>
+                <span class="__pay_name">Mercado Pago</span>
+                <span class="__pay_desc">${escapeHtml(mpDesc)}</span>
+              </span>
+            </button>
+            <button type="button" class="__pay_card" data-method="cash">
+              <span class="__pay_logo cash">$</span>
+              <span>
+                <span class="__pay_name">Efectivo</span>
+                <span class="__pay_desc">Pagas al recibir el pedido</span>
+              </span>
+            </button>
+          </div>
+          <div class="__pay_actions">
+            <button type="button" class="__pay_cancel" data-action="cancel">Cancelar</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      const cleanup = () => {
+        try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ }
+      };
+      const closeWith = (value) => { cleanup(); resolve(value); };
+      const onKey = (ev) => { if (ev.key === 'Escape') closeWith(null); };
+      window.addEventListener('keydown', onKey);
+      overlay.addEventListener('click', (ev) => {
+        if (!ev.target.closest('.__pay_dialog')) closeWith(null);
+      });
+
+      overlay.querySelectorAll('[data-method]').forEach(btn => {
+        btn.addEventListener('click', () => closeWith(btn.getAttribute('data-method')));
+      });
+      const cancel = overlay.querySelector('[data-action="cancel"]');
+      if (cancel) cancel.addEventListener('click', () => closeWith(null));
+      const firstCard = overlay.querySelector('[data-method]');
+      if (firstCard) firstCard.focus();
+    }catch(e){
+      console.error('showPaymentMethodModal failed', e);
+      resolve(null);
+    }
+  });
+}
 function showJsonModal(obj, title = 'Detalle'){
   const html = `<pre style="white-space:pre-wrap;max-height:48vh;overflow:auto">${escapeHtml(JSON.stringify(obj, null, 2))}</pre>`;
   return showDialog({ title, html, buttons: [{ label: 'Cerrar', value: true, primary: true }], type: 'info' });
@@ -2967,14 +3334,14 @@ function showGuestModal(){
       const overlay = document.createElement('div'); overlay.className='__dialog_overlay'; overlay.style.zIndex = 3300;
       overlay.innerHTML = `
         <div class="__dialog __dialog--info" role="dialog" aria-modal="true" aria-label="Datos de contacto (invitado)">
-          <div class="dialog-header"><span class="dialog-icon">â„¹ï¸</span><h3>Datos de contacto (invitado)</h3></div>
+          <div class="dialog-header"><span class="dialog-icon">ℹ️</span><h3>Datos de contacto (invitado)</h3></div>
           <div class="dialog-body">
             <div style="display:flex;flex-direction:column;gap:10px">
               <input id="__gname" type="text" placeholder="Nombre (opcional)" />
               <input id="__gemail" type="email" placeholder="Email (obligatorio)" />
               <input id="__gbarrio" type="text" placeholder="Barrio (opcional)" />
               <input id="__gcalle" type="text" placeholder="Calle (opcional)" />
-              <input id="__gnumero" type="text" placeholder="NumeraciÃ³n (opcional)" />
+              <input id="__gnumero" type="text" placeholder="Numeración (opcional)" />
             </div>
           </div>
           <div class="actions">
@@ -3030,6 +3397,49 @@ function showGuestModal(){
   });
 }
 
+function handleMercadoPagoReturn(){
+  try{
+    if (!location || !location.search) return;
+    const params = new URLSearchParams(location.search);
+    const qpPayment = String(params.get('payment') || '').trim().toLowerCase();
+    const qpStatus = String(params.get('status') || params.get('collection_status') || '').trim().toLowerCase();
+    const paymentId = String(params.get('payment_id') || '').trim();
+    const externalRef = String(params.get('external_reference') || '').trim();
+
+    let result = qpPayment;
+    if (!result){
+      if (qpStatus === 'approved') result = 'success';
+      else if (qpStatus === 'pending' || qpStatus === 'in_process' || qpStatus === 'inprocess') result = 'pending';
+      else if (qpStatus) result = 'failure';
+    }
+    if (!result && !paymentId && !externalRef) return;
+
+    if (result === 'success') {
+      showAlert('Pago aprobado en Mercado Pago. Tu pedido fue recibido.', 'success');
+    } else if (result === 'pending') {
+      showAlert('Tu pago quedó pendiente. Te avisaremos cuando se confirme.', 'warning');
+    } else if (result === 'failure') {
+      showAlert('El pago no se pudo completar. Puedes intentar nuevamente.', 'danger');
+    } else {
+      // generic fallback when MP returns only ids/status variants
+      showAlert('Recibimos el resultado del pago de Mercado Pago.', 'info');
+    }
+
+    // Clean URL so reloading doesn't show the payment dialog again.
+    try{
+      const clean = location.origin + location.pathname + (location.hash || '');
+      history.replaceState({}, document.title, clean);
+    }catch(_){ }
+  }catch(e){
+    console.warn('handleMercadoPagoReturn failed', e);
+  }
+}
+
+try{
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', handleMercadoPagoReturn);
+  else setTimeout(handleMercadoPagoReturn, 50);
+}catch(_){ }
+
 // Helper: fetch with AbortController-based timeout (used for auth requests)
 async function fetchWithTimeout(resource, options = {}, timeout = 10000){
   const controller = new AbortController();
@@ -3057,12 +3467,12 @@ function updateAuthUI(){
   }
   updateRepeatOrderButton();
 }
-async function doRegister(){ const name=document.getElementById('regName').value.trim(); const email=document.getElementById('regEmail').value.trim(); const barrio=document.getElementById('regBarrio').value.trim(); const calle=document.getElementById('regCalle').value.trim(); const numero=document.getElementById('regNumero').value.trim(); const password=document.getElementById('regPassword').value; const err=document.getElementById('regError'); err.textContent=''; if(!name||!email||!password){ err.textContent='Nombre, email y contraseÃ±a son obligatorios'; return; } try{ const res=await fetchWithTimeout(AUTH_REGISTER,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({full_name:name,email,barrio,calle,numeracion:numero,password})},10000); if(res.status===400){ const js=await res.json().catch(()=>({})); err.textContent=js.detail||'Error'; return; } if(!res.ok){ err.textContent='Registro fallÃ³'; return; } await doLogin(email,password); closeAuthModal(); }catch(e){ if (e && e.name === 'AbortError') err.textContent = 'Tiempo de espera agotado'; else err.textContent='No se pudo conectar con el servidor'; } }
+async function doRegister(){ const name=document.getElementById('regName').value.trim(); const email=document.getElementById('regEmail').value.trim(); const barrio=document.getElementById('regBarrio').value.trim(); const calle=document.getElementById('regCalle').value.trim(); const numero=document.getElementById('regNumero').value.trim(); const password=document.getElementById('regPassword').value; const err=document.getElementById('regError'); err.textContent=''; if(!name||!email||!password){ err.textContent='Nombre, email y contraseña son obligatorios'; return; } try{ const res=await fetchWithTimeout(AUTH_REGISTER,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({full_name:name,email,barrio,calle,numeracion:numero,password})},10000); if(res.status===400){ const js=await res.json().catch(()=>({})); err.textContent=js.detail||'Error'; return; } if(!res.ok){ err.textContent='Registro falló'; return; } await doLogin(email,password); closeAuthModal(); }catch(e){ if (e && e.name === 'AbortError') err.textContent = 'Tiempo de espera agotado'; else err.textContent='No se pudo conectar con el servidor'; } }
 async function doLogin(emailArg,passwordArg){
   const email = emailArg || document.getElementById('loginEmail').value.trim();
   const password = passwordArg || document.getElementById('loginPassword').value;
   const err = document.getElementById('loginError'); err.textContent = '';
-  if (!email || !password) { err.textContent = 'Email y contraseÃ±a son obligatorios'; return; }
+  if (!email || !password) { err.textContent = 'Email y contraseña son obligatorios'; return; }
   try {
     const form = new URLSearchParams(); form.append('username', email); form.append('password', password);
     const res = await fetchWithTimeout(AUTH_TOKEN, { method: 'POST', body: form }, 10000);
@@ -3072,7 +3482,7 @@ async function doLogin(emailArg,passwordArg){
       saveToken(data.access_token);
       updateAuthUI();
       // perform quick token check against the server so we can surface any mismatch early
-      try{ debugWhoami().then(d => { try{ console.debug('[debugWhoami] result', d); if (d && d.ok && d.payload) { showToast(`Bienvenido, ${d.payload.full_name || d.payload.sub || email}`); } else { showToast('Bienvenido â€” pero el token no fue validado en el servidor', 'warning'); } }catch(_){}}).catch(e=>{ console.warn('debugWhoami failed', e); }); }catch(_){ }
+      try{ debugWhoami().then(d => { try{ console.debug('[debugWhoami] result', d); if (d && d.ok && d.payload) { showToast(`Bienvenido, ${d.payload.full_name || d.payload.sub || email}`); } else { showToast('Bienvenido — pero el token no fue validado en el servidor', 'warning'); } }catch(_){}}).catch(e=>{ console.warn('debugWhoami failed', e); }); }catch(_){ }
       // derive display name from token if available
       let name = email;
       try { const p = parseJwt(data.access_token); if (p) name = p.full_name || p.name || p.sub || p.email || email; } catch (e) {}
@@ -3092,7 +3502,7 @@ function logout(){
   // ensure modal closed and UI refreshed
   try{ if(typeof closeAuthModal==='function') closeAuthModal(); }catch(e){}
   updateAuthUI();
-  try{ showToast('SesiÃ³n cerrada'); }catch(e){}
+  try{ showToast('Sesión cerrada'); }catch(e){}
 }
 function _authOutsideClick(e){
   const m = document.getElementById('authModal');
@@ -3130,12 +3540,13 @@ function closeAuthModal(){
 
 // wire auth modal and button (DOMContentLoaded handled later)
 document.addEventListener('DOMContentLoaded', ()=>{
+  initCatalogHeaderLogo();
   updateAuthUI();
   const authBtn = document.getElementById('authButton');
   const repeatBtn = document.getElementById('repeatLastOrderBtn');
   if (authBtn) authBtn.addEventListener('click', async ()=>{
     const token = getToken();
-    if (token){ if (await showConfirm('Cerrar sesiÃ³n?')) { logout(); } return; }
+    if (token){ if (await showConfirm('Cerrar sesión?')) { logout(); } return; }
     openAuthModal();
   });
   if (repeatBtn && !repeatBtn.dataset.bound) {
@@ -3364,3 +3775,4 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 }
+

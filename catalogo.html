@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -13,8 +13,9 @@
 
     <header class="site-header">
       <div class="container header-inner">
-        <a href="index.html" class="logo">
-          <img src="images/distriar.png" alt="DistriAr logo" />
+        <a href="index.html" class="logo brand-logo" aria-label="Ir al inicio">
+          <img id="siteBrandLogo" class="brand-logo-img" src="images/distriar.png" alt="DistriAr" />
+          <span class="logo-fallback" aria-hidden="true">DistriAr</span>
         </a>
         <nav class="nav" role="navigation">
           <ul>
@@ -27,7 +28,7 @@
             <li><button id="authButton" class="btn btn-ghost">Login</button></li>
           </ul>
         </nav>
-        <button class="menu-toggle" aria-label="Abrir menú" aria-expanded="false">☰</button>
+        <button class="menu-toggle" aria-label="Abrir menú" aria-expanded="false"><span aria-hidden="true">☰</span></button>
       </div>
     </header>
 
@@ -42,7 +43,6 @@
     <button data-filter="fiambres">Fiambres</button>
     <button data-filter="complementos">Complementos</button>
   </div>
-  <button id="repeatLastOrderBtn" class="btn btn-ghost" type="button" hidden>Repetir último pedido</button>
 
   <!-- Auto-refresh UI removed (auto-refresh runs silently) -->
 </section>
@@ -98,6 +98,7 @@
     <div id="cartItems" class="cart-items" tabindex="0"></div>
     <div class="cart-summary">
       <div class="cart-sub">Subtotal <span id="cartSubtotal">$0.00</span></div>
+      <button id="repeatLastOrderBtn" class="btn btn-ghost" type="button" hidden>Repetir último pedido</button>
       <div class="cart-actions">
         <button id="clearCart" class="btn btn-ghost">Vaciar</button>
         <button id="checkoutBtn" class="btn">Hacer pedido</button>
@@ -112,6 +113,7 @@
 </button>
 
 <script src="main.js?v=1"></script>
-<script src="catalogo.js?v=4"></script>
+<script src="catalogo.js?v=7"></script>
 </body>
 </html>
+
