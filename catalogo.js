@@ -3397,6 +3397,51 @@ function showGuestModal(){
   });
 }
 
+async function syncMercadoPagoReturnToBackend({ paymentId, externalReference, status }){
+  try{
+    const body = {
+      payment_id: paymentId || null,
+      external_reference: externalReference || null,
+      status: status || null
+    };
+    const headers = { 'Content-Type': 'application/json' };
+    try{
+      const token = getToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+    }catch(_){ }
+
+    const tryUrls = [];
+    try{
+      const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
+      if (typeof API_ORIGIN === 'string' && API_ORIGIN) {
+        if (pageOrigin && pageOrigin !== API_ORIGIN) {
+          tryUrls.push(API_ORIGIN + '/payments/mercadopago/sync');
+        } else {
+          tryUrls.push((pageOrigin || API_ORIGIN) + '/payments/mercadopago/sync');
+        }
+      } else if (pageOrigin) {
+        tryUrls.push(pageOrigin + '/payments/mercadopago/sync');
+      }
+    }catch(_){ }
+    tryUrls.push('/payments/mercadopago/sync');
+
+    const seen = new Set();
+    const ordered = tryUrls.filter(u => { if(!u || seen.has(u)) return false; seen.add(u); return true; });
+    for (const url of ordered){
+      try{
+        const res = await fetchWithTimeout(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          mode: 'cors'
+        }, 8000);
+        if (res && res.ok) return true;
+      }catch(_){ }
+    }
+  }catch(_){ }
+  return false;
+}
+
 function handleMercadoPagoReturn(){
   try{
     if (!location || !location.search) return;
@@ -3413,6 +3458,22 @@ function handleMercadoPagoReturn(){
       else if (qpStatus) result = 'failure';
     }
     if (!result && !paymentId && !externalRef) return;
+
+    try{
+      let syncStatus = qpStatus;
+      if (!syncStatus){
+        if (result === 'success') syncStatus = 'approved';
+        else if (result === 'failure') syncStatus = 'rejected';
+        else if (result === 'pending') syncStatus = 'in_process';
+      }
+      if (paymentId || externalRef || syncStatus) {
+        syncMercadoPagoReturnToBackend({
+          paymentId,
+          externalReference: externalRef,
+          status: syncStatus
+        }).catch(()=>{});
+      }
+    }catch(_){ }
 
     if (result === 'success') {
       showAlert('Pago aprobado en Mercado Pago. Tu pedido fue recibido.', 'success');
