@@ -2212,8 +2212,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
     checkout.addEventListener('click', async () => {
         const cart = readCart();
         if (!cart || cart.length === 0) return showAlert('El carrito está vacío');
-        const selectedPaymentMethod = await showPaymentMethodModal();
-        if (!selectedPaymentMethod) return;
+        let selectedPaymentMethod = null;
         const basePayload = { items: cart, total: cart.reduce((s, i) => {
           const prod = products.find(p => String(p.id ?? p._id) === String(i.id));
           const factor = getItemLineFactor(i, prod);
@@ -2259,12 +2258,14 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           try { checkout.disabled = false; } catch(_){}
           return;
         }
-        const shouldPromptDeliveryAddress = Boolean(token) || !basePayload.user_barrio || !basePayload.user_calle || !basePayload.user_numeracion;
+        // Always confirm delivery address before moving to payment selection.
+        const shouldPromptDeliveryAddress = true;
         if (shouldPromptDeliveryAddress) {
           const deliveryInfo = await showDeliveryAddressModal({
             barrio: basePayload.user_barrio || '',
             calle: basePayload.user_calle || '',
-            numeracion: basePayload.user_numeracion || ''
+            numeracion: basePayload.user_numeracion || '',
+            instrucciones: basePayload.user_delivery_notes || ''
           });
           if (!deliveryInfo) {
             try { checkout.disabled = false; } catch(_){}
@@ -2273,6 +2274,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           basePayload.user_barrio = deliveryInfo.barrio;
           basePayload.user_calle = deliveryInfo.calle;
           basePayload.user_numeracion = deliveryInfo.numeracion;
+          basePayload.user_delivery_notes = sanitizeDeliveryNotes(deliveryInfo.instrucciones || '');
         }
         if (!basePayload.user_barrio || !basePayload.user_calle || !basePayload.user_numeracion) {
           try { await showAlert('Necesitamos dirección de entrega (barrio, calle y numeración).'); } catch(_){}
@@ -2308,13 +2310,17 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           });
         }catch(e){ payload.items = basePayload.items || []; }
         try{
+          const deliveryNotes = sanitizeDeliveryNotes(basePayload.user_delivery_notes || '');
+          if (deliveryNotes){
+            payload.user_delivery_notes = deliveryNotes;
+            payload.delivery_notes = deliveryNotes;
+          }
           // If logged-in, include a lightweight preview from the profile we fetched above
           if (basePayload.user_full_name || basePayload.user_email) {
             payload._token_preview = payload._token_preview || { name: basePayload.user_full_name || null, email: basePayload.user_email || null };
+            if (deliveryNotes) payload._token_preview.delivery_notes = deliveryNotes;
           }
         }catch(e){}
-        payload.payment_method = selectedPaymentMethod === 'mercadopago' ? 'mercadopago' : 'cash';
-        payload.payment_status = selectedPaymentMethod === 'mercadopago' ? 'mp_pending' : 'cash_pending';
         // If the cart includes consumo items, mark the payload but DO NOT prompt the customer
         try{
           const hasConsumos = Array.isArray(payload.items) && payload.items.some(i => {
@@ -2329,11 +2335,18 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
             // No user confirmation here: consumptions are processed server-side transparently
           }
         }catch(e){}
-        const confirmCheckout = await showCheckoutConfirmModal(payload, selectedPaymentMethod);
+        const confirmCheckout = await showCheckoutConfirmModal(payload, null);
         if (!confirmCheckout){
           try { checkout.disabled = false; } catch(_){}
           return;
         }
+        selectedPaymentMethod = await showPaymentMethodModal();
+        if (!selectedPaymentMethod){
+          try { checkout.disabled = false; } catch(_){}
+          return;
+        }
+        payload.payment_method = selectedPaymentMethod === 'mercadopago' ? 'mercadopago' : 'cash';
+        payload.payment_status = selectedPaymentMethod === 'mercadopago' ? 'mp_pending' : 'cash_pending';
 
       const btn = document.getElementById('checkoutBtn');
       btn.disabled = true;
@@ -3298,9 +3311,14 @@ async function showCheckoutConfirmModal(payload, selectedPaymentMethod){
       return `<li class="__checkout_item"><span>${escapeHtml(name)}<small>x${escapeHtml(String(qtyLabel))}</small></span><strong>$${escapeHtml(lineTotal.toFixed(2))}</strong></li>`;
     }).join('');
     const remaining = Math.max(0, items.length - previewItems.length);
-    const paymentLabel = escapeHtml(formatOrderPaymentLabel(selectedPaymentMethod, payload?.payment_status || ''));
+    const paymentPreviewLabel = selectedPaymentMethod
+      ? formatOrderPaymentLabel(selectedPaymentMethod, payload?.payment_status || '')
+      : 'Se elige en el siguiente paso';
+    const paymentLabel = escapeHtml(paymentPreviewLabel);
     const totalLabel = '$' + escapeHtml(Number(payload?.total || 0).toFixed(2));
     const addressLabel = escapeHtml(buildCheckoutAddressLabel(payload));
+    const notesValue = sanitizeDeliveryNotes(payload?.user_delivery_notes || payload?.delivery_notes || payload?._token_preview?.delivery_notes || '');
+    const notesLabel = escapeHtml(notesValue || 'Sin indicaciones');
     const nameLabel = escapeHtml(String(payload?.user_full_name || 'Cliente'));
     const emailLabel = escapeHtml(String(payload?.user_email || '-'));
     const waMessage = encodeURIComponent('Hola, necesito ayuda para finalizar mi pedido desde el checkout.');
@@ -3313,6 +3331,7 @@ async function showCheckoutConfirmModal(payload, selectedPaymentMethod){
       'Nombre: ' + String(payload?.user_full_name || ''),
       'Email: ' + String(payload?.user_email || ''),
       'Direccion: ' + buildCheckoutAddressLabel(payload),
+      'Instrucciones: ' + (notesValue || 'Sin indicaciones'),
       'Total aproximado: ' + Number(payload?.total || 0).toFixed(2),
       '',
       'Gracias.'
@@ -3326,6 +3345,7 @@ async function showCheckoutConfirmModal(payload, selectedPaymentMethod){
           <div><strong>Cliente:</strong> ${nameLabel}</div>
           <div><strong>Email:</strong> ${emailLabel}</div>
           <div><strong>Entrega:</strong> ${addressLabel}</div>
+          <div><strong>Instrucciones:</strong> ${notesLabel}</div>
           <div><strong>Pago:</strong> ${paymentLabel}</div>
         </div>
         <ul class="__checkout_items">${itemsHtml || '<li class="__checkout_item __checkout_item_empty">Sin ítems</li>'}</ul>
@@ -3730,6 +3750,9 @@ body.__lock_scroll{overflow:hidden}
 .__delivery_hint{margin:0 0 12px;color:var(--muted);font-size:14px}
 .__delivery_inputs{display:grid;gap:10px}
 .__delivery_inputs input{height:42px;border:1px solid rgba(10,34,64,0.12);border-radius:10px;padding:0 12px;font-size:14px;background:linear-gradient(180deg,#fff,#fcfdff)}
+.__delivery_inputs textarea{min-height:78px;max-height:180px;resize:vertical;border:1px solid rgba(10,34,64,0.12);border-radius:10px;padding:10px 12px;font-size:14px;font-family:inherit;line-height:1.35;background:linear-gradient(180deg,#fff,#fcfdff)}
+.__addr_notes_label{font-size:12px;font-weight:800;letter-spacing:.01em;color:#334155;margin-top:2px}
+.__addr_notes_hint{margin:2px 2px 0;color:#64748b;font-size:11px;line-height:1.3}
 .__addr_saved_block{margin:0 0 12px;padding:10px;border-radius:12px;background:linear-gradient(180deg,#fff,#f9fbff);border:1px solid rgba(10,34,64,0.08)}
 .__addr_saved_title{font-size:12px;font-weight:800;letter-spacing:0.4px;text-transform:uppercase;color:rgba(6,26,43,0.62);margin:0 0 8px}
 .__addr_saved_list{display:flex;flex-wrap:wrap;gap:8px}
@@ -4025,8 +4048,8 @@ async function showPaymentMethodModal(){
 .__pay_actions{display:flex;justify-content:flex-end;margin-top:12px}
 .__pay_cancel{background:transparent;border:1px solid rgba(0,0,0,0.08);padding:8px 12px;border-radius:10px;color:var(--deep)}
 @media(max-width:640px){
-  .__pay_overlay{align-items:flex-start;padding:12px}
-  .__pay_dialog{width:100%;max-width:none;max-height:calc(100dvh - 24px)}
+  .__pay_overlay{align-items:center;justify-content:center;padding:12px 10px}
+  .__pay_dialog{width:min(460px,calc(100% - 4px));max-width:calc(100% - 4px);max-height:calc(100dvh - 24px)}
   .__pay_cards{grid-template-columns:1fr}
 }
 `;
@@ -4127,6 +4150,14 @@ function sanitizeAddressText(value, maxLen = 80){
 }
 function sanitizeAddressNumber(value){
   return String(value || '').replace(/\s+/g, '').trim().slice(0, 12);
+}
+function sanitizeDeliveryNotes(value){
+  return String(value || '')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, 240);
 }
 function addressAliasExists(label, addresses = [], excludeId = null){
   const alias = sanitizeAddressAlias(label).toLowerCase();
@@ -4316,7 +4347,8 @@ function loadDeliveryAddressCache(){
     return {
       barrio: String(parsed.barrio || '').trim(),
       calle: String(parsed.calle || '').trim(),
-      numeracion: String(parsed.numeracion || parsed.numero || '').trim()
+      numeracion: String(parsed.numeracion || parsed.numero || '').trim(),
+      instrucciones: sanitizeDeliveryNotes(parsed.instrucciones || parsed.instructions || parsed.delivery_notes || '')
     };
   }catch(_){ return null; }
 }
@@ -4325,9 +4357,10 @@ function saveDeliveryAddressCache(data){
     const payload = {
       barrio: String(data?.barrio || '').trim(),
       calle: String(data?.calle || '').trim(),
-      numeracion: String(data?.numeracion || data?.numero || '').trim()
+      numeracion: String(data?.numeracion || data?.numero || '').trim(),
+      instrucciones: sanitizeDeliveryNotes(data?.instrucciones || data?.instructions || data?.delivery_notes || '')
     };
-    if (!payload.barrio && !payload.calle && !payload.numeracion) return;
+    if (!payload.barrio && !payload.calle && !payload.numeracion && !payload.instrucciones) return;
     localStorage.setItem(DELIVERY_ADDRESS_CACHE_KEY, JSON.stringify(payload));
   }catch(_){ }
 }
@@ -4349,7 +4382,8 @@ function showDeliveryAddressModal(prefill = {}){
         label: String(prefill?.label || defaultAddress.label || '').trim(),
         barrio: String(prefill?.barrio || defaultAddress.barrio || cached.barrio || '').trim(),
         calle: String(prefill?.calle || defaultAddress.calle || cached.calle || '').trim(),
-        numeracion: String(prefill?.numeracion || prefill?.numero || defaultAddress.numeracion || cached.numeracion || '').trim()
+        numeracion: String(prefill?.numeracion || prefill?.numero || defaultAddress.numeracion || cached.numeracion || '').trim(),
+        instrucciones: sanitizeDeliveryNotes(prefill?.instrucciones || prefill?.instructions || prefill?.delivery_notes || cached.instrucciones || '')
       };
       const savedHtml = savedAddresses.length
         ? savedAddresses.map((addr) => {
@@ -4377,6 +4411,9 @@ function showDeliveryAddressModal(prefill = {}){
               <input id="__addr_barrio" type="text" placeholder="Barrio" />
               <input id="__addr_calle" type="text" placeholder="Calle" />
               <input id="__addr_numero" type="text" placeholder="Numeración" />
+              <label for="__addr_notes" class="__addr_notes_label">Instrucciones de entrega (opcional)</label>
+              <textarea id="__addr_notes" placeholder="Ej: dejar en portería, tocar timbre 2, entregar a nombre de..."></textarea>
+              <small class="__addr_notes_hint">Estas indicaciones se guardan para este pedido y se incluyen en el resumen.</small>
             </div>
             <label class="__addr_check"><input id="__addr_save_book" type="checkbox" ${token ? 'checked' : ''}>Guardar esta dirección en ${token ? 'Mi cuenta' : 'este dispositivo'}</label>
             <label class="__addr_check"><input id="__addr_set_default" type="checkbox" ${savedAddresses.length ? '' : 'checked'}>Usar como dirección predeterminada</label>
@@ -4414,6 +4451,7 @@ function showDeliveryAddressModal(prefill = {}){
         const b = document.getElementById('__addr_barrio'); if (b) b.value = initial.barrio;
         const c = document.getElementById('__addr_calle'); if (c) c.value = initial.calle;
         const n = document.getElementById('__addr_numero'); if (n) n.value = initial.numeracion;
+        const notes = document.getElementById('__addr_notes'); if (notes) notes.value = initial.instrucciones;
       }catch(_){ }
       if (!initial.barrio && defaultAddress && defaultAddress.barrio && defaultAddress.calle && defaultAddress.numeracion){
         setFields(defaultAddress);
@@ -4449,6 +4487,7 @@ function showDeliveryAddressModal(prefill = {}){
       if (saveBtn) saveBtn.addEventListener('click', ()=>{
         const saveToggle = document.getElementById('__addr_save_book');
         const defaultToggle = document.getElementById('__addr_set_default');
+        const notes = sanitizeDeliveryNotes(document.getElementById('__addr_notes')?.value || '');
         const shouldPersist = token || (saveToggle && saveToggle.checked);
         const bookNow = shouldPersist ? loadAddressBook(accountId) : { addresses: [] };
         const check = validateAddressInput({
@@ -4473,7 +4512,7 @@ function showDeliveryAddressModal(prefill = {}){
           }catch(_){ }
           return;
         }
-        const out = check.value;
+        const out = Object.assign({}, check.value, { instrucciones: notes });
         saveDeliveryAddressCache(out);
         if (shouldPersist){
           const persisted = upsertAddressInBook({
@@ -4559,7 +4598,6 @@ function openAccountModal(){
           <span class="dialog-icon">👤</span>
           <h3>Mi cuenta</h3>
           <div class="__account_header_actions" style="margin-left:auto">
-            <button class="btn btn-ghost" data-action="my_orders">Mis pedidos</button>
             <button class="btn btn-ghost" data-action="close_top">Cerrar</button>
           </div>
         </div>
@@ -4773,7 +4811,6 @@ function openAccountModal(){
     });
     overlay.querySelector('[data-action="close_top"]')?.addEventListener('click', closeModal);
     overlay.querySelector('[data-action="close_bottom"]')?.addEventListener('click', closeModal);
-    overlay.querySelector('[data-action="my_orders"]')?.addEventListener('click', ()=>{ showMyOrdersModal(); });
     overlay.querySelector('[data-action="my_orders_bottom"]')?.addEventListener('click', ()=>{ showMyOrdersModal(); });
     overlay.querySelector('[data-action="logout"]')?.addEventListener('click', async () => {
       const ok = await showConfirm('¿Cerrar sesión ahora?');

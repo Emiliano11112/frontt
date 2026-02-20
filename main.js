@@ -1,8 +1,8 @@
-// Carrusel de imágenes promocionales dinámico
+﻿// Carrusel de imÃ¡genes promocionales dinÃ¡mico
 document.addEventListener('DOMContentLoaded', function() {
 	const carousel = document.querySelector('.promo-carousel');
 	// If the page doesn't include the promo carousel, skip promo initialization
-	if(!carousel){ console.debug('[promos] .promo-carousel not found — skipping promos init'); return; }
+	if(!carousel){ console.debug('[promos] .promo-carousel not found â€” skipping promos init'); return; }
 	const leftBtn = document.querySelector('.promo-arrow-left');
 	const rightBtn = document.querySelector('.promo-arrow-right');
 	let promoImages = [];
@@ -46,7 +46,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 	function renderImage(idx) {
 		if (!promoImages.length) {
-			carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imágenes promocionales</div>';
+			carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imÃ¡genes promocionales</div>';
 			return;
 		}
 		// Crossfade animation: insert new img and fade out the old one
@@ -55,7 +55,7 @@ document.addEventListener('DOMContentLoaded', function() {
 			// remove any imgs and show placeholder
 			const existing = carousel.querySelectorAll('img');
 			existing.forEach(n => n.parentNode && n.parentNode.removeChild(n));
-			carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imágenes promocionales</div>';
+			carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imÃ¡genes promocionales</div>';
 			return;
 		}
 		// ensure two image slots exist
@@ -105,7 +105,7 @@ document.addEventListener('DOMContentLoaded', function() {
 	leftBtn && leftBtn.addEventListener('click', showPrev);
 	rightBtn && rightBtn.addEventListener('click', showNext);
 
-	// Encapsular fetch+render en una función para reuso (autorefresh)
+	// Encapsular fetch+render en una funciÃ³n para reuso (autorefresh)
 	async function loadPromos(){
 		try{
 			const resp = await fetch(PROMOS_API);
@@ -113,11 +113,11 @@ document.addEventListener('DOMContentLoaded', function() {
 				const data = await resp.json();
 				if(Array.isArray(data) && data.length>0){
 					promoImages = sanitizePromoItems(data);
-					if(!promoImages.length){ carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imágenes promocionales</div>'; return; }
+					if(!promoImages.length){ carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imÃ¡genes promocionales</div>'; return; }
 					if(current >= promoImages.length) current = 0;
 					renderIndicators();
 					renderImage(current);
-					// arrancar autoplay luego de cargar imágenes
+					// arrancar autoplay luego de cargar imÃ¡genes
 					startAutoplay();
 					return;
 				}
@@ -131,17 +131,17 @@ document.addEventListener('DOMContentLoaded', function() {
 				if(Array.isArray(d2) && d2.length>0){
 					d2 = d2.map(i => { if (i && i.url && i.url.startsWith('/')) i.url = 'https://backend-0lcs.onrender.com' + i.url; return i; });
 					promoImages = sanitizePromoItems(d2);
-					if(!promoImages.length){ carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imágenes promocionales</div>'; return; }
+					if(!promoImages.length){ carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imÃ¡genes promocionales</div>'; return; }
 					if(current >= promoImages.length) current = 0;
 					renderIndicators();
 					renderImage(current);
-					// arrancar autoplay luego de cargar imágenes
+					// arrancar autoplay luego de cargar imÃ¡genes
 					startAutoplay();
 					return;
 				}
 			}
 		}catch(e){ /* final fallback */ }
-		carousel.innerHTML = '<div style="text-align:center;width:100%">No se pudieron cargar las imágenes</div>';
+		carousel.innerHTML = '<div style="text-align:center;width:100%">No se pudieron cargar las imÃ¡genes</div>';
 	}
 
 	// iniciar carga inicial
@@ -168,7 +168,7 @@ document.addEventListener('DOMContentLoaded', function() {
 		refreshTimer = setInterval(async () => {
 			const prevLen = promoImages.length;
 			await loadPromos();
-			// reiniciar autoplay si cambió el número de imágenes
+			// reiniciar autoplay si cambiÃ³ el nÃºmero de imÃ¡genes
 			if(promoImages.length !== prevLen){ startAutoplay(); }
 		}, 30000);
 	}
@@ -190,8 +190,9 @@ if(menuToggle){
 		const expanded = menuToggle.getAttribute('aria-expanded') === 'true';
 		const now = !expanded;
 		menuToggle.setAttribute('aria-expanded', String(now));
-		// Swap visual icon for close/open and prevent body scroll when open
-		menuToggle.textContent = now ? '✕' : '☰';
+		// Swap visual icon for close/open and prevent body scroll when open.
+		// Use unicode escapes to avoid mojibake in environments with wrong encoding.
+		menuToggle.textContent = now ? '\u2715' : '\u2630';
 		document.body.classList.toggle('nav-open', now);
 	});
 
@@ -200,7 +201,7 @@ if(menuToggle){
 		if (window.innerWidth > 900 && nav.classList.contains('open')) {
 			nav.classList.remove('open');
 			menuToggle.setAttribute('aria-expanded','false');
-			menuToggle.textContent = '☰';
+			menuToggle.textContent = '\u2630';
 			document.body.classList.remove('nav-open');
 		}
 	});
@@ -224,8 +225,8 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
 document.addEventListener('click', (e) => {
 	const mail = e.target && e.target.closest ? e.target.closest('a[href^="mailto:"]') : null;
 	if (!mail) return;
-	// Prefer opening Gmail web composer with prefilled subject/body so users can attach their CV easily.
-	// Note: attaching files via URL is not possible for security reasons — users must attach manually.
+	// Open Gmail composer preserving subject/body.
+	// Only inject the CV template for CV-related links.
 	try {
 		e.preventDefault();
 		e.stopPropagation();
@@ -242,19 +243,29 @@ document.addEventListener('click', (e) => {
 		const usp = new URLSearchParams(params);
 		const subject = usp.get('subject') || '';
 		const body = usp.get('body') || '';
-		const professionalBody = (
-			(body ? body + '\n\n' : '') +
-			'Estimado/a equipo de DistriAr,\n\n' +
-			'Adjunto mi currículum vitae para postularme a oportunidades laborales en su empresa.\n' +
-			'Quedo a disposición para brindar más información y coordinar una entrevista si así lo consideran oportuno.\n\n' +
-			'Atentamente,\n' +
-			'[Nombre y Apellido]\n' +
-			'[Teléfono]'
-		);
+		const intentText = (
+			String(subject || '') + ' ' +
+			String(body || '') + ' ' +
+			String(mail.getAttribute('data-mail-intent') || '') + ' ' +
+			String(mail.textContent || '')
+		).toLowerCase();
+		const isCvIntent = /(?:\bcv\b|curriculum|curr[ií]culum|trabaj[aá])/i.test(intentText);
+		const professionalBody = isCvIntent
+			? (
+				(body ? body + '\n\n' : '') +
+				'Estimado/a equipo de DistriAr,\n\n' +
+				'Adjunto mi curriculum vitae para postularme a oportunidades laborales en su empresa.\n' +
+				'Quedo a disposicion para brindar mas informacion y coordinar una entrevista si asi lo consideran oportuno.\n\n' +
+				'Atentamente,\n' +
+				'[Nombre y Apellido]\n' +
+				'[Telefono]\n\n' +
+				'Por favor adjunte su CV a este correo antes de enviarlo.'
+			)
+			: body;
 		const gmailUrl = 'https://mail.google.com/mail/?view=cm&fs=1' +
 			(to ? '&to=' + encodeURIComponent(to) : '') +
 			(subject ? '&su=' + encodeURIComponent(subject) : '') +
-			'&body=' + encodeURIComponent(professionalBody + '\n\nPor favor adjunte su CV a este correo antes de enviarlo.');
+			'&body=' + encodeURIComponent(professionalBody || '');
 		// Open Gmail composer in a new tab/window. If popup blocked, fallback to mailto navigation.
 		const w = window.open(gmailUrl, '_blank');
 		if (!w) {
