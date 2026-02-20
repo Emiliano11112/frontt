@@ -97,6 +97,9 @@ const PROMOTIONS_CACHE_KEY = 'catalog:promotions_cache_v2';
 const DELIVERY_ADDRESS_CACHE_KEY = 'catalog:delivery_address_v1';
 const ADDRESS_BOOK_STORAGE_PREFIX = 'catalog:address_book_v1:';
 const LAST_USED_ADDRESS_STORAGE_PREFIX = 'catalog:last_used_address_v1:';
+const SUPPORT_WHATSAPP_E164 = '5492616838446';
+const SUPPORT_WHATSAPP_DISPLAY = '+54 9 2616 83-8446';
+const SUPPORT_EMAIL = 'distriarmza@gmail.com';
 
 function loadPromotionsCache(){
   try{
@@ -2326,6 +2329,11 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
             // No user confirmation here: consumptions are processed server-side transparently
           }
         }catch(e){}
+        const confirmCheckout = await showCheckoutConfirmModal(payload, selectedPaymentMethod);
+        if (!confirmCheckout){
+          try { checkout.disabled = false; } catch(_){}
+          return;
+        }
 
       const btn = document.getElementById('checkoutBtn');
       btn.disabled = true;
@@ -3061,6 +3069,26 @@ function initCatalogHeaderLogo(){
   }catch(_){ }
 }
 
+async function loadOrderIntoCart(order, { sourceLabel = 'pedido', askBeforeReplace = true } = {}){
+  const items = (Array.isArray(order?.items) ? order.items : [])
+    .map(normalizeOrderItemForCart)
+    .filter(Boolean);
+  if (!items.length){
+    await showAlert('Este pedido no tiene ítems reutilizables.', 'warning');
+    return false;
+  }
+  const currentCart = readCart();
+  if (askBeforeReplace && Array.isArray(currentCart) && currentCart.length){
+    const ok = await showConfirm('Tu carrito actual se reemplazará por este pedido. ¿Continuar?', 'warning');
+    if (!ok) return false;
+  }
+  writeCart(items);
+  renderCart();
+  openCart();
+  showToast('Cargamos tu ' + String(sourceLabel || 'pedido') + ' en el carrito.', 3200);
+  return true;
+}
+
 async function repeatLastOrder(){
   const btn = document.getElementById('repeatLastOrderBtn');
   const token = getToken();
@@ -3085,17 +3113,7 @@ async function repeatLastOrder(){
       await showAlert('No encontramos pedidos anteriores para tu cuenta.', 'info');
       return;
     }
-    const items = (Array.isArray(latest.items) ? latest.items : [])
-      .map(normalizeOrderItemForCart)
-      .filter(Boolean);
-    if (!items.length){
-      await showAlert('Tu último pedido no tiene ítems reutilizables.', 'warning');
-      return;
-    }
-    writeCart(items);
-    renderCart();
-    openCart();
-    showToast('Cargamos tu último pedido en el carrito.', 3500);
+    await loadOrderIntoCart(latest, { sourceLabel: 'último pedido', askBeforeReplace: true });
   }catch(e){
     console.warn('repeatLastOrder failed', e);
     await showAlert('No se pudo repetir el último pedido en este momento.', 'error');
@@ -3120,6 +3138,222 @@ function formatOrderDateLabel(value){
       minute: '2-digit'
     });
   }catch(_){ return '-'; }
+}
+function humanizeTokenLabel(raw){
+  const base = String(raw || '').trim();
+  if (!base) return '-';
+  return base
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\b([a-z\u00e0-\u00ff])/g, (m, c) => c.toUpperCase());
+}
+function normalizeOrderStatusKey(value){
+  return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+function formatOrderStatusLabel(value){
+  const key = normalizeOrderStatusKey(value);
+  if (!key) return '-';
+  const map = {
+    nuevo: 'Nuevo',
+    new: 'Nuevo',
+    visto: 'Visto',
+    seen: 'Visto',
+    preparando: 'Preparando',
+    preparing: 'Preparando',
+    en_camino: 'En camino',
+    delivering: 'En camino',
+    entregado: 'Entregado',
+    delivered: 'Entregado',
+    cancelado: 'Cancelado',
+    cancelled: 'Cancelado',
+    canceled: 'Cancelado'
+  };
+  return map[key] || humanizeTokenLabel(key);
+}
+function normalizePaymentMethodKey(value){
+  return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+function formatPaymentMethodLabel(value){
+  const key = normalizePaymentMethodKey(value);
+  if (!key) return '-';
+  const map = {
+    mercadopago: 'Mercado Pago',
+    mp: 'Mercado Pago',
+    cash: 'Efectivo',
+    efectivo: 'Efectivo',
+    transfer: 'Transferencia',
+    transferencia: 'Transferencia',
+    card: 'Tarjeta'
+  };
+  return map[key] || humanizeTokenLabel(key);
+}
+function normalizePaymentStatusKey(value){
+  return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+function formatPaymentStatusLabel(value, methodValue = ''){
+  const key = normalizePaymentStatusKey(value);
+  if (!key) return '-';
+  const method = normalizePaymentMethodKey(methodValue);
+  const map = {
+    mp_pending: 'Pendiente de pago',
+    cash_pending: 'Pendiente contra entrega',
+    pending: 'Pendiente',
+    in_process: 'En proceso',
+    approved: 'Aprobado',
+    accredited: 'Aprobado',
+    paid: 'Pagado',
+    rejected: 'Rechazado',
+    failed: 'Rechazado',
+    failure: 'Rechazado',
+    cancelled: 'Cancelado',
+    canceled: 'Cancelado',
+    refunded: 'Reintegrado'
+  };
+  if (map[key]) return map[key];
+  if (method === 'cash' && key === 'pending') return 'Pendiente contra entrega';
+  return humanizeTokenLabel(key);
+}
+function formatOrderPaymentLabel(methodValue, statusValue){
+  const methodLabel = formatPaymentMethodLabel(methodValue);
+  const statusLabel = formatPaymentStatusLabel(statusValue, methodValue);
+  if (!methodLabel || methodLabel === '-') return statusLabel;
+  if (!statusLabel || statusLabel === '-' || statusLabel === methodLabel) return methodLabel;
+  return methodLabel + ' - ' + statusLabel;
+}
+function getOrderDateKey(value){
+  try{
+    if (!value) return '';
+    const dt = new Date(value);
+    if (Number.isNaN(dt.getTime())) return '';
+    const y = String(dt.getFullYear());
+    const m = String(dt.getMonth() + 1).padStart(2, '0');
+    const d = String(dt.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + d;
+  }catch(_){ return ''; }
+}
+function formatDateKeyAsDmy(value){
+  const key = String(value || '').trim();
+  const m = key.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return '';
+  return m[3] + '/' + m[2] + '/' + m[1];
+}
+function parseDateFilterInput(value){
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const compact = raw.replace(/\s+/g, '').replace(/[.\-]/g, '/');
+  let day = 0;
+  let month = 0;
+  let year = 0;
+  let m = compact.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m){
+    day = Number(m[1]);
+    month = Number(m[2]);
+    year = Number(m[3]);
+  } else {
+    m = compact.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+    if (!m) return null;
+    year = Number(m[1]);
+    month = Number(m[2]);
+    day = Number(m[3]);
+  }
+  if (!Number.isFinite(day) || !Number.isFinite(month) || !Number.isFinite(year)) return null;
+  if (year < 1900 || year > 2500) return null;
+  const dt = new Date(year, month - 1, day);
+  if (Number.isNaN(dt.getTime())) return null;
+  if (dt.getFullYear() !== year || (dt.getMonth() + 1) !== month || dt.getDate() !== day) return null;
+  return String(year) + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+}
+function buildOrderSearchIndex(order){
+  try{
+    const id = String(order?.id ?? '').trim();
+    const address = getOrderAddressLabel(order);
+    const status = formatOrderStatusLabel(order?.status || '');
+    const payment = formatOrderPaymentLabel(order?.payment_method || '', order?.payment_status || '');
+    const itemNames = (Array.isArray(order?.items) ? order.items : []).map(resolveOrderItemName).join(' ');
+    return [id, address, status, payment, itemNames].join(' ').toLowerCase();
+  }catch(_){ return ''; }
+}
+function buildCheckoutAddressLabel(payload){
+  try{
+    const street = [String(payload?.user_calle || '').trim(), String(payload?.user_numeracion || '').trim()].filter(Boolean).join(' ');
+    const barrio = String(payload?.user_barrio || '').trim();
+    if (street && barrio) return street + ', ' + barrio;
+    return street || barrio || '-';
+  }catch(_){ return '-'; }
+}
+async function showCheckoutConfirmModal(payload, selectedPaymentMethod){
+  try{
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    const previewItems = items.slice(0, 8);
+    const itemsHtml = previewItems.map((it) => {
+      const id = String(it?.id ?? it?.product_id ?? it?.productId ?? '');
+      const prod = products.find(p => String(p.id ?? p._id) === id);
+      const unitType = getItemUnitType(it, prod);
+      const qtyLabel = formatQtyLabel(it?.qty ?? 1, unitType, it?.meta || {});
+      const lineFactor = getItemLineFactor(it, prod);
+      const lineTotal = Number(it?.meta?.price || 0) * Number(lineFactor || 0);
+      const name = resolveOrderItemName(it);
+      return `<li class="__checkout_item"><span>${escapeHtml(name)}<small>x${escapeHtml(String(qtyLabel))}</small></span><strong>$${escapeHtml(lineTotal.toFixed(2))}</strong></li>`;
+    }).join('');
+    const remaining = Math.max(0, items.length - previewItems.length);
+    const paymentLabel = escapeHtml(formatOrderPaymentLabel(selectedPaymentMethod, payload?.payment_status || ''));
+    const totalLabel = '$' + escapeHtml(Number(payload?.total || 0).toFixed(2));
+    const addressLabel = escapeHtml(buildCheckoutAddressLabel(payload));
+    const nameLabel = escapeHtml(String(payload?.user_full_name || 'Cliente'));
+    const emailLabel = escapeHtml(String(payload?.user_email || '-'));
+    const waMessage = encodeURIComponent('Hola, necesito ayuda para finalizar mi pedido desde el checkout.');
+    const waHref = 'https://wa.me/' + SUPPORT_WHATSAPP_E164 + '?text=' + waMessage;
+    const emailBody = [
+      'Hola equipo de DistriAr,',
+      '',
+      'Necesito ayuda con mi pedido.',
+      '',
+      'Nombre: ' + String(payload?.user_full_name || ''),
+      'Email: ' + String(payload?.user_email || ''),
+      'Direccion: ' + buildCheckoutAddressLabel(payload),
+      'Total aproximado: ' + Number(payload?.total || 0).toFixed(2),
+      '',
+      'Gracias.'
+    ].join('\n');
+    const emailHref = 'mailto:' + SUPPORT_EMAIL +
+      '?subject=' + encodeURIComponent('Ayuda con mi pedido') +
+      '&body=' + encodeURIComponent(emailBody);
+    const html = `
+      <div class="__checkout_confirm">
+        <div class="__checkout_meta">
+          <div><strong>Cliente:</strong> ${nameLabel}</div>
+          <div><strong>Email:</strong> ${emailLabel}</div>
+          <div><strong>Entrega:</strong> ${addressLabel}</div>
+          <div><strong>Pago:</strong> ${paymentLabel}</div>
+        </div>
+        <ul class="__checkout_items">${itemsHtml || '<li class="__checkout_item __checkout_item_empty">Sin ítems</li>'}</ul>
+        ${remaining > 0 ? `<div class="__checkout_more">+${escapeHtml(String(remaining))} ítems más</div>` : ''}
+        <div class="__checkout_total">Total: <span>${totalLabel}</span></div>
+        <aside class="__checkout_help">
+          <div class="__checkout_help_title">¿Necesitas ayuda?</div>
+          <div class="__checkout_help_text">WhatsApp ${escapeHtml(SUPPORT_WHATSAPP_DISPLAY)} · ${escapeHtml(SUPPORT_EMAIL)}</div>
+          <div class="__checkout_help_actions">
+            <a class="btn btn-ghost __checkout_help_link" href="${escapeHtml(waHref)}" target="_blank" rel="noopener">WhatsApp</a>
+            <a class="btn btn-ghost __checkout_help_link" href="${escapeHtml(emailHref)}">Email</a>
+            <a class="btn btn-ghost __checkout_help_link" href="index.html#contacto">Contacto</a>
+          </div>
+        </aside>
+      </div>
+    `;
+    return await showDialog({
+      title: 'Confirmar pedido',
+      html,
+      type: 'info',
+      buttons: [
+        { label: 'Cancelar', value: false },
+        { label: 'Confirmar pedido', value: true, primary: true }
+      ]
+    });
+  }catch(_){
+    return showConfirm('¿Confirmas el envío de este pedido?', 'warning');
+  }
 }
 function getOrderAddressLabel(order){
   try{
@@ -3157,14 +3391,15 @@ function buildOrderItemsListHtml(order){
   return parts.join('');
 }
 function buildOrderCardHtml(order){
-  const idLabel = escapeHtml(String(order?.id ?? '-'));
+  const rawId = String(order?.id ?? '').trim();
+  const idLabel = escapeHtml(rawId || '-');
   const dateLabel = escapeHtml(formatOrderDateLabel(order?.created_at));
-  const statusLabel = escapeHtml(String(order?.status || 'nuevo'));
+  const statusLabel = escapeHtml(formatOrderStatusLabel(order?.status || 'nuevo'));
   const totalRaw = Number(order?.total || 0);
   const totalLabel = '$' + escapeHtml(totalRaw.toFixed(2));
-  const paymentMethod = escapeHtml(String(order?.payment_method || '-'));
-  const paymentStatus = escapeHtml(String(order?.payment_status || '-'));
+  const paymentLabel = escapeHtml(formatOrderPaymentLabel(order?.payment_method || '-', order?.payment_status || '-'));
   const addressLabel = escapeHtml(getOrderAddressLabel(order));
+  const repeatable = rawId && Array.isArray(order?.items) && order.items.length > 0;
   return `
     <article class="__order_card">
       <header class="__order_head">
@@ -3173,11 +3408,14 @@ function buildOrderCardHtml(order){
       </header>
       <div class="__order_meta">
         <span class="__order_chip">Estado: ${statusLabel}</span>
-        <span class="__order_chip">Pago: ${paymentMethod} (${paymentStatus})</span>
+        <span class="__order_chip">Pago: ${paymentLabel}</span>
         <span class="__order_chip __order_total">Total: ${totalLabel}</span>
       </div>
       <div class="__order_address"><strong>Entrega:</strong> ${addressLabel}</div>
       <ul class="__order_items">${buildOrderItemsListHtml(order)}</ul>
+      ${repeatable
+        ? `<div class="__order_actions"><button class="btn btn-ghost __order_repeat_btn" data-action="repeat_order" data-order-id="${escapeHtml(rawId)}">Repetir pedido</button></div>`
+        : ''}
     </article>
   `;
 }
@@ -3211,6 +3449,17 @@ async function showMyOrdersModal(){
         </div>
         <div class="dialog-body">
           <p class="__orders_hint">Aquí tienes el historial de pedidos de tu cuenta.</p>
+          <div class="__orders_toolbar">
+            <input id="__orders_search" class="__orders_field __orders_search" type="search" placeholder="Buscar por pedido, producto o dirección" />
+            <select id="__orders_status" class="__orders_field">
+              <option value="">Estado: todos</option>
+            </select>
+            <select id="__orders_payment" class="__orders_field">
+              <option value="">Pago: todos</option>
+            </select>
+            <input id="__orders_date" class="__orders_field __orders_date" type="text" inputmode="numeric" placeholder="dd/mm/aaaa" title="Formato: dd/mm/aaaa" aria-label="Filtrar por fecha (día/mes/año)" />
+            <button class="btn btn-ghost __orders_clear" data-action="clear_orders_filters">Limpiar</button>
+          </div>
           <div id="__orders_list" class="__orders_list">
             <div class="__orders_loading">Cargando pedidos...</div>
           </div>
@@ -3244,6 +3493,11 @@ async function showMyOrdersModal(){
 
     const listEl = overlay.querySelector('#__orders_list');
     const pagerEl = overlay.querySelector('#__orders_pager');
+    const searchEl = overlay.querySelector('#__orders_search');
+    const statusEl = overlay.querySelector('#__orders_status');
+    const paymentEl = overlay.querySelector('#__orders_payment');
+    const dateEl = overlay.querySelector('#__orders_date');
+    const clearFiltersBtn = overlay.querySelector('[data-action="clear_orders_filters"]');
     const rows = await fetchOrdersForAccount(token);
     const ownOrders = (rows || []).filter(r => getOrderEmail(r) === email);
     ownOrders.sort((a, b) => {
@@ -3259,36 +3513,145 @@ async function showMyOrdersModal(){
       return;
     }
 
+    const orderById = new Map();
+    const indexedRows = ownOrders.map((order, idx) => {
+      const idKey = String(order?.id ?? '').trim();
+      if (idKey && !orderById.has(idKey)) orderById.set(idKey, order);
+      return {
+        key: idKey ? (idKey + ':' + String(idx)) : ('row:' + String(idx)),
+        order,
+        statusKey: normalizeOrderStatusKey(order?.status || ''),
+        paymentKey: normalizePaymentMethodKey(order?.payment_method || ''),
+        dateKey: getOrderDateKey(order?.created_at),
+        searchText: buildOrderSearchIndex(order),
+        html: buildOrderCardHtml(order)
+      };
+    });
+
+    if (statusEl){
+      const statusKeys = Array.from(new Set(indexedRows.map(r => r.statusKey).filter(Boolean)));
+      statusKeys.sort((a, b) => formatOrderStatusLabel(a).localeCompare(formatOrderStatusLabel(b), 'es-AR'));
+      statusEl.innerHTML = '<option value="">Estado: todos</option>' + statusKeys.map((key) =>
+        '<option value="' + escapeHtml(key) + '">' + escapeHtml(formatOrderStatusLabel(key)) + '</option>'
+      ).join('');
+    }
+    if (paymentEl){
+      const paymentKeys = Array.from(new Set(indexedRows.map(r => r.paymentKey).filter(Boolean)));
+      paymentKeys.sort((a, b) => formatPaymentMethodLabel(a).localeCompare(formatPaymentMethodLabel(b), 'es-AR'));
+      paymentEl.innerHTML = '<option value="">Pago: todos</option>' + paymentKeys.map((key) =>
+        '<option value="' + escapeHtml(key) + '">' + escapeHtml(formatPaymentMethodLabel(key)) + '</option>'
+      ).join('');
+    }
+
     const PAGE_SIZE = 10;
-    const renderedCards = ownOrders.map(buildOrderCardHtml);
+    let filteredRows = indexedRows;
     let visibleCount = 0;
+    const renderVisibleRows = () => {
+      if (!filteredRows.length){
+        listEl.innerHTML = '<div class="__orders_empty">No encontramos pedidos con esos filtros.</div>';
+        pagerEl.hidden = true;
+        visibleCount = 0;
+        return;
+      }
+      const firstCount = Math.min(PAGE_SIZE, filteredRows.length);
+      listEl.innerHTML = filteredRows.slice(0, firstCount).map(r => r.html).join('');
+      visibleCount = firstCount;
+      updatePager();
+    };
     const updatePager = () => {
-      const remaining = Math.max(0, ownOrders.length - visibleCount);
+      const remaining = Math.max(0, filteredRows.length - visibleCount);
       pagerEl.hidden = false;
       if (remaining > 0){
         pagerEl.innerHTML = `
-          <span class="__orders_progress">Mostrando ${visibleCount} de ${ownOrders.length}</span>
+          <span class="__orders_progress">Mostrando ${visibleCount} de ${filteredRows.length}</span>
           <button class="btn btn-ghost __orders_more_btn" data-action="load_more_orders">Cargar más (${Math.min(PAGE_SIZE, remaining)})</button>
         `;
         const loadMoreBtn = pagerEl.querySelector('[data-action="load_more_orders"]');
         if (loadMoreBtn){
           loadMoreBtn.addEventListener('click', () => {
-            const nextCount = Math.min(visibleCount + PAGE_SIZE, ownOrders.length);
+            const nextCount = Math.min(visibleCount + PAGE_SIZE, filteredRows.length);
             if (nextCount <= visibleCount) return;
-            const nextChunk = renderedCards.slice(visibleCount, nextCount).join('');
+            const nextChunk = filteredRows.slice(visibleCount, nextCount).map(r => r.html).join('');
             if (nextChunk) listEl.insertAdjacentHTML('beforeend', nextChunk);
             visibleCount = nextCount;
             requestAnimationFrame(updatePager);
           });
         }
       } else {
-        pagerEl.innerHTML = `<span class="__orders_progress">Mostrando ${visibleCount} de ${ownOrders.length}</span>`;
+        pagerEl.innerHTML = `<span class="__orders_progress">Mostrando ${visibleCount} de ${filteredRows.length}</span>`;
       }
     };
-    const firstCount = Math.min(PAGE_SIZE, ownOrders.length);
-    listEl.innerHTML = renderedCards.slice(0, firstCount).join('');
-    visibleCount = firstCount;
-    requestAnimationFrame(updatePager);
+    const applyFilters = () => {
+      const needle = String(searchEl?.value || '').trim().toLowerCase();
+      const statusFilter = String(statusEl?.value || '').trim();
+      const paymentFilter = String(paymentEl?.value || '').trim();
+      const dateRaw = String(dateEl?.value || '').trim();
+      const dateFilter = parseDateFilterInput(dateRaw);
+      filteredRows = indexedRows.filter((row) => {
+        if (needle && !row.searchText.includes(needle)) return false;
+        if (statusFilter && row.statusKey !== statusFilter) return false;
+        if (paymentFilter && row.paymentKey !== paymentFilter) return false;
+        if (dateFilter && row.dateKey !== dateFilter) return false;
+        return true;
+      });
+      renderVisibleRows();
+    };
+    let filtersRaf = null;
+    const scheduleApplyFilters = () => {
+      if (filtersRaf) cancelAnimationFrame(filtersRaf);
+      filtersRaf = requestAnimationFrame(() => {
+        filtersRaf = null;
+        applyFilters();
+      });
+    };
+    searchEl?.addEventListener('input', scheduleApplyFilters);
+    statusEl?.addEventListener('change', scheduleApplyFilters);
+    paymentEl?.addEventListener('change', scheduleApplyFilters);
+    const normalizeDateField = () => {
+      if (!dateEl) return;
+      const parsed = parseDateFilterInput(dateEl.value);
+      if (parsed) dateEl.value = formatDateKeyAsDmy(parsed);
+    };
+    dateEl?.addEventListener('change', () => {
+      normalizeDateField();
+      scheduleApplyFilters();
+    });
+    dateEl?.addEventListener('blur', () => {
+      normalizeDateField();
+      scheduleApplyFilters();
+    });
+    clearFiltersBtn?.addEventListener('click', () => {
+      if (searchEl) searchEl.value = '';
+      if (statusEl) statusEl.value = '';
+      if (paymentEl) paymentEl.value = '';
+      if (dateEl) dateEl.value = '';
+      scheduleApplyFilters();
+      try{ searchEl?.focus(); }catch(_){ }
+    });
+    listEl.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('button[data-action="repeat_order"]');
+      if (!btn) return;
+      const orderId = String(btn.getAttribute('data-order-id') || '').trim();
+      if (!orderId) return;
+      const order = orderById.get(orderId);
+      if (!order) return;
+      const previousText = btn.textContent;
+      try{
+        btn.disabled = true;
+        btn.textContent = 'Cargando...';
+        await loadOrderIntoCart(order, {
+          sourceLabel: 'pedido #' + orderId,
+          askBeforeReplace: true
+        });
+      }catch(e){
+        console.warn('repeat_order from history failed', e);
+        await showAlert('No se pudo repetir este pedido en este momento.', 'warning');
+      }finally{
+        btn.disabled = false;
+        btn.textContent = previousText || 'Repetir pedido';
+      }
+    });
+    requestAnimationFrame(applyFilters);
   }catch(e){
     console.warn('showMyOrdersModal failed', e);
     await showAlert('No se pudieron cargar tus pedidos en este momento.', 'error');
@@ -3494,6 +3857,10 @@ body.__lock_scroll{overflow:hidden}
 }
 .__orders_hint{margin:0;color:var(--muted)}
 .__orders_overlay{backdrop-filter:none !important;background:rgba(2,6,23,0.26) !important}
+.__orders_toolbar{display:grid;grid-template-columns:minmax(0,1.6fr) repeat(2,minmax(0,1fr)) 170px auto;gap:8px;align-items:center}
+.__orders_field{height:38px;border:1px solid rgba(10,34,64,0.14);border-radius:10px;padding:0 10px;font-size:13px;background:#fff;color:var(--deep)}
+.__orders_search{min-width:0}
+.__orders_clear{min-height:38px;padding:8px 12px}
 .__orders_list{display:grid;gap:10px;flex:1;min-height:0;max-height:none;overflow:auto;padding-right:4px;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;contain:content}
 .__orders_loading,.__orders_empty{padding:14px;border-radius:12px;border:1px dashed rgba(10,34,64,0.18);background:#fcfdff;color:var(--muted);font-size:14px}
 .__order_card{border:1px solid rgba(10,34,64,0.08);border-radius:12px;padding:12px;background:#fff;content-visibility:auto;contain-intrinsic-size:180px;contain:layout paint}
@@ -3508,16 +3875,39 @@ body.__lock_scroll{overflow:hidden}
 .__order_items li{font-size:13px;color:rgba(6,26,43,0.86)}
 .__orders_qty{display:inline-block;min-width:26px;font-weight:800;color:#0b223f}
 .__orders_more{color:var(--muted);font-style:italic}
+.__order_actions{display:flex;justify-content:flex-end;margin-top:8px}
+.__order_repeat_btn{min-width:150px}
 .__orders_pager{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding-top:10px;margin-top:8px;border-top:1px solid rgba(10,34,64,0.08)}
 .__orders_pager[hidden]{display:none !important}
 .__orders_progress{font-size:12px;color:var(--muted);font-weight:700;text-align:center}
 .__orders_more_btn{min-width:210px;align-self:center}
+.__checkout_confirm{display:grid;gap:10px}
+.__checkout_meta{display:grid;gap:6px;padding:10px;border:1px solid rgba(10,34,64,0.08);border-radius:10px;background:#fff}
+.__checkout_items{margin:0;padding:0;list-style:none;display:grid;gap:0;max-height:34vh;overflow:auto;border:1px solid rgba(10,34,64,0.08);border-radius:10px;background:#fff}
+.__checkout_item{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:9px 10px;border-bottom:1px solid rgba(10,34,64,0.07);font-size:13px;color:var(--deep)}
+.__checkout_item:last-child{border-bottom:0}
+.__checkout_item span{display:grid;gap:2px}
+.__checkout_item small{color:var(--muted)}
+.__checkout_item_empty{color:var(--muted)}
+.__checkout_more{font-size:12px;color:var(--muted);font-style:italic}
+.__checkout_total{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:10px;background:#fff7ed;border:1px solid rgba(242,107,56,0.25);font-weight:800;color:#b45309}
+.__checkout_total span{font-size:16px}
+.__checkout_help{border:1px solid rgba(14,94,184,0.2);background:linear-gradient(180deg,#f8fbff,#eef5ff);border-radius:10px;padding:10px}
+.__checkout_help_title{font-weight:900;color:#0b223f}
+.__checkout_help_text{margin-top:2px;font-size:12px;color:#34506f}
+.__checkout_help_actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.__checkout_help_link{display:inline-flex;align-items:center;justify-content:center;text-decoration:none !important;min-width:118px}
 @media(max-width:880px){
   .__account_layout{grid-template-columns:1fr}
   .__account_dialog{width:calc(100% - 16px)}
   .__orders_dialog{width:calc(100% - 16px);max-height:calc(100dvh - 20px)}
+  .__orders_toolbar{grid-template-columns:1fr 1fr}
+  .__orders_search{grid-column:1 / -1}
+  .__orders_clear{grid-column:1 / -1}
   .__orders_pager{align-items:center}
   .__orders_more_btn{width:auto;min-width:180px}
+  .__checkout_help_actions{display:grid;grid-template-columns:1fr;gap:8px}
+  .__checkout_help_link{width:100%}
 }
 @media(max-width:640px){ .__dialog{width:calc(100% - 32px)} }
 `;
@@ -3728,6 +4118,84 @@ function getLastUsedAddressId(accountId = null){
     const id = String(raw || '').trim();
     return id || null;
   }catch(_){ return null; }
+}
+function sanitizeAddressAlias(value){
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 36);
+}
+function sanitizeAddressText(value, maxLen = 80){
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLen);
+}
+function sanitizeAddressNumber(value){
+  return String(value || '').replace(/\s+/g, '').trim().slice(0, 12);
+}
+function addressAliasExists(label, addresses = [], excludeId = null){
+  const alias = sanitizeAddressAlias(label).toLowerCase();
+  if (!alias) return false;
+  const exclude = String(excludeId || '').trim();
+  return (Array.isArray(addresses) ? addresses : []).some((addr) => {
+    if (!addr) return false;
+    if (exclude && String(addr.id || '').trim() === exclude) return false;
+    return sanitizeAddressAlias(addr.label || '').toLowerCase() === alias;
+  });
+}
+function buildUniqueAddressAlias(addresses = [], excludeId = null){
+  const base = 'Dirección';
+  if (!addressAliasExists(base, addresses, excludeId)) return base;
+  for (let i = 2; i <= 500; i++){
+    const candidate = base + ' ' + i;
+    if (!addressAliasExists(candidate, addresses, excludeId)) return candidate;
+  }
+  return base + ' ' + String(Date.now()).slice(-4);
+}
+function validateAddressInput(
+  data,
+  {
+    addresses = [],
+    excludeId = null,
+    requireAlias = false,
+    enforceUniqueAlias = false,
+    autoAliasWhenEmpty = false
+  } = {}
+){
+  const value = {
+    label: sanitizeAddressAlias(data?.label || data?.alias || ''),
+    barrio: sanitizeAddressText(data?.barrio || ''),
+    calle: sanitizeAddressText(data?.calle || ''),
+    numeracion: sanitizeAddressNumber(data?.numeracion || data?.numero || '')
+  };
+  if (!value.barrio || !value.calle || !value.numeracion){
+    return { ok: false, field: !value.barrio ? 'barrio' : (!value.calle ? 'calle' : 'numeracion'), message: 'Completa barrio, calle y numeración.' };
+  }
+  const textPattern = /^[0-9A-Za-z\u00c0-\u00ff .,'-]{2,80}$/;
+  if (!textPattern.test(value.barrio) || !/[A-Za-z\u00c0-\u00ff]/.test(value.barrio)){
+    return { ok: false, field: 'barrio', message: 'El barrio debe tener al menos 2 caracteres válidos.' };
+  }
+  if (!textPattern.test(value.calle) || !/[A-Za-z\u00c0-\u00ff]/.test(value.calle)){
+    return { ok: false, field: 'calle', message: 'La calle debe tener al menos 2 caracteres válidos.' };
+  }
+  if (!/^(?:[0-9]{1,6}[A-Za-z]?|s\/?n)$/i.test(value.numeracion)){
+    return { ok: false, field: 'numeracion', message: 'La numeración debe ser válida (ejemplo: 569 o S/N).' };
+  }
+  if (value.label){
+    if (value.label.length < 2){
+      return { ok: false, field: 'alias', message: 'El alias debe tener al menos 2 caracteres.' };
+    }
+    if (!/^[0-9A-Za-z\u00c0-\u00ff _.'-]{2,36}$/.test(value.label)){
+      return { ok: false, field: 'alias', message: 'El alias contiene caracteres inválidos.' };
+    }
+  }
+  if (!value.label && requireAlias){
+    return { ok: false, field: 'alias', message: 'Define un alias para esta dirección.' };
+  }
+  if (enforceUniqueAlias){
+    if (!value.label && autoAliasWhenEmpty){
+      value.label = buildUniqueAddressAlias(addresses, excludeId);
+    }
+    if (value.label && addressAliasExists(value.label, addresses, excludeId)){
+      return { ok: false, field: 'alias', message: 'Ya existe una dirección con ese alias. Usa otro nombre.' };
+    }
+  }
+  return { ok: true, value };
 }
 function normalizeAddressEntry(entry){
   if (!entry || typeof entry !== 'object') return null;
@@ -3979,31 +4447,41 @@ function showDeliveryAddressModal(prefill = {}){
         try{ openAccountModal(); }catch(_){ }
       });
       if (saveBtn) saveBtn.addEventListener('click', ()=>{
-        const label = (document.getElementById('__addr_alias')?.value || '').trim();
-        const barrio = (document.getElementById('__addr_barrio')?.value || '').trim();
-        const calle = (document.getElementById('__addr_calle')?.value || '').trim();
-        const numeracion = (document.getElementById('__addr_numero')?.value || '').trim();
-        if (!barrio || !calle || !numeracion){
-          try{ showAlert('Completa barrio, calle y numeración para continuar.'); }catch(_){ }
+        const saveToggle = document.getElementById('__addr_save_book');
+        const defaultToggle = document.getElementById('__addr_set_default');
+        const shouldPersist = token || (saveToggle && saveToggle.checked);
+        const bookNow = shouldPersist ? loadAddressBook(accountId) : { addresses: [] };
+        const check = validateAddressInput({
+          label: document.getElementById('__addr_alias')?.value || '',
+          barrio: document.getElementById('__addr_barrio')?.value || '',
+          calle: document.getElementById('__addr_calle')?.value || '',
+          numeracion: document.getElementById('__addr_numero')?.value || ''
+        }, {
+          addresses: bookNow.addresses,
+          excludeId: selectedAddressId || null,
+          requireAlias: false,
+          enforceUniqueAlias: shouldPersist,
+          autoAliasWhenEmpty: shouldPersist
+        });
+        if (!check.ok){
+          try{ showAlert(check.message || 'Revisa los datos de dirección para continuar.'); }catch(_){ }
           try{
-            if (!barrio) document.getElementById('__addr_barrio')?.focus();
-            else if (!calle) document.getElementById('__addr_calle')?.focus();
+            if (check.field === 'alias') document.getElementById('__addr_alias')?.focus();
+            else if (check.field === 'barrio') document.getElementById('__addr_barrio')?.focus();
+            else if (check.field === 'calle') document.getElementById('__addr_calle')?.focus();
             else document.getElementById('__addr_numero')?.focus();
           }catch(_){ }
           return;
         }
-        const out = { label, barrio, calle, numeracion };
+        const out = check.value;
         saveDeliveryAddressCache(out);
-        const saveToggle = document.getElementById('__addr_save_book');
-        const defaultToggle = document.getElementById('__addr_set_default');
-        const shouldPersist = token || (saveToggle && saveToggle.checked);
         if (shouldPersist){
           const persisted = upsertAddressInBook({
             id: selectedAddressId || undefined,
-            label,
-            barrio,
-            calle,
-            numeracion
+            label: out.label,
+            barrio: out.barrio,
+            calle: out.calle,
+            numeracion: out.numeracion
           }, {
             accountId,
             setDefault: Boolean(defaultToggle && defaultToggle.checked)
@@ -4246,26 +4724,36 @@ function openAccountModal(){
     });
 
     overlay.querySelector('[data-action="save_address"]')?.addEventListener('click', () => {
-      const label = String(aliasEl?.value || '').trim();
-      const barrio = String(barrioEl?.value || '').trim();
-      const calle = String(calleEl?.value || '').trim();
-      const numeracion = String(numeroEl?.value || '').trim();
-      if (!barrio || !calle || !numeracion){
-        showAlert('Completa barrio, calle y numeración para guardar.');
+      const bookNow = loadAddressBook(accountId);
+      const check = validateAddressInput({
+        label: String(aliasEl?.value || ''),
+        barrio: String(barrioEl?.value || ''),
+        calle: String(calleEl?.value || ''),
+        numeracion: String(numeroEl?.value || '')
+      }, {
+        addresses: bookNow.addresses,
+        excludeId: editingId || null,
+        requireAlias: true,
+        enforceUniqueAlias: true,
+        autoAliasWhenEmpty: false
+      });
+      if (!check.ok){
+        showAlert(check.message || 'Revisa los datos para guardar esta dirección.');
         try{
-          if (!barrio) barrioEl?.focus();
-          else if (!calle) calleEl?.focus();
+          if (check.field === 'alias') aliasEl?.focus();
+          else if (check.field === 'barrio') barrioEl?.focus();
+          else if (check.field === 'calle') calleEl?.focus();
           else numeroEl?.focus();
         }catch(_){ }
         return;
       }
-      const bookNow = loadAddressBook(accountId);
+      const clean = check.value;
       const saved = upsertAddressInBook({
         id: editingId || undefined,
-        label,
-        barrio,
-        calle,
-        numeracion
+        label: clean.label,
+        barrio: clean.barrio,
+        calle: clean.calle,
+        numeracion: clean.numeracion
       }, {
         accountId,
         setDefault: Boolean(defaultEl?.checked) || !bookNow.defaultId
@@ -4380,40 +4868,43 @@ function showGuestModal(){
       cancelBtn.addEventListener('click', ()=>{ cleanup(); resolve(null); });
       saveBtn.addEventListener('click', ()=>{
         const emailRaw = (document.getElementById('__gemail')?.value || '').trim();
-        const barrioRaw = (document.getElementById('__gbarrio')?.value || '').trim();
-        const calleRaw = (document.getElementById('__gcalle')?.value || '').trim();
-        const numeroRaw = (document.getElementById('__gnumero')?.value || '').trim();
         const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw);
         if (!emailOk) {
           try { showAlert('Para enviarte la confirmacion, ingresa un email valido.'); } catch(_){}
           try { document.getElementById('__gemail')?.focus(); } catch(_){}
           return;
         }
-        if (!barrioRaw || !calleRaw || !numeroRaw) {
-          try { showAlert('Para entregar tu pedido, completa barrio, calle y numeración.'); } catch(_){}
+        const check = validateAddressInput({
+          barrio: document.getElementById('__gbarrio')?.value || '',
+          calle: document.getElementById('__gcalle')?.value || '',
+          numeracion: document.getElementById('__gnumero')?.value || ''
+        });
+        if (!check.ok) {
+          try { showAlert(check.message || 'Para entregar tu pedido, revisa la dirección.'); } catch(_){}
           try {
-            if (!barrioRaw) document.getElementById('__gbarrio')?.focus();
-            else if (!calleRaw) document.getElementById('__gcalle')?.focus();
+            if (check.field === 'barrio') document.getElementById('__gbarrio')?.focus();
+            else if (check.field === 'calle') document.getElementById('__gcalle')?.focus();
             else document.getElementById('__gnumero')?.focus();
           } catch(_){}
           return;
         }
+        const clean = check.value;
         const o = {
           name: (document.getElementById('__gname')?.value || '').trim(),
           email: emailRaw,
-          barrio: barrioRaw,
-          calle: calleRaw,
-          numero: numeroRaw
+          barrio: clean.barrio,
+          calle: clean.calle,
+          numero: clean.numeracion
         };
         // persist guest info for future attempts / across reloads
         try{ localStorage.setItem('catalog:guest_info_v1', JSON.stringify(o)); }catch(e){}
-        try{ saveDeliveryAddressCache({ barrio: barrioRaw, calle: calleRaw, numeracion: numeroRaw }); }catch(_){ }
+        try{ saveDeliveryAddressCache({ barrio: clean.barrio, calle: clean.calle, numeracion: clean.numeracion }); }catch(_){ }
         try{
           const persisted = upsertAddressInBook({
             label: o.name ? ('Contacto ' + o.name) : 'Invitado',
-            barrio: barrioRaw,
-            calle: calleRaw,
-            numeracion: numeroRaw
+            barrio: clean.barrio,
+            calle: clean.calle,
+            numeracion: clean.numeracion
           }, { accountId: getCurrentAccountStorageId(), setDefault: true });
           if (persisted && persisted.id) setLastUsedAddressId(persisted.id, getCurrentAccountStorageId());
         }catch(_){ }
