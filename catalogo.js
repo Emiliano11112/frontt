@@ -94,6 +94,9 @@ let promotions = [];
 let consumos = [];
 const DEFAULT_FALLBACK_IMAGE = 'images/icon.png';
 const PROMOTIONS_CACHE_KEY = 'catalog:promotions_cache_v2';
+const DELIVERY_ADDRESS_CACHE_KEY = 'catalog:delivery_address_v1';
+const ADDRESS_BOOK_STORAGE_PREFIX = 'catalog:address_book_v1:';
+const LAST_USED_ADDRESS_STORAGE_PREFIX = 'catalog:last_used_address_v1:';
 
 function loadPromotionsCache(){
   try{
@@ -2214,24 +2217,13 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           return s + (Number(i.meta?.price || 0) * Number(factor || 0));
         }, 0) };
 
-        // attach user info if logged in; validate presence of contact fields and confirm
+        // attach user info if logged in (used to prefill delivery fields)
         const token = getToken();
         if (token) {
           try {
             const profileRes = await fetch(`${API_ORIGIN}/auth/me`, { headers: { 'Authorization': `Bearer ${token}` }, mode: 'cors' });
             if (profileRes.ok) {
               const profile = await profileRes.json();
-              // If profile missing contact fields, ask user to confirm before proceeding
-              const missing = [];
-              if (!profile.user_full_name && !profile.full_name) missing.push('nombre');
-              if (!profile.email) missing.push('email');
-              if (!profile.barrio) missing.push('barrio');
-              if (!profile.calle) missing.push('calle');
-              if (!profile.numeracion) missing.push('numeración');
-              if (missing.length) {
-                const ok = await showConfirm('Tu perfil está incompleto (faltan: ' + missing.join(', ') + '). ¿Deseas continuar y enviar el pedido igualmente?');
-                if (!ok) { try { document.getElementById('checkoutBtn').disabled = false; } catch(e){}; return; }
-              }
               basePayload.user_id = profile.id;
               basePayload.user_full_name = profile.full_name;
               basePayload.user_email = profile.email;
@@ -2261,6 +2253,26 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         }
         if (!basePayload.user_email) {
           try { await showAlert('Necesitamos tu email para enviarte la confirmacion del pedido.'); } catch(_){}
+          try { checkout.disabled = false; } catch(_){}
+          return;
+        }
+        const shouldPromptDeliveryAddress = Boolean(token) || !basePayload.user_barrio || !basePayload.user_calle || !basePayload.user_numeracion;
+        if (shouldPromptDeliveryAddress) {
+          const deliveryInfo = await showDeliveryAddressModal({
+            barrio: basePayload.user_barrio || '',
+            calle: basePayload.user_calle || '',
+            numeracion: basePayload.user_numeracion || ''
+          });
+          if (!deliveryInfo) {
+            try { checkout.disabled = false; } catch(_){}
+            return;
+          }
+          basePayload.user_barrio = deliveryInfo.barrio;
+          basePayload.user_calle = deliveryInfo.calle;
+          basePayload.user_numeracion = deliveryInfo.numeracion;
+        }
+        if (!basePayload.user_barrio || !basePayload.user_calle || !basePayload.user_numeracion) {
+          try { await showAlert('Necesitamos dirección de entrega (barrio, calle y numeración).'); } catch(_){}
           try { checkout.disabled = false; } catch(_){}
           return;
         }
@@ -2952,24 +2964,28 @@ function normalizeOrderItemForCart(item){
   return normalized;
 }
 
-async function fetchOrdersForRepeat(token){
+async function fetchOrdersSnapshot(token, { limit = 200, source = 'web' } = {}){
   const headers = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  const params = new URLSearchParams();
+  if (limit != null) params.set('limit', String(limit));
+  if (source) params.set('source', String(source));
+  const query = params.toString() ? ('?' + params.toString()) : '';
   const tryUrls = [];
   try{
     const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
     if (typeof API_ORIGIN === 'string' && API_ORIGIN) {
       if (pageOrigin && pageOrigin !== API_ORIGIN) {
-        tryUrls.push(API_ORIGIN + '/orders?source=web&limit=200');
-        tryUrls.push(pageOrigin + '/orders?source=web&limit=200');
+        tryUrls.push(API_ORIGIN + '/orders' + query);
+        tryUrls.push(pageOrigin + '/orders' + query);
       } else {
-        tryUrls.push((pageOrigin || API_ORIGIN) + '/orders?source=web&limit=200');
+        tryUrls.push((pageOrigin || API_ORIGIN) + '/orders' + query);
       }
     } else if (pageOrigin) {
-      tryUrls.push(pageOrigin + '/orders?source=web&limit=200');
+      tryUrls.push(pageOrigin + '/orders' + query);
     }
   }catch(_){ }
-  tryUrls.push('/orders?source=web&limit=200');
+  tryUrls.push('/orders' + query);
 
   for (const url of tryUrls){
     try{
@@ -2980,6 +2996,14 @@ async function fetchOrdersForRepeat(token){
     }catch(_){ }
   }
   return [];
+}
+async function fetchOrdersForRepeat(token){
+  return fetchOrdersSnapshot(token, { limit: 200, source: 'web' });
+}
+async function fetchOrdersForAccount(token){
+  const all = await fetchOrdersSnapshot(token, { limit: 300, source: null });
+  if (Array.isArray(all) && all.length) return all;
+  return fetchOrdersSnapshot(token, { limit: 300, source: 'web' });
 }
 
 function updateRepeatOrderButton(){
@@ -3083,6 +3107,194 @@ async function repeatLastOrder(){
   }
 }
 
+function formatOrderDateLabel(value){
+  try{
+    if (!value) return '-';
+    const dt = new Date(value);
+    if (Number.isNaN(dt.getTime())) return '-';
+    return dt.toLocaleString('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }catch(_){ return '-'; }
+}
+function getOrderAddressLabel(order){
+  try{
+    const street = [String(order?.user_calle || '').trim(), String(order?.user_numeracion || '').trim()].filter(Boolean).join(' ');
+    const barrio = String(order?.user_barrio || '').trim();
+    if (street && barrio) return street + ', ' + barrio;
+    return street || barrio || '-';
+  }catch(_){ return '-'; }
+}
+function resolveOrderItemName(item){
+  try{
+    const metaName = item?.meta?.name || item?.meta?.nombre || item?.meta?.promo_name;
+    if (metaName) return String(metaName).trim();
+    const pid = item?.id ?? item?.product_id ?? item?.productId ?? null;
+    if (pid == null) return 'Producto';
+    const prod = products.find(p => String(p.id ?? p._id) === String(pid));
+    if (prod) return String(prod.nombre || prod.name || ('Producto ' + String(pid)));
+    return 'Producto ' + String(pid);
+  }catch(_){ return 'Producto'; }
+}
+function buildOrderItemsListHtml(order){
+  const items = Array.isArray(order?.items) ? order.items : [];
+  if (!items.length) return '<li>Sin ítems</li>';
+  const maxVisible = 4;
+  const parts = [];
+  for (let i = 0; i < Math.min(items.length, maxVisible); i++){
+    const it = items[i];
+    const qtyRaw = Number(it?.qty ?? it?.quantity ?? 1);
+    const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1;
+    parts.push('<li><span class="__orders_qty">x' + escapeHtml(String(qty)) + '</span>' + escapeHtml(resolveOrderItemName(it)) + '</li>');
+  }
+  if (items.length > maxVisible){
+    parts.push('<li class="__orders_more">+' + escapeHtml(String(items.length - maxVisible)) + ' ítems más</li>');
+  }
+  return parts.join('');
+}
+function buildOrderCardHtml(order){
+  const idLabel = escapeHtml(String(order?.id ?? '-'));
+  const dateLabel = escapeHtml(formatOrderDateLabel(order?.created_at));
+  const statusLabel = escapeHtml(String(order?.status || 'nuevo'));
+  const totalRaw = Number(order?.total || 0);
+  const totalLabel = '$' + escapeHtml(totalRaw.toFixed(2));
+  const paymentMethod = escapeHtml(String(order?.payment_method || '-'));
+  const paymentStatus = escapeHtml(String(order?.payment_status || '-'));
+  const addressLabel = escapeHtml(getOrderAddressLabel(order));
+  return `
+    <article class="__order_card">
+      <header class="__order_head">
+        <div class="__order_title">Pedido #${idLabel}</div>
+        <div class="__order_date">${dateLabel}</div>
+      </header>
+      <div class="__order_meta">
+        <span class="__order_chip">Estado: ${statusLabel}</span>
+        <span class="__order_chip">Pago: ${paymentMethod} (${paymentStatus})</span>
+        <span class="__order_chip __order_total">Total: ${totalLabel}</span>
+      </div>
+      <div class="__order_address"><strong>Entrega:</strong> ${addressLabel}</div>
+      <ul class="__order_items">${buildOrderItemsListHtml(order)}</ul>
+    </article>
+  `;
+}
+async function showMyOrdersModal(){
+  const token = getToken();
+  const email = getTokenEmail();
+  if (!token || !email){
+    await showAlert('Inicia sesión para ver tus pedidos.', 'warning');
+    return;
+  }
+  try{
+    ensureGlobalDialogStyles();
+    const existing = document.getElementById('__orders_overlay');
+    if (existing){
+      const d = existing.querySelector('.__dialog');
+      existing.classList.add('open');
+      if (d) d.classList.add('open');
+      document.body.classList.add('__lock_scroll');
+      return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = '__dialog_overlay __orders_overlay';
+    overlay.id = '__orders_overlay';
+    overlay.style.zIndex = 3390;
+    overlay.innerHTML = `
+      <div class="__dialog __dialog--info __orders_dialog" role="dialog" aria-modal="true" aria-label="Mis pedidos">
+        <div class="dialog-header">
+          <span class="dialog-icon">🧾</span>
+          <h3>Mis pedidos</h3>
+        </div>
+        <div class="dialog-body">
+          <p class="__orders_hint">Aquí tienes el historial de pedidos de tu cuenta.</p>
+          <div id="__orders_list" class="__orders_list">
+            <div class="__orders_loading">Cargando pedidos...</div>
+          </div>
+          <div id="__orders_pager" class="__orders_pager" hidden></div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-ghost" data-action="close">Cerrar</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    document.body.classList.add('__lock_scroll');
+    const dialog = overlay.querySelector('.__dialog');
+    requestAnimationFrame(()=>{
+      try{
+        overlay.classList.add('open');
+        if (dialog) dialog.classList.add('open');
+      }catch(_){ }
+    });
+
+    const close = () => {
+      try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ }
+      try{
+        if (!document.getElementById('__orders_overlay')) document.body.classList.remove('__lock_scroll');
+      }catch(_){ }
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
+    window.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', (ev) => { if (!ev.target.closest('.__dialog')) close(); });
+    overlay.querySelector('[data-action="close"]')?.addEventListener('click', close);
+
+    const listEl = overlay.querySelector('#__orders_list');
+    const pagerEl = overlay.querySelector('#__orders_pager');
+    const rows = await fetchOrdersForAccount(token);
+    const ownOrders = (rows || []).filter(r => getOrderEmail(r) === email);
+    ownOrders.sort((a, b) => {
+      const ta = new Date(a && a.created_at ? a.created_at : 0).getTime();
+      const tb = new Date(b && b.created_at ? b.created_at : 0).getTime();
+      return tb - ta;
+    });
+
+    if (!listEl || !pagerEl) return;
+    if (!ownOrders.length){
+      listEl.innerHTML = '<div class="__orders_empty">No encontramos pedidos para tu cuenta.</div>';
+      pagerEl.hidden = true;
+      return;
+    }
+
+    const PAGE_SIZE = 10;
+    const renderedCards = ownOrders.map(buildOrderCardHtml);
+    let visibleCount = 0;
+    const updatePager = () => {
+      const remaining = Math.max(0, ownOrders.length - visibleCount);
+      pagerEl.hidden = false;
+      if (remaining > 0){
+        pagerEl.innerHTML = `
+          <span class="__orders_progress">Mostrando ${visibleCount} de ${ownOrders.length}</span>
+          <button class="btn btn-ghost __orders_more_btn" data-action="load_more_orders">Cargar más (${Math.min(PAGE_SIZE, remaining)})</button>
+        `;
+        const loadMoreBtn = pagerEl.querySelector('[data-action="load_more_orders"]');
+        if (loadMoreBtn){
+          loadMoreBtn.addEventListener('click', () => {
+            const nextCount = Math.min(visibleCount + PAGE_SIZE, ownOrders.length);
+            if (nextCount <= visibleCount) return;
+            const nextChunk = renderedCards.slice(visibleCount, nextCount).join('');
+            if (nextChunk) listEl.insertAdjacentHTML('beforeend', nextChunk);
+            visibleCount = nextCount;
+            requestAnimationFrame(updatePager);
+          });
+        }
+      } else {
+        pagerEl.innerHTML = `<span class="__orders_progress">Mostrando ${visibleCount} de ${ownOrders.length}</span>`;
+      }
+    };
+    const firstCount = Math.min(PAGE_SIZE, ownOrders.length);
+    listEl.innerHTML = renderedCards.slice(0, firstCount).join('');
+    visibleCount = firstCount;
+    requestAnimationFrame(updatePager);
+  }catch(e){
+    console.warn('showMyOrdersModal failed', e);
+    await showAlert('No se pudieron cargar tus pedidos en este momento.', 'error');
+  }
+}
+
 // Quick server-side token validator for debugging
 async function debugWhoami(){
   try{
@@ -3128,13 +3340,12 @@ function showToast(message, timeout = 3000){
 }
 
 // Modal / dialog helpers (reusable) — enhanced styles and variants
-function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', value: true, primary: true }], dismissible = true, type = ''} = {}){
-  return new Promise((resolve) => {
-    try{
-      if (!document.getElementById('__global_dialog_styles')){
-        const s = document.createElement('style'); s.id = '__global_dialog_styles'; s.textContent = `
+function ensureGlobalDialogStyles(){
+  if (document.getElementById('__global_dialog_styles')) return;
+  const s = document.createElement('style'); s.id = '__global_dialog_styles'; s.textContent = `
 .__dialog_overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.36);backdrop-filter:blur(3px);z-index:3200;opacity:0;pointer-events:none;transition:opacity .18s ease}
 .__dialog_overlay.open{opacity:1;pointer-events:auto}
+body.__lock_scroll{overflow:hidden}
 .__dialog{width:520px;max-width:calc(100% - 36px);background:linear-gradient(180deg, rgba(255,255,255,0.98), var(--surface));border-radius:14px;padding:16px;box-shadow:0 18px 48px rgba(2,6,23,0.16);color:var(--deep);border:1px solid rgba(10,34,64,0.06);transform:translateY(-6px);transition:transform 200ms ease, opacity 180ms ease}
 .__dialog.open{transform:none}
 .__dialog .dialog-header{display:flex;align-items:center;gap:12px;margin-bottom:8px}
@@ -3151,10 +3362,171 @@ function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', v
 .__dialog--danger .dialog-icon{background:linear-gradient(90deg,#ffecec,#ffd6d6); color:#9b1e1e}
 .__dialog--info .dialog-icon{background:linear-gradient(90deg,#eaf6ff,#dbefff);color:#05507a}
 .__dialog input[type="text"], .__dialog input[type="email"]{width:100%;padding:10px;border-radius:8px;border:1px solid #e6e9ef}
+.__delivery_dialog{width:620px;max-width:calc(100% - 24px);padding:18px}
+.__delivery_dialog .dialog-body{color:var(--deep)}
+.__delivery_hint{margin:0 0 12px;color:var(--muted);font-size:14px}
+.__delivery_inputs{display:grid;gap:10px}
+.__delivery_inputs input{height:42px;border:1px solid rgba(10,34,64,0.12);border-radius:10px;padding:0 12px;font-size:14px;background:linear-gradient(180deg,#fff,#fcfdff)}
+.__addr_saved_block{margin:0 0 12px;padding:10px;border-radius:12px;background:linear-gradient(180deg,#fff,#f9fbff);border:1px solid rgba(10,34,64,0.08)}
+.__addr_saved_title{font-size:12px;font-weight:800;letter-spacing:0.4px;text-transform:uppercase;color:rgba(6,26,43,0.62);margin:0 0 8px}
+.__addr_saved_list{display:flex;flex-wrap:wrap;gap:8px}
+.__addr_saved_chip{border:1px solid rgba(10,34,64,0.12);background:#fff;border-radius:999px;padding:7px 12px;font-size:13px;font-weight:700;color:var(--deep);cursor:pointer}
+.__addr_saved_chip.active{border-color:rgba(242,107,56,0.45);background:linear-gradient(90deg,rgba(242,107,56,0.1),rgba(255,184,77,0.12))}
+.__addr_saved_empty{margin:0;color:var(--muted);font-size:13px}
+.__addr_check{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);margin-top:4px}
+.__addr_check input{accent-color:var(--accent)}
+.__account_dialog{width:900px;max-width:calc(100% - 20px);padding:18px 18px 14px}
+.__account_identity{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:12px;background:linear-gradient(90deg,rgba(242,107,56,0.08),rgba(255,184,77,0.1));margin-bottom:12px}
+.__account_identity_main{display:flex;align-items:center;gap:12px}
+.__account_identity_avatar{width:52px;height:52px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:#fff;color:#0b223f;border:1px solid rgba(10,34,64,0.12);box-shadow:0 8px 24px rgba(10,34,64,0.08)}
+.__account_identity_avatar svg{width:28px;height:28px}
+.__account_name{font-weight:900;font-size:16px;color:var(--deep)}
+.__account_email{font-size:13px;color:rgba(6,26,43,0.7)}
+.__account_layout{display:grid;grid-template-columns:1.25fr 1fr;gap:12px}
+.__account_panel{border:1px solid rgba(10,34,64,0.08);border-radius:12px;background:#fff;padding:12px}
+.__account_panel h4{margin:0 0 10px;font-size:14px}
+.__account_address_list{display:flex;flex-direction:column;gap:9px;max-height:44vh;overflow:auto;padding-right:4px}
+.__account_addr_item{border:1px solid rgba(10,34,64,0.09);border-radius:11px;padding:10px;background:linear-gradient(180deg,#fff,#fcfdff)}
+.__account_addr_item.is-default{border-color:rgba(242,107,56,0.38);background:linear-gradient(180deg,rgba(255,244,237,0.92),#fff)}
+.__account_addr_top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.__account_addr_label{font-weight:800;color:var(--deep);font-size:13px}
+.__account_addr_name{display:flex;align-items:center;gap:6px}
+.__account_addr_last{font-size:11px;color:rgba(6,26,43,0.62);font-weight:700}
+.__account_addr_badge{font-size:11px;font-weight:800;color:#b45309;background:#fff7ed;border:1px solid rgba(242,107,56,0.3);padding:2px 7px;border-radius:999px}
+.__account_addr_line{font-size:13px;color:rgba(6,26,43,0.82);margin-bottom:8px}
+.__account_addr_actions{display:flex;flex-wrap:wrap;gap:6px}
+.__account_addr_actions .btn{padding:6px 10px;border-radius:9px;font-size:12px}
+.__account_form{display:grid;gap:9px}
+.__account_form input{height:40px;border:1px solid rgba(10,34,64,0.12);border-radius:10px;padding:0 11px}
+.__account_form_actions{display:flex;gap:8px;justify-content:flex-end}
+.__account_empty{font-size:13px;color:var(--muted);padding:12px;border:1px dashed rgba(10,34,64,0.2);border-radius:10px;background:#fcfdff}
+.__account_subtle{font-size:12px;color:var(--muted)}
+.__account_header_actions{display:flex;gap:8px;align-items:center}
+.__account_header_actions .btn{padding:7px 10px;border-radius:9px}
+.__account_dialog .btn,
+.__orders_dialog .btn,
+.__delivery_dialog .btn{
+  position:relative;
+  min-height:38px;
+  padding:9px 14px;
+  border-radius:12px;
+  border:1px solid transparent;
+  font-weight:800;
+  letter-spacing:0.1px;
+  transition:transform .14s cubic-bezier(.2,.9,.3,1), box-shadow .18s ease, border-color .18s ease, background .18s ease, filter .16s ease;
+}
+.__account_dialog .btn:active,
+.__orders_dialog .btn:active,
+.__delivery_dialog .btn:active{
+  transform:translateY(0);
+  box-shadow:0 6px 14px rgba(24,52,92,0.14);
+}
+.__account_dialog .btn:focus-visible,
+.__orders_dialog .btn:focus-visible,
+.__delivery_dialog .btn:focus-visible{
+  outline:3px solid rgba(242,107,56,0.22);
+  outline-offset:2px;
+}
+.__account_dialog .btn.btn-ghost,
+.__orders_dialog .btn.btn-ghost,
+.__delivery_dialog .btn.btn-ghost{
+  background:linear-gradient(180deg,#ffffff,#edf4ff) !important;
+  color:#16335a !important;
+  border-color:rgba(74,107,158,0.36) !important;
+  box-shadow:0 1px 0 rgba(255,255,255,0.92) inset, 0 8px 18px rgba(22,51,90,0.12);
+}
+.__account_dialog .btn.btn-ghost:hover,
+.__orders_dialog .btn.btn-ghost:hover,
+.__delivery_dialog .btn.btn-ghost:hover{
+  transform:translateY(-1px);
+  background:linear-gradient(180deg,#ffffff,#e6efff) !important;
+  border-color:rgba(52,96,164,0.52) !important;
+  box-shadow:0 1px 0 rgba(255,255,255,0.98) inset, 0 12px 24px rgba(22,51,90,0.16);
+}
+.__account_dialog .btn.btn-primary,
+.__orders_dialog .btn.btn-primary,
+.__delivery_dialog .btn.btn-primary{
+  background:linear-gradient(90deg,var(--accent),var(--accent-2)) !important;
+  color:#fff !important;
+  border-color:rgba(196,92,24,0.28) !important;
+  box-shadow:0 12px 28px rgba(242,107,56,0.32), 0 1px 0 rgba(255,255,255,0.28) inset !important;
+}
+.__account_dialog .btn.btn-primary:hover,
+.__orders_dialog .btn.btn-primary:hover,
+.__delivery_dialog .btn.btn-primary:hover{
+  transform:translateY(-1px);
+  filter:brightness(1.04) saturate(1.06);
+  box-shadow:0 16px 30px rgba(242,107,56,0.38), 0 1px 0 rgba(255,255,255,0.32) inset !important;
+}
+.__account_addr_actions .btn{
+  min-height:32px;
+  padding:6px 10px;
+  border-radius:10px;
+  font-size:12px;
+  font-weight:700;
+}
+.__account_header_actions .btn,
+.__account_dialog .actions .btn,
+.__account_form_actions .btn{
+  min-height:40px;
+  padding:10px 16px;
+  border-radius:12px;
+}
+.__orders_dialog{
+  width:900px;
+  max-width:calc(100% - 36px);
+  max-height:calc(100dvh - 56px);
+  padding:16px;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  box-shadow:0 12px 30px rgba(2,6,23,0.14);
+  contain:layout paint style;
+}
+.__orders_dialog .dialog-body{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  flex:1;
+  min-height:0;
+  max-height:none;
+  overflow:hidden;
+}
+.__orders_hint{margin:0;color:var(--muted)}
+.__orders_overlay{backdrop-filter:none !important;background:rgba(2,6,23,0.26) !important}
+.__orders_list{display:grid;gap:10px;flex:1;min-height:0;max-height:none;overflow:auto;padding-right:4px;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;contain:content}
+.__orders_loading,.__orders_empty{padding:14px;border-radius:12px;border:1px dashed rgba(10,34,64,0.18);background:#fcfdff;color:var(--muted);font-size:14px}
+.__order_card{border:1px solid rgba(10,34,64,0.08);border-radius:12px;padding:12px;background:#fff;content-visibility:auto;contain-intrinsic-size:180px;contain:layout paint}
+.__order_head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.__order_title{font-weight:900;color:var(--deep)}
+.__order_date{font-size:12px;color:var(--muted)}
+.__order_meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+.__order_chip{font-size:12px;font-weight:700;color:#0b223f;background:#f4f7fb;border:1px solid rgba(10,34,64,0.1);padding:4px 8px;border-radius:999px}
+.__order_chip.__order_total{background:#fff7ed;border-color:rgba(242,107,56,0.32);color:#b45309}
+.__order_address{font-size:13px;color:rgba(6,26,43,0.8);margin-bottom:8px}
+.__order_items{margin:0;padding-left:18px;display:grid;gap:4px}
+.__order_items li{font-size:13px;color:rgba(6,26,43,0.86)}
+.__orders_qty{display:inline-block;min-width:26px;font-weight:800;color:#0b223f}
+.__orders_more{color:var(--muted);font-style:italic}
+.__orders_pager{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding-top:10px;margin-top:8px;border-top:1px solid rgba(10,34,64,0.08)}
+.__orders_pager[hidden]{display:none !important}
+.__orders_progress{font-size:12px;color:var(--muted);font-weight:700;text-align:center}
+.__orders_more_btn{min-width:210px;align-self:center}
+@media(max-width:880px){
+  .__account_layout{grid-template-columns:1fr}
+  .__account_dialog{width:calc(100% - 16px)}
+  .__orders_dialog{width:calc(100% - 16px);max-height:calc(100dvh - 20px)}
+  .__orders_pager{align-items:center}
+  .__orders_more_btn{width:auto;min-width:180px}
+}
 @media(max-width:640px){ .__dialog{width:calc(100% - 32px)} }
 `;
-        document.head.appendChild(s);
-      }
+  document.head.appendChild(s);
+}
+function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', value: true, primary: true }], dismissible = true, type = ''} = {}){
+  return new Promise((resolve) => {
+    try{
+      ensureGlobalDialogStyles();
 
       // small map for emoji icons — keeps things fast and dependency-free
       const iconMap = { info: 'ℹ️', success: '✔️', warning: '⚠️', danger: '✖️' };
@@ -3327,9 +3699,638 @@ function showJsonModal(obj, title = 'Detalle'){
   const html = `<pre style="white-space:pre-wrap;max-height:48vh;overflow:auto">${escapeHtml(JSON.stringify(obj, null, 2))}</pre>`;
   return showDialog({ title, html, buttons: [{ label: 'Cerrar', value: true, primary: true }], type: 'info' });
 }
+function getCurrentAccountStorageId(){
+  try{
+    const email = getTokenEmail();
+    if (email) return 'user:' + String(email).trim().toLowerCase();
+  }catch(_){ }
+  return 'guest';
+}
+function getAddressBookStorageKey(accountId = null){
+  const who = String(accountId || getCurrentAccountStorageId() || 'guest').trim().toLowerCase();
+  return ADDRESS_BOOK_STORAGE_PREFIX + who;
+}
+function getLastUsedAddressStorageKey(accountId = null){
+  const who = String(accountId || getCurrentAccountStorageId() || 'guest').trim().toLowerCase();
+  return LAST_USED_ADDRESS_STORAGE_PREFIX + who;
+}
+function setLastUsedAddressId(addressId, accountId = null){
+  try{
+    const key = getLastUsedAddressStorageKey(accountId);
+    const id = String(addressId || '').trim();
+    if (!id) { localStorage.removeItem(key); return; }
+    localStorage.setItem(key, id);
+  }catch(_){ }
+}
+function getLastUsedAddressId(accountId = null){
+  try{
+    const raw = localStorage.getItem(getLastUsedAddressStorageKey(accountId));
+    const id = String(raw || '').trim();
+    return id || null;
+  }catch(_){ return null; }
+}
+function normalizeAddressEntry(entry){
+  if (!entry || typeof entry !== 'object') return null;
+  const barrio = String(entry.barrio || '').trim();
+  const calle = String(entry.calle || '').trim();
+  const numeracion = String(entry.numeracion || entry.numero || '').trim();
+  if (!barrio || !calle || !numeracion) return null;
+  const labelRaw = String(entry.label || entry.alias || '').trim();
+  return {
+    id: String(entry.id || ('addr-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8))),
+    label: labelRaw,
+    barrio,
+    calle,
+    numeracion,
+    created_at: Number(entry.created_at || Date.now())
+  };
+}
+function buildAddressDisplay(addr){
+  if (!addr) return '';
+  const street = [String(addr.calle || '').trim(), String(addr.numeracion || '').trim()].filter(Boolean).join(' ');
+  const barrio = String(addr.barrio || '').trim();
+  if (street && barrio) return street + ', ' + barrio;
+  return street || barrio;
+}
+function loadAddressBook(accountId = null){
+  try{
+    const raw = localStorage.getItem(getAddressBookStorageKey(accountId));
+    if (!raw) return { defaultId: null, addresses: [] };
+    const parsed = JSON.parse(raw);
+    const list = Array.isArray(parsed?.addresses) ? parsed.addresses : (Array.isArray(parsed) ? parsed : []);
+    const normalized = [];
+    for (const item of list){
+      const n = normalizeAddressEntry(item);
+      if (!n) continue;
+      const dupe = normalized.find(x =>
+        String(x.barrio).toLowerCase() === String(n.barrio).toLowerCase() &&
+        String(x.calle).toLowerCase() === String(n.calle).toLowerCase() &&
+        String(x.numeracion).toLowerCase() === String(n.numeracion).toLowerCase()
+      );
+      if (dupe){
+        if (!dupe.label && n.label) dupe.label = n.label;
+      } else {
+        normalized.push(n);
+      }
+    }
+    let defaultId = parsed && parsed.defaultId ? String(parsed.defaultId) : null;
+    if (!defaultId && normalized.length) defaultId = normalized[0].id;
+    if (defaultId && !normalized.find(a => a.id === defaultId)) defaultId = normalized.length ? normalized[0].id : null;
+    return { defaultId, addresses: normalized };
+  }catch(_){ return { defaultId: null, addresses: [] }; }
+}
+function saveAddressBook(book, accountId = null){
+  try{
+    const addresses = Array.isArray(book?.addresses) ? book.addresses.map(normalizeAddressEntry).filter(Boolean) : [];
+    let defaultId = book && book.defaultId ? String(book.defaultId) : null;
+    if (!defaultId && addresses.length) defaultId = addresses[0].id;
+    if (defaultId && !addresses.find(a => a.id === defaultId)) defaultId = addresses.length ? addresses[0].id : null;
+    localStorage.setItem(getAddressBookStorageKey(accountId), JSON.stringify({ defaultId, addresses }));
+  }catch(_){ }
+}
+function upsertAddressInBook(entry, { accountId = null, setDefault = false } = {}){
+  const normalized = normalizeAddressEntry(entry);
+  if (!normalized) return null;
+  const book = loadAddressBook(accountId);
+  const byId = book.addresses.find(a => a.id === normalized.id);
+  const byContent = !byId ? book.addresses.find(a =>
+    String(a.barrio).toLowerCase() === String(normalized.barrio).toLowerCase() &&
+    String(a.calle).toLowerCase() === String(normalized.calle).toLowerCase() &&
+    String(a.numeracion).toLowerCase() === String(normalized.numeracion).toLowerCase()
+  ) : null;
+  const target = byId || byContent;
+  if (target){
+    target.barrio = normalized.barrio;
+    target.calle = normalized.calle;
+    target.numeracion = normalized.numeracion;
+    if (normalized.label) target.label = normalized.label;
+    if (!target.created_at) target.created_at = Date.now();
+    if (setDefault || !book.defaultId) book.defaultId = target.id;
+    saveAddressBook(book, accountId);
+    return target;
+  }
+  book.addresses.unshift(normalized);
+  if (setDefault || !book.defaultId) book.defaultId = normalized.id;
+  saveAddressBook(book, accountId);
+  return normalized;
+}
+function removeAddressFromBook(addressId, accountId = null){
+  const id = String(addressId || '');
+  if (!id) return;
+  const book = loadAddressBook(accountId);
+  book.addresses = book.addresses.filter(a => String(a.id) !== id);
+  if (book.defaultId === id) book.defaultId = book.addresses.length ? book.addresses[0].id : null;
+  saveAddressBook(book, accountId);
+  if (getLastUsedAddressId(accountId) === id){
+    setLastUsedAddressId(book.addresses.length ? book.addresses[0].id : null, accountId);
+  }
+}
+function setDefaultAddressInBook(addressId, accountId = null){
+  const id = String(addressId || '');
+  if (!id) return;
+  const book = loadAddressBook(accountId);
+  if (!book.addresses.find(a => String(a.id) === id)) return;
+  book.defaultId = id;
+  saveAddressBook(book, accountId);
+}
+function getDefaultAddressFromBook(accountId = null){
+  const book = loadAddressBook(accountId);
+  if (!book.addresses.length) return null;
+  const selected = book.addresses.find(a => a.id === book.defaultId) || book.addresses[0];
+  return selected || null;
+}
+function loadDeliveryAddressCache(){
+  try{
+    const raw = localStorage.getItem(DELIVERY_ADDRESS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      barrio: String(parsed.barrio || '').trim(),
+      calle: String(parsed.calle || '').trim(),
+      numeracion: String(parsed.numeracion || parsed.numero || '').trim()
+    };
+  }catch(_){ return null; }
+}
+function saveDeliveryAddressCache(data){
+  try{
+    const payload = {
+      barrio: String(data?.barrio || '').trim(),
+      calle: String(data?.calle || '').trim(),
+      numeracion: String(data?.numeracion || data?.numero || '').trim()
+    };
+    if (!payload.barrio && !payload.calle && !payload.numeracion) return;
+    localStorage.setItem(DELIVERY_ADDRESS_CACHE_KEY, JSON.stringify(payload));
+  }catch(_){ }
+}
+function showDeliveryAddressModal(prefill = {}){
+  return new Promise((resolve)=>{
+    try{
+      ensureGlobalDialogStyles();
+      const token = getToken();
+      const accountId = getCurrentAccountStorageId();
+      const cached = loadDeliveryAddressCache() || {};
+      const defaultAddress = getDefaultAddressFromBook(accountId) || {};
+      const addressBook = loadAddressBook(accountId);
+      const savedAddresses = Array.isArray(addressBook.addresses) ? [...addressBook.addresses].sort((a, b) => {
+        if (a.id === addressBook.defaultId) return -1;
+        if (b.id === addressBook.defaultId) return 1;
+        return Number(b.created_at || 0) - Number(a.created_at || 0);
+      }) : [];
+      const initial = {
+        label: String(prefill?.label || defaultAddress.label || '').trim(),
+        barrio: String(prefill?.barrio || defaultAddress.barrio || cached.barrio || '').trim(),
+        calle: String(prefill?.calle || defaultAddress.calle || cached.calle || '').trim(),
+        numeracion: String(prefill?.numeracion || prefill?.numero || defaultAddress.numeracion || cached.numeracion || '').trim()
+      };
+      const savedHtml = savedAddresses.length
+        ? savedAddresses.map((addr) => {
+            const name = addr.label || buildAddressDisplay(addr);
+            const isDefault = addr.id === addressBook.defaultId;
+            return `<button type="button" class="__addr_saved_chip ${isDefault ? 'active' : ''}" data-address-id="${escapeHtml(String(addr.id))}" title="${escapeHtml(buildAddressDisplay(addr))}">${escapeHtml(name)}</button>`;
+          }).join('')
+        : '';
+      const overlay = document.createElement('div');
+      overlay.className = '__dialog_overlay';
+      overlay.style.zIndex = 3360;
+      overlay.innerHTML = `
+        <div class="__dialog __dialog--info __delivery_dialog" role="dialog" aria-modal="true" aria-label="Dirección de entrega">
+          <div class="dialog-header"><span class="dialog-icon">📍</span><h3>Dirección de entrega</h3></div>
+          <div class="dialog-body">
+            <p class="__delivery_hint">Confirma dónde entregamos este pedido.</p>
+            <div class="__addr_saved_block">
+              <div class="__addr_saved_title">Direcciones guardadas</div>
+              ${savedAddresses.length
+                ? `<div class="__addr_saved_list">${savedHtml}</div>`
+                : `<p class="__addr_saved_empty">${token ? 'Aún no guardaste direcciones en tu cuenta.' : 'Aún no guardaste direcciones en este dispositivo.'}</p>`}
+            </div>
+            <div class="__delivery_inputs">
+              <input id="__addr_alias" type="text" placeholder="Alias (Casa, Trabajo) - opcional" />
+              <input id="__addr_barrio" type="text" placeholder="Barrio" />
+              <input id="__addr_calle" type="text" placeholder="Calle" />
+              <input id="__addr_numero" type="text" placeholder="Numeración" />
+            </div>
+            <label class="__addr_check"><input id="__addr_save_book" type="checkbox" ${token ? 'checked' : ''}>Guardar esta dirección en ${token ? 'Mi cuenta' : 'este dispositivo'}</label>
+            <label class="__addr_check"><input id="__addr_set_default" type="checkbox" ${savedAddresses.length ? '' : 'checked'}>Usar como dirección predeterminada</label>
+          </div>
+          <div class="actions">
+            ${token ? '<button class="btn btn-ghost" data-action="manage">Mi cuenta</button>' : ''}
+            <button class="btn btn-ghost" data-action="cancel">Cancelar</button>
+            <button class="btn btn-primary" data-action="save">Continuar</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const dialog = overlay.querySelector('.__dialog');
+      let selectedAddressId = addressBook.defaultId || null;
+      const setFields = (addr) => {
+        if (!addr) return;
+        try{
+          const aliasEl = document.getElementById('__addr_alias');
+          const b = document.getElementById('__addr_barrio');
+          const c = document.getElementById('__addr_calle');
+          const n = document.getElementById('__addr_numero');
+          if (aliasEl) aliasEl.value = String(addr.label || '').trim();
+          if (b) b.value = String(addr.barrio || '').trim();
+          if (c) c.value = String(addr.calle || '').trim();
+          if (n) n.value = String(addr.numeracion || addr.numero || '').trim();
+        }catch(_){ }
+      };
+      requestAnimationFrame(()=>{
+        try{
+          overlay.classList.add('open');
+          if (dialog) dialog.classList.add('open');
+        }catch(_){ }
+      });
+      try{
+        const a = document.getElementById('__addr_alias'); if (a) a.value = initial.label;
+        const b = document.getElementById('__addr_barrio'); if (b) b.value = initial.barrio;
+        const c = document.getElementById('__addr_calle'); if (c) c.value = initial.calle;
+        const n = document.getElementById('__addr_numero'); if (n) n.value = initial.numeracion;
+      }catch(_){ }
+      if (!initial.barrio && defaultAddress && defaultAddress.barrio && defaultAddress.calle && defaultAddress.numeracion){
+        setFields(defaultAddress);
+      }
+      const savedList = overlay.querySelector('.__addr_saved_list');
+      if (savedList){
+        savedList.addEventListener('click', (ev) => {
+          const chip = ev.target.closest('button[data-address-id]');
+          if (!chip) return;
+          const id = String(chip.getAttribute('data-address-id') || '').trim();
+          const selected = savedAddresses.find(a => String(a.id) === id);
+          if (!selected) return;
+          selectedAddressId = id;
+          setFields(selected);
+          savedList.querySelectorAll('button[data-address-id]').forEach(btn => btn.classList.remove('active'));
+          chip.classList.add('active');
+        });
+      }
+
+      const cleanup = ()=>{ try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ } };
+      const closeWith = (value)=>{ cleanup(); resolve(value); };
+      const onKey = (ev)=>{ if (ev.key === 'Escape') closeWith(null); };
+      window.addEventListener('keydown', onKey);
+      overlay.addEventListener('click', (ev)=>{ if (!ev.target.closest('.__dialog')) closeWith(null); });
+
+      const cancelBtn = overlay.querySelector('[data-action="cancel"]');
+      const saveBtn = overlay.querySelector('[data-action="save"]');
+      const manageBtn = overlay.querySelector('[data-action="manage"]');
+      if (cancelBtn) cancelBtn.addEventListener('click', ()=> closeWith(null));
+      if (manageBtn) manageBtn.addEventListener('click', ()=>{
+        try{ openAccountModal(); }catch(_){ }
+      });
+      if (saveBtn) saveBtn.addEventListener('click', ()=>{
+        const label = (document.getElementById('__addr_alias')?.value || '').trim();
+        const barrio = (document.getElementById('__addr_barrio')?.value || '').trim();
+        const calle = (document.getElementById('__addr_calle')?.value || '').trim();
+        const numeracion = (document.getElementById('__addr_numero')?.value || '').trim();
+        if (!barrio || !calle || !numeracion){
+          try{ showAlert('Completa barrio, calle y numeración para continuar.'); }catch(_){ }
+          try{
+            if (!barrio) document.getElementById('__addr_barrio')?.focus();
+            else if (!calle) document.getElementById('__addr_calle')?.focus();
+            else document.getElementById('__addr_numero')?.focus();
+          }catch(_){ }
+          return;
+        }
+        const out = { label, barrio, calle, numeracion };
+        saveDeliveryAddressCache(out);
+        const saveToggle = document.getElementById('__addr_save_book');
+        const defaultToggle = document.getElementById('__addr_set_default');
+        const shouldPersist = token || (saveToggle && saveToggle.checked);
+        if (shouldPersist){
+          const persisted = upsertAddressInBook({
+            id: selectedAddressId || undefined,
+            label,
+            barrio,
+            calle,
+            numeracion
+          }, {
+            accountId,
+            setDefault: Boolean(defaultToggle && defaultToggle.checked)
+          });
+          if (persisted && persisted.id) selectedAddressId = persisted.id;
+        }
+        if (selectedAddressId) {
+          setLastUsedAddressId(selectedAddressId, accountId);
+        }
+        closeWith(out);
+      });
+
+      setTimeout(()=>{
+        try{
+          if (!initial.label) document.getElementById('__addr_alias')?.focus();
+          else if (!initial.barrio) document.getElementById('__addr_barrio')?.focus();
+          else if (!initial.calle) document.getElementById('__addr_calle')?.focus();
+          else if (!initial.numeracion) document.getElementById('__addr_numero')?.focus();
+          else document.getElementById('__addr_alias')?.focus();
+        }catch(_){ }
+      }, 50);
+    }catch(e){ console.error('showDeliveryAddressModal failed', e); resolve(null); }
+  });
+}
+async function fetchCurrentProfileSafe(){
+  try{
+    const token = getToken();
+    if (!token) return null;
+    const res = await fetchWithTimeout(`${API_ORIGIN}/auth/me`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+      mode: 'cors'
+    }, 9000);
+    if (!res || !res.ok) return null;
+    return await res.json();
+  }catch(_){ return null; }
+}
+function openAccountModal(){
+  const token = getToken();
+  if (!token) { openAuthModal(); return; }
+  try{
+    ensureGlobalDialogStyles();
+    const existing = document.getElementById('__account_overlay');
+    if (existing){
+      const d = existing.querySelector('.__dialog');
+      existing.classList.add('open');
+      if (d) d.classList.add('open');
+      return;
+    }
+
+    const payload = parseJwt(token) || {};
+    const fallbackEmail = String(payload.sub || payload.email || '').trim();
+    const fallbackName = String(payload.full_name || payload.name || '').trim();
+    const accountId = getCurrentAccountStorageId();
+    try{
+      const cached = loadDeliveryAddressCache();
+      const hasBook = loadAddressBook(accountId).addresses.length > 0;
+      if (cached && cached.barrio && cached.calle && cached.numeracion){
+        const synced = upsertAddressInBook({
+          label: '',
+          barrio: cached.barrio,
+          calle: cached.calle,
+          numeracion: cached.numeracion
+        }, { accountId, setDefault: !hasBook });
+        if (synced && synced.id) setLastUsedAddressId(synced.id, accountId);
+      }
+    }catch(_){ }
+
+    const overlay = document.createElement('div');
+    overlay.className = '__dialog_overlay';
+    overlay.id = '__account_overlay';
+    overlay.style.zIndex = 3380;
+    overlay.innerHTML = `
+      <div class="__dialog __dialog--info __account_dialog" role="dialog" aria-modal="true" aria-label="Mi cuenta">
+        <div class="dialog-header">
+          <span class="dialog-icon">👤</span>
+          <h3>Mi cuenta</h3>
+          <div class="__account_header_actions" style="margin-left:auto">
+            <button class="btn btn-ghost" data-action="my_orders">Mis pedidos</button>
+            <button class="btn btn-ghost" data-action="close_top">Cerrar</button>
+          </div>
+        </div>
+        <div class="dialog-body">
+          <div class="__account_identity">
+            <div class="__account_identity_main">
+              <span class="__account_identity_avatar" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" role="presentation">
+                  <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.8"></circle>
+                  <path d="M4 20c1.6-3.6 4.7-5.4 8-5.4s6.4 1.8 8 5.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+                </svg>
+              </span>
+              <div>
+                <div class="__account_name" id="__acc_name">${escapeHtml(fallbackName || 'Cuenta activa')}</div>
+                <div class="__account_email" id="__acc_email">${escapeHtml(fallbackEmail || '')}</div>
+              </div>
+            </div>
+            <div class="__account_subtle">Las direcciones se guardan en este navegador.</div>
+          </div>
+          <div class="__account_layout">
+            <section class="__account_panel">
+              <h4>Direcciones guardadas</h4>
+              <div id="__account_address_list" class="__account_address_list"></div>
+            </section>
+            <section class="__account_panel">
+              <h4 id="__acc_form_title">Nueva dirección</h4>
+              <div class="__account_form">
+                <input id="__acc_alias" type="text" placeholder="Alias (Casa, Trabajo)" />
+                <input id="__acc_barrio" type="text" placeholder="Barrio" />
+                <input id="__acc_calle" type="text" placeholder="Calle" />
+                <input id="__acc_numero" type="text" placeholder="Numeración" />
+                <label class="__addr_check"><input id="__acc_default" type="checkbox">Marcar como predeterminada</label>
+                <div class="__account_form_actions">
+                  <button class="btn btn-ghost" data-action="reset_form">Limpiar</button>
+                  <button class="btn btn-primary" data-action="save_address">Guardar</button>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-ghost" data-action="my_orders_bottom">Mis pedidos</button>
+          <button class="btn btn-ghost" data-action="logout">Cerrar sesión</button>
+          <button class="btn btn-primary" data-action="close_bottom">Listo</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const dialog = overlay.querySelector('.__dialog');
+    requestAnimationFrame(()=>{
+      try{
+        overlay.classList.add('open');
+        if (dialog) dialog.classList.add('open');
+      }catch(_){ }
+    });
+
+    let editingId = null;
+    const listEl = overlay.querySelector('#__account_address_list');
+    const formTitleEl = overlay.querySelector('#__acc_form_title');
+    const aliasEl = overlay.querySelector('#__acc_alias');
+    const barrioEl = overlay.querySelector('#__acc_barrio');
+    const calleEl = overlay.querySelector('#__acc_calle');
+    const numeroEl = overlay.querySelector('#__acc_numero');
+    const defaultEl = overlay.querySelector('#__acc_default');
+
+    function closeModal(){
+      try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ }
+    }
+    function resetForm(){
+      editingId = null;
+      if (formTitleEl) formTitleEl.textContent = 'Nueva dirección';
+      if (aliasEl) aliasEl.value = '';
+      if (barrioEl) barrioEl.value = '';
+      if (calleEl) calleEl.value = '';
+      if (numeroEl) numeroEl.value = '';
+      if (defaultEl) defaultEl.checked = false;
+    }
+    function fillForm(addr){
+      if (!addr) return;
+      editingId = String(addr.id);
+      if (formTitleEl) formTitleEl.textContent = 'Editar dirección';
+      if (aliasEl) aliasEl.value = String(addr.label || '').trim();
+      if (barrioEl) barrioEl.value = String(addr.barrio || '').trim();
+      if (calleEl) calleEl.value = String(addr.calle || '').trim();
+      if (numeroEl) numeroEl.value = String(addr.numeracion || '').trim();
+      const book = loadAddressBook(accountId);
+      if (defaultEl) defaultEl.checked = String(book.defaultId || '') === String(addr.id || '');
+    }
+    function renderList(){
+      const book = loadAddressBook(accountId);
+      const lastUsedId = getLastUsedAddressId(accountId);
+      const list = Array.isArray(book.addresses) ? [...book.addresses].sort((a, b) => {
+        if (String(a.id) === String(book.defaultId)) return -1;
+        if (String(b.id) === String(book.defaultId)) return 1;
+        return Number(b.created_at || 0) - Number(a.created_at || 0);
+      }) : [];
+      if (!listEl) return;
+      if (!list.length){
+        listEl.innerHTML = '<div class="__account_empty">No tenés direcciones guardadas todavía.</div>';
+        return;
+      }
+      listEl.innerHTML = list.map((addr) => {
+        const label = addr.label || 'Dirección';
+        const isDefault = String(addr.id) === String(book.defaultId || '');
+        const isLastUsed = String(addr.id) === String(lastUsedId || '');
+        return `
+          <div class="__account_addr_item ${isDefault ? 'is-default' : ''}">
+            <div class="__account_addr_top">
+              <div class="__account_addr_label __account_addr_name">
+                <span>${escapeHtml(label)}</span>
+                ${isLastUsed ? '<span class="__account_addr_last">(última usada)</span>' : ''}
+              </div>
+              ${isDefault ? '<span class="__account_addr_badge">Predeterminada</span>' : ''}
+            </div>
+            <div class="__account_addr_line">${escapeHtml(buildAddressDisplay(addr))}</div>
+            <div class="__account_addr_actions">
+              <button class="btn btn-ghost" data-action="use" data-id="${escapeHtml(String(addr.id))}">Usar</button>
+              <button class="btn btn-ghost" data-action="edit" data-id="${escapeHtml(String(addr.id))}">Editar</button>
+              <button class="btn btn-ghost" data-action="default" data-id="${escapeHtml(String(addr.id))}">Predeterminada</button>
+              <button class="btn btn-ghost" data-action="delete" data-id="${escapeHtml(String(addr.id))}">Eliminar</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    listEl?.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('button[data-action]');
+      if (!btn) return;
+      const action = String(btn.getAttribute('data-action') || '').trim();
+      const id = String(btn.getAttribute('data-id') || '').trim();
+      const book = loadAddressBook(accountId);
+      const addr = book.addresses.find(a => String(a.id) === id);
+      if (!addr) return;
+      if (action === 'use'){
+        saveDeliveryAddressCache(addr);
+        setDefaultAddressInBook(id, accountId);
+        setLastUsedAddressId(id, accountId);
+        renderList();
+        showToast('Dirección lista para usar en checkout', 2500);
+        return;
+      }
+      if (action === 'edit'){
+        fillForm(addr);
+        try{ aliasEl?.focus(); }catch(_){ }
+        return;
+      }
+      if (action === 'default'){
+        setDefaultAddressInBook(id, accountId);
+        renderList();
+        showToast('Dirección predeterminada actualizada', 2200);
+        return;
+      }
+      if (action === 'delete'){
+        const ok = await showConfirm('¿Eliminar esta dirección?');
+        if (!ok) return;
+        removeAddressFromBook(id, accountId);
+        if (editingId === id) resetForm();
+        renderList();
+        showToast('Dirección eliminada', 2200);
+      }
+    });
+
+    overlay.querySelector('[data-action="save_address"]')?.addEventListener('click', () => {
+      const label = String(aliasEl?.value || '').trim();
+      const barrio = String(barrioEl?.value || '').trim();
+      const calle = String(calleEl?.value || '').trim();
+      const numeracion = String(numeroEl?.value || '').trim();
+      if (!barrio || !calle || !numeracion){
+        showAlert('Completa barrio, calle y numeración para guardar.');
+        try{
+          if (!barrio) barrioEl?.focus();
+          else if (!calle) calleEl?.focus();
+          else numeroEl?.focus();
+        }catch(_){ }
+        return;
+      }
+      const bookNow = loadAddressBook(accountId);
+      const saved = upsertAddressInBook({
+        id: editingId || undefined,
+        label,
+        barrio,
+        calle,
+        numeracion
+      }, {
+        accountId,
+        setDefault: Boolean(defaultEl?.checked) || !bookNow.defaultId
+      });
+      if (saved){
+        saveDeliveryAddressCache(saved);
+        setLastUsedAddressId(saved.id, accountId);
+        resetForm();
+        renderList();
+        showToast('Dirección guardada', 2200);
+      }
+    });
+
+    overlay.querySelector('[data-action="reset_form"]')?.addEventListener('click', () => {
+      resetForm();
+      try{ aliasEl?.focus(); }catch(_){ }
+    });
+    overlay.querySelector('[data-action="close_top"]')?.addEventListener('click', closeModal);
+    overlay.querySelector('[data-action="close_bottom"]')?.addEventListener('click', closeModal);
+    overlay.querySelector('[data-action="my_orders"]')?.addEventListener('click', ()=>{ showMyOrdersModal(); });
+    overlay.querySelector('[data-action="my_orders_bottom"]')?.addEventListener('click', ()=>{ showMyOrdersModal(); });
+    overlay.querySelector('[data-action="logout"]')?.addEventListener('click', async () => {
+      const ok = await showConfirm('¿Cerrar sesión ahora?');
+      if (!ok) return;
+      closeModal();
+      logout();
+    });
+
+    const onKey = (ev) => { if (ev.key === 'Escape') closeModal(); };
+    window.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', (ev) => {
+      if (!ev.target.closest('.__dialog')) closeModal();
+    });
+
+    renderList();
+    setTimeout(()=>{ try{ aliasEl?.focus(); }catch(_){ } }, 60);
+
+    fetchCurrentProfileSafe().then((profile) => {
+      if (!profile) return;
+      try{
+        const nameEl = overlay.querySelector('#__acc_name');
+        const emailEl = overlay.querySelector('#__acc_email');
+        if (nameEl) nameEl.textContent = String(profile.full_name || fallbackName || 'Cuenta activa');
+        if (emailEl) emailEl.textContent = String(profile.email || fallbackEmail || '');
+      }catch(_){ }
+      const profileAddress = normalizeAddressEntry({
+        label: 'Principal',
+        barrio: profile.barrio,
+        calle: profile.calle,
+        numeracion: profile.numeracion
+      });
+      if (profileAddress){
+        upsertAddressInBook(profileAddress, { accountId, setDefault: false });
+        renderList();
+      }
+    }).catch(()=>{});
+  }catch(e){
+    console.error('openAccountModal failed', e);
+    showAlert('No se pudo abrir Mi cuenta en este momento.', 'warning');
+  }
+}
 function showGuestModal(){
   return new Promise((resolve)=>{
     try{
+      ensureGlobalDialogStyles();
       // build a nicer guest contact modal (styled) and read inputs before removing
       const overlay = document.createElement('div'); overlay.className='__dialog_overlay'; overlay.style.zIndex = 3300;
       overlay.innerHTML = `
@@ -3339,9 +4340,9 @@ function showGuestModal(){
             <div style="display:flex;flex-direction:column;gap:10px">
               <input id="__gname" type="text" placeholder="Nombre (opcional)" />
               <input id="__gemail" type="email" placeholder="Email (obligatorio)" />
-              <input id="__gbarrio" type="text" placeholder="Barrio (opcional)" />
-              <input id="__gcalle" type="text" placeholder="Calle (opcional)" />
-              <input id="__gnumero" type="text" placeholder="Numeración (opcional)" />
+              <input id="__gbarrio" type="text" placeholder="Barrio (obligatorio)" />
+              <input id="__gcalle" type="text" placeholder="Calle (obligatorio)" />
+              <input id="__gnumero" type="text" placeholder="Numeración (obligatoria)" />
             </div>
           </div>
           <div class="actions">
@@ -3350,6 +4351,13 @@ function showGuestModal(){
           </div>
         </div>`;
       document.body.appendChild(overlay);
+      const dialog = overlay.querySelector('.__dialog');
+      requestAnimationFrame(()=>{
+        try{
+          overlay.classList.add('open');
+          if (dialog) dialog.classList.add('open');
+        }catch(_){ }
+      });
       // Prefill inputs from last guest info if available so data survives refresh/rerender
       try{
         const last = JSON.parse(localStorage.getItem('catalog:guest_info_v1') || 'null');
@@ -3372,21 +4380,43 @@ function showGuestModal(){
       cancelBtn.addEventListener('click', ()=>{ cleanup(); resolve(null); });
       saveBtn.addEventListener('click', ()=>{
         const emailRaw = (document.getElementById('__gemail')?.value || '').trim();
+        const barrioRaw = (document.getElementById('__gbarrio')?.value || '').trim();
+        const calleRaw = (document.getElementById('__gcalle')?.value || '').trim();
+        const numeroRaw = (document.getElementById('__gnumero')?.value || '').trim();
         const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw);
         if (!emailOk) {
           try { showAlert('Para enviarte la confirmacion, ingresa un email valido.'); } catch(_){}
           try { document.getElementById('__gemail')?.focus(); } catch(_){}
           return;
         }
+        if (!barrioRaw || !calleRaw || !numeroRaw) {
+          try { showAlert('Para entregar tu pedido, completa barrio, calle y numeración.'); } catch(_){}
+          try {
+            if (!barrioRaw) document.getElementById('__gbarrio')?.focus();
+            else if (!calleRaw) document.getElementById('__gcalle')?.focus();
+            else document.getElementById('__gnumero')?.focus();
+          } catch(_){}
+          return;
+        }
         const o = {
           name: (document.getElementById('__gname')?.value || '').trim(),
           email: emailRaw,
-          barrio: (document.getElementById('__gbarrio')?.value || '').trim(),
-          calle: (document.getElementById('__gcalle')?.value || '').trim(),
-          numero: (document.getElementById('__gnumero')?.value || '').trim()
+          barrio: barrioRaw,
+          calle: calleRaw,
+          numero: numeroRaw
         };
         // persist guest info for future attempts / across reloads
         try{ localStorage.setItem('catalog:guest_info_v1', JSON.stringify(o)); }catch(e){}
+        try{ saveDeliveryAddressCache({ barrio: barrioRaw, calle: calleRaw, numeracion: numeroRaw }); }catch(_){ }
+        try{
+          const persisted = upsertAddressInBook({
+            label: o.name ? ('Contacto ' + o.name) : 'Invitado',
+            barrio: barrioRaw,
+            calle: calleRaw,
+            numeracion: numeroRaw
+          }, { accountId: getCurrentAccountStorageId(), setDefault: true });
+          if (persisted && persisted.id) setLastUsedAddressId(persisted.id, getCurrentAccountStorageId());
+        }catch(_){ }
         cleanup(); resolve(o);
       });
       const onKey = (ev)=>{ if (ev.key === 'Escape') { cleanup(); resolve(null); } };
@@ -3513,6 +4543,20 @@ async function fetchWithTimeout(resource, options = {}, timeout = 10000){
   }
 }
 
+function setAuthButtonDisplay(btn, label){
+  if (!btn) return;
+  btn.classList.add('account-access');
+  btn.innerHTML = `
+    <span class="account-avatar" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" role="presentation">
+        <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.8"></circle>
+        <path d="M4 20c1.6-3.6 4.7-5.4 8-5.4s6.4 1.8 8 5.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+      </svg>
+    </span>
+    <span class="account-label">${escapeHtml(String(label || 'Cuenta'))}</span>
+  `;
+}
+
 function updateAuthUI(){
   const btn = document.getElementById('authButton');
   const token = getToken();
@@ -3520,10 +4564,14 @@ function updateAuthUI(){
   if (token){
     const payload = parseJwt(token) || {};
     const email = payload.sub || payload.email || 'Cuenta';
-    btn.textContent = `Hola ${email}`;
+    setAuthButtonDisplay(btn, 'Mi cuenta');
+    btn.setAttribute('aria-label', 'Abrir mi cuenta');
+    btn.title = String(email);
     btn.classList.add('logged');
   } else {
-    btn.textContent = 'Login';
+    setAuthButtonDisplay(btn, 'Mi cuenta');
+    btn.setAttribute('aria-label', 'Iniciar sesión');
+    btn.title = '';
     btn.classList.remove('logged');
   }
   updateRepeatOrderButton();
@@ -3556,6 +4604,7 @@ async function doLogin(emailArg,passwordArg){
 function logout(){
   // remove token and update UI
   clearToken();
+  try{ document.getElementById('__account_overlay')?.remove(); }catch(_){ }
   try{ sessionStorage.removeItem('catalog:auth_shown'); }catch(e){}
   // reset login/register form fields so user can re-login immediately
   try{ const le=document.getElementById('loginEmail'); const lp=document.getElementById('loginPassword'); if(le) le.value=''; if(lp) lp.value=''; }catch(e){}
@@ -3607,7 +4656,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   const repeatBtn = document.getElementById('repeatLastOrderBtn');
   if (authBtn) authBtn.addEventListener('click', async ()=>{
     const token = getToken();
-    if (token){ if (await showConfirm('Cerrar sesión?')) { logout(); } return; }
+    if (token){ openAccountModal(); return; }
     openAuthModal();
   });
   if (repeatBtn && !repeatBtn.dataset.bound) {
