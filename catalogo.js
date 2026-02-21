@@ -4,6 +4,8 @@ const API_ORIGIN = new URL(API_URL).origin;
 // Auth endpoints
 const AUTH_REGISTER = `${API_ORIGIN}/auth/register`;
 const AUTH_TOKEN = `${API_ORIGIN}/auth/token`;
+const CUSTOMER_TYPE_STORAGE_KEY = 'catalog:customer_type_v1';
+const CUSTOMER_TYPE_DEFAULT = 'mayorista';
 
 // DOM references will be initialized in `init()` to avoid race conditions
 let grid = null;
@@ -13,9 +15,11 @@ let filterButtons = null;
 // auto-refresh configuration (seconds)
 const AUTO_REFRESH_SECONDS = 30;
 let products = [];
+let productsRaw = [];
 // indica si los productos fueron cargados desde el API remoto o desde el archivo local
 let productsSource = 'api';
 let currentFilter = "all";
+let currentCustomerType = CUSTOMER_TYPE_DEFAULT;
 let autoTimer = null;
 let countdownTimer = null;
 let countdown = AUTO_REFRESH_SECONDS;
@@ -86,6 +90,61 @@ function formatQtyLabel(qty, unitType, meta){
     return formatKgLabel(qty);
   }
   return String(qty);
+}
+
+function normalizeCustomerType(value){
+  const v = String(value || '').trim().toLowerCase();
+  return v === 'minorista' ? 'minorista' : 'mayorista';
+}
+
+function getStoredCustomerType(){
+  try{
+    const stored = localStorage.getItem(CUSTOMER_TYPE_STORAGE_KEY);
+    if (!stored) return null;
+    return normalizeCustomerType(stored);
+  }catch(_){ return null; }
+}
+
+function setStoredCustomerType(value){
+  try{ localStorage.setItem(CUSTOMER_TYPE_STORAGE_KEY, normalizeCustomerType(value)); }catch(_){ }
+}
+
+function getWholesalePriceFromProduct(prod){
+  if (!prod) return 0;
+  const candidates = [prod.price, prod.precio, prod.unit_price, prod.precio_unit, prod.price_display, prod.price_string, prod.pvp, prod.precio_unitario];
+  for (const candidate of candidates){
+    const parsed = parsePriceValue(candidate);
+    if (parsed != null) return parsed;
+  }
+  return 0;
+}
+
+function getRetailPriceFromProduct(prod, wholesalePrice){
+  if (!prod) return wholesalePrice;
+  const candidates = [
+    prod.price_retail,
+    prod.precio_minorista,
+    prod.retail_price,
+    prod.precioRetail,
+    prod.priceMinorista,
+    prod.minorista_price,
+  ];
+  for (const candidate of candidates){
+    const parsed = parsePriceValue(candidate);
+    if (parsed != null) return parsed;
+  }
+  return wholesalePrice;
+}
+
+function getDisplayPriceForCustomer(prod){
+  const wholesale = getWholesalePriceFromProduct(prod);
+  const retail = getRetailPriceFromProduct(prod, wholesale);
+  const selected = currentCustomerType === 'minorista' ? retail : wholesale;
+  return {
+    wholesale,
+    retail,
+    selected
+  };
 }
 
 // promotions support
@@ -721,7 +780,8 @@ function normalize(p) {
   const name = (p.nombre || p.name || "").trim();
   const description = (p.descripcion || p.description || "").trim();
   const category = (p.categoria || p.category || "").trim();
-  const price = p.precio ?? p.price ?? 0;
+  const pricing = getDisplayPriceForCustomer(p);
+  const price = pricing.selected;
   const saleUnit = getSaleUnitFromObj(p);
   let image = p.imagen || p.image || p.image_url || p.imageUrl || null;
   // Si la ruta es relativa (empieza por '/') no anteponer el origen remoto cuando los
@@ -753,7 +813,10 @@ function normalize(p) {
     nombre: name,
     descripcion: description,
     categoria: category,
+    price: price,
     precio: price,
+    price_wholesale: pricing.wholesale,
+    price_retail: pricing.retail,
     imagen: image,
     sale_unit: saleUnit,
     kg_per_unit: getKgPerUnitFromObj(p),
@@ -873,9 +936,11 @@ async function fetchProducts({ showSkeleton = true } = {}) {
       const cached = localStorage.getItem('catalog:products_cache_v1');
       if (cached) {
         const local = JSON.parse(cached);
-        products = local.map(normalize);
+        productsRaw = Array.isArray(local) ? local : [];
+        products = productsRaw.map(normalize);
         await fetchPromotions();
         await fetchConsumos();
+        syncCartPricesForCustomerType();
         render({ animate: true });
         showMessage('Mostrando catálogo desde caché local (offline).', 'info');
         return;
@@ -886,9 +951,11 @@ async function fetchProducts({ showSkeleton = true } = {}) {
     try {
       const local = await (await fetch('products.json')).json();
       productsSource = 'local';
-      products = local.map(normalize);
+      productsRaw = Array.isArray(local) ? local : [];
+      products = productsRaw.map(normalize);
       await fetchPromotions();
       await fetchConsumos();
+      syncCartPricesForCustomerType();
       render({ animate: true });
       updateLastUpdated(true);
       return;
@@ -900,10 +967,12 @@ async function fetchProducts({ showSkeleton = true } = {}) {
 
   // success
   productsSource = (used === 'products.json') ? 'local' : 'api';
-  products = data.map(normalize);
+  productsRaw = Array.isArray(data) ? data : [];
+  products = productsRaw.map(normalize);
   try { localStorage.setItem('catalog:products_cache_v1', JSON.stringify(data)); localStorage.setItem('catalog:products_cache_ts', String(Date.now())); } catch (e) { /* ignore */ }
   await fetchPromotions();
   await fetchConsumos();
+  syncCartPricesForCustomerType();
   render({ animate: true });
   updateLastUpdated();
 }
@@ -1548,6 +1617,49 @@ function getCartKey(item){ return String(item.id) + ((item.meta && item.meta.con
 function getProductKey(obj){ return String(obj.id ?? obj._id ?? obj.nombre ?? obj.name); }
 function readCart(){ try{ return JSON.parse(localStorage.getItem(CART_KEY) || '[]'); }catch{ return []; } }
 function writeCart(cart){ localStorage.setItem(CART_KEY, JSON.stringify(cart)); updateCartBadge(); }
+
+function syncCartPricesForCustomerType(){
+  try{
+    const cart = readCart();
+    if (!Array.isArray(cart) || !cart.length) return;
+    let changed = false;
+    for (const item of cart){
+      if (!item) continue;
+      const itemId = String(item.id ?? '');
+      if (itemId.startsWith('promo:')) {
+        const promoId = String(item.meta?.promo_id || itemId.split(':')[1] || '');
+        const promo = promotions.find(p => String(p.id) === promoId);
+        if (!promo || !Array.isArray(promo.productIds)) continue;
+        const included = promo.productIds.map((pidItem) => {
+          const prod = products.find(p => String(p.id ?? p._id) === String(pidItem) || String(p.nombre || p.name || '') === String(pidItem));
+          if (!prod) return null;
+          const unitBase = Number(prod.precio ?? prod.price ?? 0) || 0;
+          const discounted = getDiscountedPrice(unitBase, promo);
+          return { id: String(prod.id ?? prod._id ?? pidItem), name: prod.nombre || prod.name || '', price: Number(discounted || unitBase), image: prod.imagen || prod.image || '' };
+        }).filter(Boolean);
+        if (included.length) {
+          const total = included.reduce((sum, x) => sum + Number(x.price || 0), 0);
+          if (!item.meta) item.meta = {};
+          const nextTotal = Number(total.toFixed(2));
+          if (Number(item.meta.price || 0) !== nextTotal) changed = true;
+          item.meta.price = nextTotal;
+          item.meta.products = included;
+        }
+        continue;
+      }
+      if (item.meta && item.meta.consumo) continue;
+      const prod = products.find(p => String(p.id ?? p._id) === itemId);
+      if (!prod) continue;
+      const targetPrice = Number(prod.precio ?? prod.price ?? 0) || 0;
+      if (!item.meta) item.meta = {};
+      if (Number(item.meta.price || 0) !== targetPrice) {
+        item.meta.price = targetPrice;
+        changed = true;
+      }
+    }
+    if (changed) writeCart(cart);
+  }catch(_){ }
+}
 
 function getItemUnitType(item, prod){
   return normalizeSaleUnit(item?.meta?.unit_type || item?.meta?.sale_unit || item?.meta?.unit || prod?.sale_unit || prod?.unit_type);
@@ -5176,8 +5288,70 @@ function closeAuthModal(){
   try{ document.removeEventListener('pointerdown', _authOutsideClick); }catch(_){}
 }
 
+function updateCustomerTypeStatusUI(){
+  const status = document.getElementById('customerTypeStatus');
+  const label = document.getElementById('customerTypeLabel');
+  if (label) label.textContent = currentCustomerType === 'minorista' ? 'Perfil: Minorista' : 'Perfil: Mayorista';
+  if (status) status.hidden = false;
+}
+
+function openCustomerTypeModal(){
+  const modal = document.getElementById('customerTypeModal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('customer-type-locked');
+}
+
+function closeCustomerTypeModal(){
+  const modal = document.getElementById('customerTypeModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('customer-type-locked');
+}
+
+function applyCustomerType(value, opts = {}){
+  const options = opts || {};
+  const persist = options.persist !== false;
+  const rerender = options.rerender !== false;
+  currentCustomerType = normalizeCustomerType(value);
+  if (persist) setStoredCustomerType(currentCustomerType);
+  updateCustomerTypeStatusUI();
+  if (rerender && Array.isArray(productsRaw) && productsRaw.length) {
+    products = productsRaw.map(normalize);
+    try{ syncCartPricesForCustomerType(); }catch(_){ }
+    try{ render({ animate: true }); }catch(_){ }
+    try{ renderCart(); }catch(_){ }
+  }
+}
+
+function initCustomerTypeSelection(){
+  const modal = document.getElementById('customerTypeModal');
+  if (!modal) return;
+  const buttons = modal.querySelectorAll('.customer-type-btn[data-customer-type]');
+  buttons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const selected = btn.getAttribute('data-customer-type');
+      applyCustomerType(selected, { persist: true, rerender: true });
+      closeCustomerTypeModal();
+    });
+  });
+  const changeBtn = document.getElementById('changeCustomerTypeBtn');
+  if (changeBtn) changeBtn.addEventListener('click', () => openCustomerTypeModal());
+  const stored = getStoredCustomerType();
+  if (stored) {
+    applyCustomerType(stored, { persist: false, rerender: false });
+    closeCustomerTypeModal();
+  } else {
+    applyCustomerType(CUSTOMER_TYPE_DEFAULT, { persist: false, rerender: false });
+    openCustomerTypeModal();
+  }
+}
+
 // wire auth modal and button (DOMContentLoaded handled later)
 document.addEventListener('DOMContentLoaded', ()=>{
+  try{ initCustomerTypeSelection(); }catch(e){ console.warn('initCustomerTypeSelection failed', e); }
   initCatalogHeaderLogo();
   updateAuthUI();
   const authBtn = document.getElementById('authButton');
@@ -5204,7 +5378,8 @@ document.addEventListener('DOMContentLoaded', ()=>{
     if (!getToken()) {
       // show modal only once per session
       const shown = sessionStorage.getItem('catalog:auth_shown');
-      if (!shown) {
+      const customerTypeChosen = !!getStoredCustomerType();
+      if (!shown && customerTypeChosen) {
         setTimeout(()=> { openAuthModal(); try{ sessionStorage.setItem('catalog:auth_shown','1'); }catch(e){} }, 600);
       }
     }
