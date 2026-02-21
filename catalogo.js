@@ -2329,7 +2329,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           const prod = products.find(p => String(p.id ?? p._id) === String(i.id));
           const factor = getItemLineFactor(i, prod);
           return s + (Number(i.meta?.price || 0) * Number(factor || 0));
-        }, 0) };
+        }, 0), customer_type: normalizeCustomerType(currentCustomerType) };
 
         // attach user info if logged in (used to prefill delivery fields)
         const token = getToken();
