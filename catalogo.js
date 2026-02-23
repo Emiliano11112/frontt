@@ -159,6 +159,7 @@ const LAST_USED_ADDRESS_STORAGE_PREFIX = 'catalog:last_used_address_v1:';
 const SUPPORT_WHATSAPP_E164 = '5492616838446';
 const SUPPORT_WHATSAPP_DISPLAY = '+54 9 2616 83-8446';
 const SUPPORT_EMAIL = 'distriarmza@gmail.com';
+const ORDER_CUTOFF_HOUR = 18;
 
 function loadPromotionsCache(){
   try{
@@ -2433,6 +2434,13 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
             if (deliveryNotes) payload._token_preview.delivery_notes = deliveryNotes;
           }
         }catch(e){}
+        try{
+          const deliverySchedulePreview = computeCheckoutDeliverySchedule(payload);
+          if (deliverySchedulePreview.scheduled_delivery_date) payload.scheduled_delivery_date = deliverySchedulePreview.scheduled_delivery_date;
+          payload.delivery_cutoff_applied = !!deliverySchedulePreview.delivery_cutoff_applied;
+          payload.delivery_timezone = deliverySchedulePreview.delivery_timezone || '';
+          payload.delivery_cutoff_hour = deliverySchedulePreview.delivery_cutoff_hour;
+        }catch(_){ }
         // If the cart includes consumo items, mark the payload but DO NOT prompt the customer
         try{
           const hasConsumos = Array.isArray(payload.items) && payload.items.some(i => {
@@ -2633,7 +2641,11 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           }
 
           // efectivo
-          await showAlert('Pedido enviado — el panel de administración recibirá la orden.');
+          const deliverySummary = formatDeliveryScheduleSummary(computeCheckoutDeliverySchedule(createdOrder || payload));
+          const successMessage = deliverySummary
+            ? ('Pedido enviado — entrega programada: ' + deliverySummary + '.')
+            : 'Pedido enviado — el panel de administración recibirá la orden.';
+          await showAlert(successMessage);
           clearCart(); closeCart();
         } else {
           // graceful fallback: keep el carrito (NO WhatsApp), mostrar modal con opciones al usuario
@@ -3408,6 +3420,59 @@ function buildCheckoutAddressLabel(payload){
     return street || barrio || '-';
   }catch(_){ return '-'; }
 }
+function normalizeIsoDateKey(value){
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return '';
+  return match[1] + '-' + match[2] + '-' + match[3];
+}
+function dateToIsoKey(dateValue){
+  try{
+    const dt = dateValue instanceof Date ? dateValue : new Date(dateValue);
+    if (Number.isNaN(dt.getTime())) return '';
+    return String(dt.getFullYear()) + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+  }catch(_){ return ''; }
+}
+function formatIsoDateKeyWithWeekday(value){
+  const key = normalizeIsoDateKey(value);
+  if (!key) return '';
+  try{
+    const parts = key.split('-');
+    const dt = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    if (Number.isNaN(dt.getTime())) return key;
+    const weekday = dt.toLocaleDateString('es-AR', { weekday: 'long' });
+    const day = dt.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    return weekday.charAt(0).toUpperCase() + weekday.slice(1) + ' ' + day;
+  }catch(_){ return key; }
+}
+function computeCheckoutDeliverySchedule(payload){
+  const rawHour = Number(payload?.delivery_cutoff_hour ?? ORDER_CUTOFF_HOUR);
+  const cutoffHour = Number.isFinite(rawHour) ? Math.min(23, Math.max(0, Math.trunc(rawHour))) : ORDER_CUTOFF_HOUR;
+  const now = new Date();
+  const explicitCutoffRaw = payload?.delivery_cutoff_applied;
+  const hasExplicitCutoff = explicitCutoffRaw !== undefined && explicitCutoffRaw !== null && String(explicitCutoffRaw).trim() !== '';
+  const cutoffApplied = hasExplicitCutoff
+    ? (explicitCutoffRaw === true || String(explicitCutoffRaw).trim().toLowerCase() === 'true')
+    : (now.getHours() >= cutoffHour);
+  const scheduledFromPayload = normalizeIsoDateKey(payload?.scheduled_delivery_date);
+  const scheduledDate = scheduledFromPayload || dateToIsoKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + (cutoffApplied ? 2 : 1)));
+  return {
+    scheduled_delivery_date: scheduledDate,
+    delivery_cutoff_applied: cutoffApplied,
+    delivery_cutoff_hour: cutoffHour,
+    delivery_timezone: String(payload?.delivery_timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || '')
+  };
+}
+function formatDeliveryScheduleSummary(scheduleMeta){
+  const dateLabel = formatIsoDateKeyWithWeekday(scheduleMeta?.scheduled_delivery_date);
+  if (!dateLabel) return '';
+  const cutoffHour = Number(scheduleMeta?.delivery_cutoff_hour);
+  const cutoffLabel = Number.isFinite(cutoffHour) ? String(Math.trunc(cutoffHour)).padStart(2, '0') + ':00' : '18:00';
+  if (scheduleMeta?.delivery_cutoff_applied) {
+    return dateLabel + ' (pedido despues de las ' + cutoffLabel + ')';
+  }
+  return dateLabel;
+}
 async function showCheckoutConfirmModal(payload, selectedPaymentMethod){
   try{
     const items = Array.isArray(payload?.items) ? payload.items : [];
@@ -3433,6 +3498,8 @@ async function showCheckoutConfirmModal(payload, selectedPaymentMethod){
     const notesLabel = escapeHtml(notesValue || 'Sin indicaciones');
     const nameLabel = escapeHtml(String(payload?.user_full_name || 'Cliente'));
     const emailLabel = escapeHtml(String(payload?.user_email || '-'));
+    const deliverySchedule = computeCheckoutDeliverySchedule(payload);
+    const deliveryScheduleLabel = escapeHtml(formatDeliveryScheduleSummary(deliverySchedule) || 'A confirmar');
     const waMessage = encodeURIComponent('Hola, necesito ayuda para finalizar mi pedido desde el checkout.');
     const waHref = 'https://wa.me/' + SUPPORT_WHATSAPP_E164 + '?text=' + waMessage;
     const emailBody = [
@@ -3457,6 +3524,7 @@ async function showCheckoutConfirmModal(payload, selectedPaymentMethod){
           <div><strong>Cliente:</strong> ${nameLabel}</div>
           <div><strong>Email:</strong> ${emailLabel}</div>
           <div><strong>Entrega:</strong> ${addressLabel}</div>
+          <div><strong>Entrega programada:</strong> ${deliveryScheduleLabel}</div>
           <div><strong>Instrucciones:</strong> ${notesLabel}</div>
           <div><strong>Pago:</strong> ${paymentLabel}</div>
         </div>
@@ -3522,6 +3590,22 @@ function buildOrderItemsListHtml(order){
   }
   return parts.join('');
 }
+function getOrderDeliveryScheduleMeta(order){
+  try{
+    const dateKey = normalizeIsoDateKey(order?.scheduled_delivery_date);
+    if (!dateKey) return null;
+    const rawHour = Number(order?.delivery_cutoff_hour ?? ORDER_CUTOFF_HOUR);
+    const cutoffHour = Number.isFinite(rawHour) ? Math.min(23, Math.max(0, Math.trunc(rawHour))) : ORDER_CUTOFF_HOUR;
+    const cutoffRaw = order?.delivery_cutoff_applied;
+    const cutoffApplied = cutoffRaw === true || String(cutoffRaw || '').trim().toLowerCase() === 'true';
+    return {
+      scheduled_delivery_date: dateKey,
+      delivery_cutoff_applied: cutoffApplied,
+      delivery_cutoff_hour: cutoffHour,
+      delivery_timezone: String(order?.delivery_timezone || '')
+    };
+  }catch(_){ return null; }
+}
 function buildOrderCardHtml(order){
   const rawId = String(order?.id ?? '').trim();
   const idLabel = escapeHtml(rawId || '-');
@@ -3531,6 +3615,8 @@ function buildOrderCardHtml(order){
   const totalLabel = '$' + escapeHtml(totalRaw.toFixed(2));
   const paymentLabel = escapeHtml(formatOrderPaymentLabel(order?.payment_method || '-', order?.payment_status || '-'));
   const addressLabel = escapeHtml(getOrderAddressLabel(order));
+  const deliveryScheduleMeta = getOrderDeliveryScheduleMeta(order);
+  const deliveryScheduleLabel = deliveryScheduleMeta ? escapeHtml(formatDeliveryScheduleSummary(deliveryScheduleMeta) || '') : '';
   const repeatable = rawId && Array.isArray(order?.items) && order.items.length > 0;
   return `
     <article class="__order_card">
@@ -3544,6 +3630,7 @@ function buildOrderCardHtml(order){
         <span class="__order_chip __order_total">Total: ${totalLabel}</span>
       </div>
       <div class="__order_address"><strong>Entrega:</strong> ${addressLabel}</div>
+      ${deliveryScheduleLabel ? `<div class="__order_address"><strong>Entrega programada:</strong> ${deliveryScheduleLabel}</div>` : ''}
       <ul class="__order_items">${buildOrderItemsListHtml(order)}</ul>
       ${repeatable
         ? `<div class="__order_actions"><button class="btn btn-ghost __order_repeat_btn" data-action="repeat_order" data-order-id="${escapeHtml(rawId)}">Repetir pedido</button></div>`
