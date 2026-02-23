@@ -1532,7 +1532,11 @@ function render({ animate = false } = {}) {
   // if animated, remove reveal class after animation to keep DOM clean
   if (animate && !reduceMotion) {
     const revealed = grid.querySelectorAll('.product-card.reveal');
-    revealed.forEach((el) => el.addEventListener('animationend', () => el.classList.remove('reveal'), { once: true }));
+    revealed.forEach((el) => {
+      el.addEventListener('animationend', () => el.classList.remove('reveal'), { once: true });
+      // Fallback: if animations are disabled by browser/extension, ensure cards become visible.
+      setTimeout(() => { try{ el.classList.remove('reveal'); }catch(_){ } }, 900);
+    });
   }
 
   // Wire promotion cards/buttons: open promo detail with all included products.
