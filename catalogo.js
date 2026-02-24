@@ -46,6 +46,17 @@ function getSaleUnitFromObj(obj){
   }catch(_){ return 'unit'; }
 }
 
+function getProductCodeFromObj(obj){
+  try{
+    const candidates = [obj?.code, obj?.codigo, obj?.cod, obj?.sku];
+    for (const candidate of candidates){
+      const code = String(candidate || '').trim();
+      if (code) return code;
+    }
+    return '';
+  }catch(_){ return ''; }
+}
+
 function getKgPerUnitFromObj(obj){
   try{
     const n = Number(obj?.kg_per_unit ?? obj?.kgPerUnit ?? obj?.peso_unidad ?? obj?.unidad_kg ?? obj?.kgXUnidad ?? 1);
@@ -154,12 +165,18 @@ let consumos = [];
 const DEFAULT_FALLBACK_IMAGE = 'images/icon.png';
 const PROMOTIONS_CACHE_KEY = 'catalog:promotions_cache_v2';
 const DELIVERY_ADDRESS_CACHE_KEY = 'catalog:delivery_address_v1';
+const LOCATION_PREFILL_CACHE_KEY = 'catalog:location_prefill_v1';
+const LOCATION_PROMPT_SESSION_KEY = 'catalog:location_prompt_attempted_v1';
 const ADDRESS_BOOK_STORAGE_PREFIX = 'catalog:address_book_v1:';
 const LAST_USED_ADDRESS_STORAGE_PREFIX = 'catalog:last_used_address_v1:';
 const SUPPORT_WHATSAPP_E164 = '5492616838446';
 const SUPPORT_WHATSAPP_DISPLAY = '+54 9 2616 83-8446';
 const SUPPORT_EMAIL = 'distriarmza@gmail.com';
 const ORDER_CUTOFF_HOUR = 18;
+let authLocationPrefill = null;
+let authLocationRequestInFlight = false;
+let authLocationMapInstance = null;
+let authLocationMapMarker = null;
 
 function loadPromotionsCache(){
   try{
@@ -781,6 +798,7 @@ function normalize(p) {
   const name = (p.nombre || p.name || "").trim();
   const description = (p.descripcion || p.description || "").trim();
   const category = (p.categoria || p.category || "").trim();
+  const code = getProductCodeFromObj(p);
   const pricing = getDisplayPriceForCustomer(p);
   const price = pricing.selected;
   const saleUnit = getSaleUnitFromObj(p);
@@ -811,6 +829,8 @@ function normalize(p) {
   }
   return {
     ...p,
+    code,
+    codigo: code,
     nombre: name,
     descripcion: description,
     categoria: category,
@@ -1027,9 +1047,11 @@ function render({ animate = false } = {}) {
   const search = (searchInput.value || '').toLowerCase();
   const productCatMap = loadProductCategories();
   const filtered = products.filter(p => {
+    const productCode = String(p.code || p.codigo || '').toLowerCase();
     const matchesSearch =
       (p.nombre || '').toLowerCase().includes(search) ||
-      (p.descripcion || '').toLowerCase().includes(search);
+      (p.descripcion || '').toLowerCase().includes(search) ||
+      productCode.includes(search);
     const pid = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '');
 
     // Normalize assigned categories (ensure array, trim & lowercase values)
@@ -1902,6 +1924,11 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
   if(idx>=0){
     const prod = products.find(x => String(x.id ?? x._id) === String(productId));
     const mergedMeta = Object.assign({}, cart[idx].meta || {}, (opts && opts.meta) ? opts.meta : {});
+    const productCode = getProductCodeFromObj(prod);
+    if (productCode) {
+      mergedMeta.code = productCode;
+      mergedMeta.codigo = productCode;
+    }
     const unitType = getItemUnitType({ qty: cart[idx].qty, meta: mergedMeta }, prod);
     const requestedQty = Math.max(0, Number(cart[idx].qty || 0) + Number(qty || 0));
 
@@ -1988,7 +2015,15 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
   // Default single product add
   const p = products.find(x => String(x.id ?? x._id) === String(productId));
   if (!p) return; // avoid adding unknown ids
-  const meta = { name: p?.nombre || p?.name || '', price: p?.precio ?? p?.price ?? 0, image: p?.imagen || p?.image || p?.image_url || '', unit_type: getSaleUnitFromObj(p) };
+  const productCode = getProductCodeFromObj(p);
+  const meta = {
+    name: p?.nombre || p?.name || '',
+    price: p?.precio ?? p?.price ?? 0,
+    image: p?.imagen || p?.image || p?.image_url || '',
+    unit_type: getSaleUnitFromObj(p),
+    code: productCode || undefined,
+    codigo: productCode || undefined
+  };
   if (opts && opts.meta) try{ Object.assign(meta, opts.meta); }catch(_){ }
 
   const unitType = getItemUnitType({ qty, meta }, p);
@@ -2413,6 +2448,12 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
             if (!meta.force_regular && !meta.consumo && key.includes(':consumo')) meta.consumo = true;
             try{
               const prod = products.find(p => String(p.id ?? p._id) === String(id));
+              const productCode = getProductCodeFromObj(prod);
+              if (productCode) {
+                meta.code = productCode;
+                meta.codigo = productCode;
+              }
+              if (!meta.name && prod) meta.name = String(prod.nombre || prod.name || '').trim();
               const unitType = getItemUnitType({ qty, meta }, prod);
               if (unitType === 'kg') {
                 const kgPerUnit = getItemKgPerUnit({ qty, meta }, prod);
@@ -4567,6 +4608,319 @@ function saveDeliveryAddressCache(data){
     localStorage.setItem(DELIVERY_ADDRESS_CACHE_KEY, JSON.stringify(payload));
   }catch(_){ }
 }
+
+function normalizeLocationPrefill(raw){
+  try{
+    const latNum = Number(raw?.lat);
+    const lonNum = Number(raw?.lon);
+    return {
+      lat: Number.isFinite(latNum) ? latNum : null,
+      lon: Number.isFinite(lonNum) ? lonNum : null,
+      barrio: String(raw?.barrio || '').trim(),
+      calle: String(raw?.calle || '').trim(),
+      numeracion: String(raw?.numeracion || raw?.numero || '').trim(),
+      label: String(raw?.label || raw?.display_name || '').trim(),
+      ts: Number(raw?.ts || Date.now()) || Date.now(),
+    };
+  }catch(_){
+    return { lat: null, lon: null, barrio: '', calle: '', numeracion: '', label: '', ts: Date.now() };
+  }
+}
+
+function loadLocationPrefillCache(){
+  try{
+    const raw = localStorage.getItem(LOCATION_PREFILL_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const normalized = normalizeLocationPrefill(parsed || {});
+    if (normalized.lat === null || normalized.lon === null) return null;
+    return normalized;
+  }catch(_){ return null; }
+}
+
+function saveLocationPrefillCache(data){
+  try{
+    const normalized = normalizeLocationPrefill(data || {});
+    if (normalized.lat === null || normalized.lon === null) return;
+    localStorage.setItem(LOCATION_PREFILL_CACHE_KEY, JSON.stringify(normalized));
+  }catch(_){ }
+}
+
+function buildLocationDisplayLabel(prefill){
+  try{
+    if (!prefill) return '';
+    const explicit = String(prefill.label || '').trim();
+    if (explicit) return explicit;
+    const parts = [prefill.calle, prefill.numeracion, prefill.barrio].map(v => String(v || '').trim()).filter(Boolean);
+    if (parts.length) return parts.join(', ');
+    if (prefill.lat != null && prefill.lon != null){
+      return `Lat ${Number(prefill.lat).toFixed(5)}, Lon ${Number(prefill.lon).toFixed(5)}`;
+    }
+    return '';
+  }catch(_){ return ''; }
+}
+
+function buildAuthLocationMapUrl(lat, lon){
+  try{
+    const latNum = Number(lat);
+    const lonNum = Number(lon);
+    if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) return '';
+    const delta = 0.0022;
+    const left = (lonNum - delta).toFixed(6);
+    const right = (lonNum + delta).toFixed(6);
+    const bottom = (latNum - delta).toFixed(6);
+    const top = (latNum + delta).toFixed(6);
+    const params = new URLSearchParams({
+      bbox: `${left},${bottom},${right},${top}`,
+      layer: 'mapnik',
+      marker: `${latNum.toFixed(6)},${lonNum.toFixed(6)}`,
+    });
+    return `https://www.openstreetmap.org/export/embed.html?${params.toString()}`;
+  }catch(_){ return ''; }
+}
+
+function getAuthLocationLatLon(prefill){
+  const lat = Number(prefill?.lat);
+  const lon = Number(prefill?.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return { lat, lon };
+}
+
+function hasLeafletForAuthLocation(){
+  return typeof window !== 'undefined' && !!window.L && typeof window.L.map === 'function';
+}
+
+async function applyManualAuthLocationFromMap(lat, lon){
+  try{
+    const latNum = Number(lat);
+    const lonNum = Number(lon);
+    if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) return;
+    setAuthLocationStatus('Actualizando dirección desde el mapa...');
+    let prefill = normalizeLocationPrefill({ lat: latNum, lon: lonNum, ts: Date.now() });
+    try{
+      const reverse = await reverseGeocodeLocation(latNum, lonNum);
+      if (reverse) prefill = reverse;
+    }catch(_){ }
+    authLocationPrefill = prefill;
+    saveLocationPrefillCache(prefill);
+    if (prefill.barrio || prefill.calle || prefill.numeracion){
+      saveDeliveryAddressCache(prefill);
+    }
+    applyLocationToRegisterFields(prefill, { onlyEmpty: true });
+    updateAuthLocationCard(prefill, 'Ubicación ajustada con el pin.');
+  }catch(_){
+    updateAuthLocationCard(authLocationPrefill, 'No se pudo actualizar la ubicación desde el mapa.');
+  }
+}
+
+function syncAuthLocationMapPreview(prefill){
+  try{
+    const mapWrap = document.getElementById('authLocationMapWrap');
+    const mapCanvas = document.getElementById('authLocationMapCanvas');
+    const mapFrame = document.getElementById('authLocationMap');
+    const latLon = getAuthLocationLatLon(prefill);
+    if (!mapWrap) return;
+    if (!latLon){
+      mapWrap.hidden = true;
+      if (mapFrame) mapFrame.src = '';
+      return;
+    }
+    mapWrap.hidden = false;
+    const leafletReady = hasLeafletForAuthLocation() && !!mapCanvas;
+    if (leafletReady){
+      const L = window.L;
+      if (!authLocationMapInstance){
+        authLocationMapInstance = L.map(mapCanvas, {
+          zoomControl: true,
+          attributionControl: true,
+          scrollWheelZoom: true,
+        });
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '&copy; OpenStreetMap',
+        }).addTo(authLocationMapInstance);
+        authLocationMapMarker = L.marker([latLon.lat, latLon.lon], { draggable: true }).addTo(authLocationMapInstance);
+        authLocationMapMarker.on('dragend', async () => {
+          try{
+            const point = authLocationMapMarker.getLatLng();
+            await applyManualAuthLocationFromMap(point.lat, point.lng);
+          }catch(_){ }
+        });
+        authLocationMapInstance.on('click', async (ev) => {
+          try{
+            const point = ev && ev.latlng ? ev.latlng : null;
+            if (!point) return;
+            if (authLocationMapMarker) authLocationMapMarker.setLatLng(point);
+            await applyManualAuthLocationFromMap(point.lat, point.lng);
+          }catch(_){ }
+        });
+      } else if (!authLocationMapMarker){
+        authLocationMapMarker = L.marker([latLon.lat, latLon.lon], { draggable: true }).addTo(authLocationMapInstance);
+      }
+      if (authLocationMapMarker) authLocationMapMarker.setLatLng([latLon.lat, latLon.lon]);
+      authLocationMapInstance.setView([latLon.lat, latLon.lon], 17, { animate: false });
+      if (mapCanvas) mapCanvas.hidden = false;
+      if (mapFrame){
+        mapFrame.hidden = true;
+        mapFrame.src = '';
+      }
+      setTimeout(() => {
+        try{ authLocationMapInstance.invalidateSize(); }catch(_){ }
+      }, 50);
+      return;
+    }
+    // Fallback sin Leaflet: mapa embebido estático.
+    const mapUrl = buildAuthLocationMapUrl(latLon.lat, latLon.lon);
+    if (mapFrame){
+      mapFrame.hidden = false;
+      if (mapUrl) mapFrame.src = mapUrl;
+    }
+    if (mapCanvas) mapCanvas.hidden = true;
+  }catch(_){ }
+}
+
+function applyLocationToRegisterFields(prefill, options = {}){
+  const onlyEmpty = options?.onlyEmpty !== false;
+  if (!prefill) return;
+  try{
+    const barrioEl = document.getElementById('regBarrio');
+    const calleEl = document.getElementById('regCalle');
+    const numEl = document.getElementById('regNumero');
+    if (barrioEl && (!onlyEmpty || !String(barrioEl.value || '').trim())) barrioEl.value = String(prefill.barrio || '').trim();
+    if (calleEl && (!onlyEmpty || !String(calleEl.value || '').trim())) calleEl.value = String(prefill.calle || '').trim();
+    if (numEl && (!onlyEmpty || !String(numEl.value || '').trim())) numEl.value = String(prefill.numeracion || '').trim();
+  }catch(_){ }
+}
+
+function setAuthLocationStatus(message){
+  try{
+    const statusEl = document.getElementById('authLocationStatus');
+    if (statusEl) statusEl.textContent = String(message || '').trim();
+  }catch(_){ }
+}
+
+function updateAuthLocationCard(prefill, statusMessage = ''){
+  try{
+    if (statusMessage) setAuthLocationStatus(statusMessage);
+    const normalized = prefill ? normalizeLocationPrefill(prefill) : null;
+    const addressEl = document.getElementById('authLocationAddress');
+    const applyBtn = document.getElementById('authApplyLocationBtn');
+    const label = buildLocationDisplayLabel(normalized);
+    if (addressEl) addressEl.value = label || 'Ubicación no confirmada todavía';
+    if (applyBtn) applyBtn.disabled = !normalized;
+    syncAuthLocationMapPreview(normalized);
+  }catch(_){ }
+}
+
+function setAuthLocationLoading(isLoading){
+  try{
+    const btn = document.getElementById('authUseLocationBtn');
+    if (!btn) return;
+    btn.disabled = !!isLoading;
+    btn.textContent = isLoading ? 'Buscando ubicación...' : 'Usar mi ubicación';
+  }catch(_){ }
+}
+
+async function reverseGeocodeLocation(lat, lon){
+  const latNum = Number(lat);
+  const lonNum = Number(lon);
+  if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) return null;
+  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(String(latNum))}&lon=${encodeURIComponent(String(lonNum))}&accept-language=es`;
+  const res = await fetchWithTimeout(url, { headers: { 'Accept': 'application/json' }, mode: 'cors' }, 10000);
+  if (!res || !res.ok) return null;
+  const data = await res.json().catch(() => null);
+  if (!data || typeof data !== 'object') return null;
+  const addr = (data.address && typeof data.address === 'object') ? data.address : {};
+  const barrio = String(addr.suburb || addr.neighbourhood || addr.city_district || addr.city || addr.town || addr.village || '').trim();
+  const calle = String(addr.road || addr.pedestrian || addr.residential || addr.path || '').trim();
+  const numeracion = String(addr.house_number || '').trim();
+  const labelFromParts = [calle, numeracion, barrio].filter(Boolean).join(', ');
+  const label = labelFromParts || String(data.display_name || '').split(',').slice(0, 3).join(',').trim();
+  return normalizeLocationPrefill({
+    lat: latNum,
+    lon: lonNum,
+    barrio,
+    calle,
+    numeracion,
+    label,
+    ts: Date.now(),
+  });
+}
+
+async function requestAuthLocation(options = {}){
+  const auto = !!options?.auto;
+  if (authLocationRequestInFlight) return;
+  if (!navigator.geolocation){
+    updateAuthLocationCard(authLocationPrefill, 'Tu navegador no soporta geolocalización.');
+    return;
+  }
+  authLocationRequestInFlight = true;
+  setAuthLocationLoading(true);
+  setAuthLocationStatus('Esperando permiso para acceder a tu ubicación...');
+  navigator.geolocation.getCurrentPosition(async (position) => {
+    try{
+      const lat = Number(position?.coords?.latitude);
+      const lon = Number(position?.coords?.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new Error('invalid-coordinates');
+      let prefill = normalizeLocationPrefill({ lat, lon, ts: Date.now() });
+      try{
+        const reverse = await reverseGeocodeLocation(lat, lon);
+        if (reverse) prefill = reverse;
+      }catch(_){ }
+      authLocationPrefill = prefill;
+      saveLocationPrefillCache(prefill);
+      if (prefill.barrio || prefill.calle || prefill.numeracion){
+        saveDeliveryAddressCache(prefill);
+      }
+      applyLocationToRegisterFields(prefill, { onlyEmpty: true });
+      updateAuthLocationCard(prefill, auto ? 'Ubicación detectada. Revisá y continuá.' : 'Ubicación actualizada.');
+    }catch(_){
+      updateAuthLocationCard(authLocationPrefill, 'No pudimos obtener tu ubicación. Cargá tu dirección manualmente.');
+    }finally{
+      authLocationRequestInFlight = false;
+      setAuthLocationLoading(false);
+    }
+  }, (error) => {
+    let msg = 'No pudimos obtener tu ubicación. Cargá tu dirección manualmente.';
+    if (error && error.code === 1) msg = 'No diste permiso de ubicación. Podés continuar cargando tu dirección manualmente.';
+    else if (error && error.code === 2) msg = 'No se pudo detectar tu ubicación actual.';
+    else if (error && error.code === 3) msg = 'La solicitud de ubicación tardó demasiado.';
+    updateAuthLocationCard(authLocationPrefill, msg);
+    authLocationRequestInFlight = false;
+    setAuthLocationLoading(false);
+  }, {
+    enableHighAccuracy: true,
+    timeout: 12000,
+    maximumAge: 0,
+  });
+}
+
+function initAuthLocationCard(){
+  const card = document.getElementById('authLocationCard');
+  if (!card) return;
+  const useBtn = document.getElementById('authUseLocationBtn');
+  const applyBtn = document.getElementById('authApplyLocationBtn');
+  if (useBtn && !useBtn.dataset.bound){
+    useBtn.dataset.bound = '1';
+    useBtn.addEventListener('click', () => { requestAuthLocation({ auto: false }); });
+  }
+  if (applyBtn && !applyBtn.dataset.bound){
+    applyBtn.dataset.bound = '1';
+    applyBtn.addEventListener('click', () => {
+      const current = authLocationPrefill || loadLocationPrefillCache();
+      if (!current) return;
+      applyLocationToRegisterFields(current, { onlyEmpty: false });
+      saveDeliveryAddressCache(current);
+      const tabRegister = document.getElementById('tabRegister');
+      if (tabRegister) tabRegister.click();
+      updateAuthLocationCard(current, 'Ubicación aplicada al registro.');
+      try{ showToast('Ubicación aplicada al registro', 2600); }catch(_){ }
+    });
+  }
+  authLocationPrefill = authLocationPrefill || loadLocationPrefillCache();
+  updateAuthLocationCard(authLocationPrefill, authLocationPrefill ? 'Ubicación guardada lista para usar.' : '');
+}
+
 function showDeliveryAddressModal(prefill = {}){
   return new Promise((resolve)=>{
     try{
@@ -5307,7 +5661,52 @@ function updateAuthUI(){
   }
   updateRepeatOrderButton();
 }
-async function doRegister(){ const name=document.getElementById('regName').value.trim(); const email=document.getElementById('regEmail').value.trim(); const barrio=document.getElementById('regBarrio').value.trim(); const calle=document.getElementById('regCalle').value.trim(); const numero=document.getElementById('regNumero').value.trim(); const password=document.getElementById('regPassword').value; const err=document.getElementById('regError'); err.textContent=''; if(!name||!email||!password){ err.textContent='Nombre, email y contraseña son obligatorios'; return; } try{ const res=await fetchWithTimeout(AUTH_REGISTER,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({full_name:name,email,barrio,calle,numeracion:numero,password})},10000); if(res.status===400){ const js=await res.json().catch(()=>({})); err.textContent=js.detail||'Error'; return; } if(!res.ok){ err.textContent='Registro falló'; return; } await doLogin(email,password); closeAuthModal(); }catch(e){ if (e && e.name === 'AbortError') err.textContent = 'Tiempo de espera agotado'; else err.textContent='No se pudo conectar con el servidor'; } }
+async function doRegister(){
+  const name = document.getElementById('regName').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
+  const geoPrefill = authLocationPrefill || loadLocationPrefillCache() || {};
+  const barrio = (document.getElementById('regBarrio').value || '').trim() || String(geoPrefill.barrio || '').trim();
+  const calle = (document.getElementById('regCalle').value || '').trim() || String(geoPrefill.calle || '').trim();
+  const numero = (document.getElementById('regNumero').value || '').trim() || String(geoPrefill.numeracion || '').trim();
+  const password = document.getElementById('regPassword').value;
+  const err = document.getElementById('regError');
+  err.textContent = '';
+  if(!name || !email || !password){
+    err.textContent = 'Nombre, email y contraseña son obligatorios';
+    return;
+  }
+  try{
+    const res = await fetchWithTimeout(AUTH_REGISTER, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        full_name: name,
+        email,
+        barrio,
+        calle,
+        numeracion: numero,
+        password
+      })
+    }, 10000);
+    if (res.status === 400){
+      const js = await res.json().catch(() => ({}));
+      err.textContent = js.detail || 'Error';
+      return;
+    }
+    if (!res.ok){
+      err.textContent = 'Registro falló';
+      return;
+    }
+    if (barrio || calle || numero){
+      saveDeliveryAddressCache({ barrio, calle, numeracion: numero });
+    }
+    await doLogin(email, password);
+    closeAuthModal();
+  }catch(e){
+    if (e && e.name === 'AbortError') err.textContent = 'Tiempo de espera agotado';
+    else err.textContent = 'No se pudo conectar con el servidor';
+  }
+}
 async function doLogin(emailArg,passwordArg){
   const email = emailArg || document.getElementById('loginEmail').value.trim();
   const password = passwordArg || document.getElementById('loginPassword').value;
@@ -5358,6 +5757,7 @@ function openAuthModal(){
   m.classList.add('open');
   m.setAttribute('aria-hidden','false');
   document.body.classList.add('modal-open');
+  initAuthLocationCard();
   // ensure login tab shown by default
   const loginPanel = document.getElementById('loginForm');
   const registerPanel = document.getElementById('registerForm');
@@ -5365,6 +5765,18 @@ function openAuthModal(){
   const tabRegister = document.getElementById('tabRegister');
   if (tabLogin && tabRegister){ tabLogin.classList.add('active'); tabRegister.classList.remove('active'); }
   if (loginPanel && registerPanel){ loginPanel.style.display = 'block'; registerPanel.style.display = 'none'; }
+  const cachedLocation = authLocationPrefill || loadLocationPrefillCache();
+  authLocationPrefill = cachedLocation || null;
+  updateAuthLocationCard(authLocationPrefill, authLocationPrefill ? 'Ubicación guardada lista para usar.' : 'Permití ubicación para cargar tu dirección más rápido.');
+  try{
+    if (!authLocationPrefill){
+      const prompted = sessionStorage.getItem(LOCATION_PROMPT_SESSION_KEY) === '1';
+      if (!prompted){
+        sessionStorage.setItem(LOCATION_PROMPT_SESSION_KEY, '1');
+        setTimeout(()=>{ requestAuthLocation({ auto: true }); }, 280);
+      }
+    }
+  }catch(_){ }
   // focus first field
   setTimeout(()=>{ try{ document.getElementById('loginEmail')?.focus(); }catch(e){} }, 120);
   // close when clicking outside content
@@ -5445,6 +5857,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   try{ initCustomerTypeSelection(); }catch(e){ console.warn('initCustomerTypeSelection failed', e); }
   initCatalogHeaderLogo();
   updateAuthUI();
+  try{ initAuthLocationCard(); }catch(e){ console.warn('initAuthLocationCard failed', e); }
   const authBtn = document.getElementById('authButton');
   const repeatBtn = document.getElementById('repeatLastOrderBtn');
   if (authBtn) authBtn.addEventListener('click', async ()=>{

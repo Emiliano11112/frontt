@@ -670,6 +670,73 @@ body.customer-type-locked{
 .modal{display:none;position:fixed;inset:0;align-items:center;justify-content:center;padding:28px;background:rgba(2,6,23,0.45);backdrop-filter:blur(6px);z-index:2000}
 .modal.open{display:flex}
 .modal .modal-content{width:100%;max-width:820px;background:linear-gradient(180deg,#ffffff,#fffaf6);border-radius:14px;padding:20px;box-shadow:0 30px 90px rgba(2,6,23,0.16);display:flex;gap:18px;align-items:stretch}
+.modal .auth-wrapper{display:flex;flex-direction:column;gap:12px;flex:1;min-width:0}
+.modal .auth-location-card{
+  border:1px solid rgba(6,26,43,0.08);
+  border-radius:14px;
+  background:linear-gradient(180deg,#ffffff,#f9fcff);
+  padding:12px;
+  box-shadow:0 14px 28px rgba(2,6,23,0.06);
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.modal .auth-location-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+}
+.modal .auth-location-copy h3{
+  margin:0;
+  font-size:16px;
+  font-weight:800;
+  color:var(--deep);
+}
+.modal .auth-location-copy p{
+  margin:4px 0 0;
+  font-size:13px;
+  color:var(--muted);
+  line-height:1.3;
+}
+.modal .auth-location-map{
+  border-radius:12px;
+  overflow:hidden;
+  border:1px solid rgba(6,26,43,0.08);
+  background:#f2f4f7;
+}
+.modal .auth-location-map iframe,
+.modal .auth-location-map .auth-location-map-canvas{
+  width:100%;
+  height:220px;
+  border:0;
+  display:block;
+}
+.modal .auth-location-map-help{
+  color:var(--muted);
+  font-size:12px;
+  font-weight:700;
+  margin-top:-2px;
+}
+.modal .auth-location-actions{
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+.modal .auth-location-actions input{
+  flex:1;
+  min-width:0;
+  padding:11px 12px;
+  border:1px solid rgba(6,26,43,0.10);
+  border-radius:10px;
+  background:linear-gradient(180deg,#ffffff,#f8fafc);
+  color:#0f2436;
+  font-size:13px;
+  font-weight:600;
+}
+.modal .auth-location-actions .btn{
+  flex:0 0 auto;
+}
 .modal .modal-close{position:absolute;right:24px;top:20px;border:0;background:transparent;font-size:20px;cursor:pointer;color:var(--muted)}
 .modal .auth-tabs{display:flex;flex-direction:row;gap:10px;align-items:center;min-width:0;padding-right:0;margin-bottom:10px;background:linear-gradient(180deg, rgba(255,255,255,0.6), rgba(255,255,255,0.4));padding:8px;border-radius:12px}
 .modal .auth-tabs .tab{padding:10px 18px;border-radius:12px;background:transparent;border:0;text-align:center;font-weight:800;cursor:pointer;color:var(--deep);box-shadow:none}
@@ -745,6 +812,12 @@ body.customer-type-locked{
   .modal .modal-content{flex-direction:column;padding:16px}
   .modal .auth-tabs{flex-direction:row;border-right:0;border-bottom:1px solid rgba(6,26,43,0.04);padding-bottom:8px;margin-bottom:6px;min-width:0}
   .modal .auth-tabs .tab{flex:1;text-align:center}
+  .modal .auth-location-head{flex-direction:column}
+  .modal .auth-location-head .btn{width:100%}
+  .modal .auth-location-map iframe,
+  .modal .auth-location-map .auth-location-map-canvas{height:200px}
+  .modal .auth-location-actions{flex-direction:column;align-items:stretch}
+  .modal .auth-location-actions .btn{width:100%}
 }
 
 /* lock body scroll when modal open */
