@@ -2467,6 +2467,12 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           basePayload.user_barrio = deliveryInfo.barrio;
           basePayload.user_calle = deliveryInfo.calle;
           basePayload.user_numeracion = deliveryInfo.numeracion;
+          {
+            const latNum = Number(deliveryInfo && deliveryInfo.lat);
+            const lonNum = Number(deliveryInfo && deliveryInfo.lon);
+            if (Number.isFinite(latNum)) basePayload.user_lat = Number(latNum.toFixed(6));
+            if (Number.isFinite(lonNum)) basePayload.user_lon = Number(lonNum.toFixed(6));
+          }
           basePayload.user_address = sanitizeAddressLongText(deliveryInfo.full_text || buildAddressDisplay(deliveryInfo), 200);
           basePayload.user_address_label = sanitizeAddressAlias(deliveryInfo.label || '');
           basePayload.user_delivery_notes = sanitizeDeliveryNotes(deliveryInfo.instrucciones || '');
@@ -2536,6 +2542,8 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
             numeracion: String(basePayload.user_numeracion || '').trim(),
             direccion: sanitizeAddressLongText(basePayload.user_address || '', 200)
           };
+          if (Number.isFinite(Number(basePayload.user_lat))) payload._token_preview.address.lat = Number(basePayload.user_lat);
+          if (Number.isFinite(Number(basePayload.user_lon))) payload._token_preview.address.lon = Number(basePayload.user_lon);
         }catch(e){}
         try{
           const deliverySchedulePreview = computeCheckoutDeliverySchedule(payload);
@@ -5353,6 +5361,21 @@ function buildAddressSearchQueryVariants(query){
   const withRegion = isMendozaText(clean) ? clean : `${clean}, Mendoza, Argentina`;
   add(withRegion);
   add(clean);
+  const titleCase = clean
+    .split(/\s+/)
+    .map((token) => {
+      const raw = String(token || '').trim();
+      if (!raw) return '';
+      if (!/[A-Za-z\u00c0-\u024f]/.test(raw)) return raw;
+      const lower = raw.toLocaleLowerCase('es-AR');
+      return lower.charAt(0).toLocaleUpperCase('es-AR') + lower.slice(1);
+    })
+    .join(' ')
+    .trim();
+  if (titleCase && titleCase !== clean){
+    add(`${titleCase}, Mendoza, Argentina`);
+    add(titleCase);
+  }
   const noNumber = clean
     .replace(/\b\d{1,6}[A-Za-z]?\b/g, ' ')
     .replace(/\s{2,}/g, ' ')
@@ -5361,7 +5384,18 @@ function buildAddressSearchQueryVariants(query){
     add(`${noNumber}, Mendoza, Argentina`);
     add(`${noNumber}, Las Heras, Mendoza, Argentina`);
   }
+  if (titleCase && titleCase !== clean){
+    const noNumberTitle = titleCase
+      .replace(/\b\d{1,6}[A-Za-z]?\b/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (noNumberTitle && noNumberTitle !== titleCase){
+      add(`${noNumberTitle}, Mendoza, Argentina`);
+      add(`${noNumberTitle}, Las Heras, Mendoza, Argentina`);
+    }
+  }
   add(`${clean}, Las Heras, Mendoza, Argentina`);
+  if (titleCase && titleCase !== clean) add(`${titleCase}, Las Heras, Mendoza, Argentina`);
   return variants;
 }
 
