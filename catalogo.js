@@ -169,6 +169,42 @@ const LOCATION_PREFILL_CACHE_KEY = 'catalog:location_prefill_v1';
 const LOCATION_PROMPT_SESSION_KEY = 'catalog:location_prompt_attempted_v1';
 const ADDRESS_BOOK_STORAGE_PREFIX = 'catalog:address_book_v1:';
 const LAST_USED_ADDRESS_STORAGE_PREFIX = 'catalog:last_used_address_v1:';
+const ALLOWED_ADDRESS_REGION = 'mendoza';
+const MENDOZA_BOUNDS = Object.freeze({
+  minLat: -37.7,
+  maxLat: -31.0,
+  minLon: -70.7,
+  maxLon: -66.2
+});
+const MENDOZA_DEFAULT_CENTER = Object.freeze({
+  lat: -32.8895,
+  lon: -68.8458
+});
+const NON_MENDOZA_REGION_TOKENS = Object.freeze([
+  'buenos aires',
+  'caba',
+  'cordoba',
+  'salta',
+  'san juan',
+  'san luis',
+  'la rioja',
+  'catamarca',
+  'tucuman',
+  'santa fe',
+  'entre rios',
+  'misiones',
+  'corrientes',
+  'chaco',
+  'formosa',
+  'jujuy',
+  'santiago del estero',
+  'la pampa',
+  'neuquen',
+  'rio negro',
+  'chubut',
+  'santa cruz',
+  'tierra del fuego'
+]);
 const SUPPORT_WHATSAPP_E164 = '5492616838446';
 const SUPPORT_WHATSAPP_DISPLAY = '+54 9 2616 83-8446';
 const SUPPORT_EMAIL = 'distriarmza@gmail.com';
@@ -177,6 +213,11 @@ let authLocationPrefill = null;
 let authLocationRequestInFlight = false;
 let authLocationMapInstance = null;
 let authLocationMapMarker = null;
+let addressPickerMapInstance = null;
+let addressPickerMapMarker = null;
+let addressSearchTimer = null;
+let addressSearchActiveRequestId = 0;
+let addressSearchAbortController = null;
 
 function loadPromotionsCache(){
   try{
@@ -2426,6 +2467,8 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           basePayload.user_barrio = deliveryInfo.barrio;
           basePayload.user_calle = deliveryInfo.calle;
           basePayload.user_numeracion = deliveryInfo.numeracion;
+          basePayload.user_address = sanitizeAddressLongText(deliveryInfo.full_text || buildAddressDisplay(deliveryInfo), 200);
+          basePayload.user_address_label = sanitizeAddressAlias(deliveryInfo.label || '');
           basePayload.user_delivery_notes = sanitizeDeliveryNotes(deliveryInfo.instrucciones || '');
         }
         if (!basePayload.user_barrio || !basePayload.user_calle || !basePayload.user_numeracion) {
@@ -2473,11 +2516,26 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
             payload.user_delivery_notes = deliveryNotes;
             payload.delivery_notes = deliveryNotes;
           }
+          if (basePayload.user_address){
+            payload.user_address = sanitizeAddressLongText(basePayload.user_address, 200);
+          }
           // If logged-in, include a lightweight preview from the profile we fetched above
           if (basePayload.user_full_name || basePayload.user_email) {
             payload._token_preview = payload._token_preview || { name: basePayload.user_full_name || null, email: basePayload.user_email || null };
             if (deliveryNotes) payload._token_preview.delivery_notes = deliveryNotes;
           }
+          if (!payload._token_preview || typeof payload._token_preview !== 'object') payload._token_preview = {};
+          if (basePayload.user_barrio) payload._token_preview.barrio = String(basePayload.user_barrio || '').trim();
+          if (basePayload.user_calle) payload._token_preview.calle = String(basePayload.user_calle || '').trim();
+          if (basePayload.user_numeracion) payload._token_preview.numeracion = String(basePayload.user_numeracion || '').trim();
+          if (basePayload.user_address) payload._token_preview.user_address = sanitizeAddressLongText(basePayload.user_address, 200);
+          if (basePayload.user_address_label) payload._token_preview.address_label = sanitizeAddressAlias(basePayload.user_address_label);
+          payload._token_preview.address = {
+            barrio: String(basePayload.user_barrio || '').trim(),
+            calle: String(basePayload.user_calle || '').trim(),
+            numeracion: String(basePayload.user_numeracion || '').trim(),
+            direccion: sanitizeAddressLongText(basePayload.user_address || '', 200)
+          };
         }catch(e){}
         try{
           const deliverySchedulePreview = computeCheckoutDeliverySchedule(payload);
@@ -3946,7 +4004,8 @@ try{
 function showToast(message, timeout = 3000){
   try{
     let container = document.getElementById('__toast_container');
-    if(!container){ container = document.createElement('div'); container.id='__toast_container'; container.style.position='fixed'; container.style.right='20px'; container.style.bottom='20px'; container.style.zIndex='3000'; container.style.display='flex'; container.style.flexDirection='column'; container.style.gap='8px'; document.body.appendChild(container); }
+    if(!container){ container = document.createElement('div'); container.id='__toast_container'; container.style.position='fixed'; container.style.right='20px'; container.style.bottom='20px'; container.style.zIndex='5300'; container.style.display='flex'; container.style.flexDirection='column'; container.style.gap='8px'; document.body.appendChild(container); }
+    if (container.style.zIndex !== '5300') container.style.zIndex = '5300';
     const t = document.createElement('div');
     t.className = '__toast';
     t.style.background = 'linear-gradient(90deg,var(--accent),var(--accent-2))';
@@ -3970,7 +4029,7 @@ function showToast(message, timeout = 3000){
 function ensureGlobalDialogStyles(){
   if (document.getElementById('__global_dialog_styles')) return;
   const s = document.createElement('style'); s.id = '__global_dialog_styles'; s.textContent = `
-.__dialog_overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.36);backdrop-filter:blur(3px);z-index:3200;opacity:0;pointer-events:none;transition:opacity .18s ease}
+.__dialog_overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,23,0.36);backdrop-filter:blur(3px);z-index:3600;opacity:0;pointer-events:none;transition:opacity .18s ease}
 .__dialog_overlay.open{opacity:1;pointer-events:auto}
 body.__lock_scroll{overflow:hidden}
 .__dialog{width:520px;max-width:calc(100% - 36px);background:linear-gradient(180deg, rgba(255,255,255,0.98), var(--surface));border-radius:14px;padding:16px;box-shadow:0 18px 48px rgba(2,6,23,0.16);color:var(--deep);border:1px solid rgba(10,34,64,0.06);transform:translateY(-6px);transition:transform 200ms ease, opacity 180ms ease}
@@ -3989,6 +4048,7 @@ body.__lock_scroll{overflow:hidden}
 .__dialog--danger .dialog-icon{background:linear-gradient(90deg,#ffecec,#ffd6d6); color:#9b1e1e}
 .__dialog--info .dialog-icon{background:linear-gradient(90deg,#eaf6ff,#dbefff);color:#05507a}
 .__dialog input[type="text"], .__dialog input[type="email"]{width:100%;padding:10px;border-radius:8px;border:1px solid #e6e9ef}
+.__dialog textarea{width:100%;padding:10px;border-radius:8px;border:1px solid #e6e9ef;min-height:84px;resize:vertical;font-family:inherit}
 .__delivery_dialog{width:620px;max-width:calc(100% - 24px);padding:18px}
 .__delivery_dialog .dialog-body{color:var(--deep)}
 .__delivery_hint{margin:0 0 12px;color:var(--muted);font-size:14px}
@@ -4005,6 +4065,42 @@ body.__lock_scroll{overflow:hidden}
 .__addr_saved_empty{margin:0;color:var(--muted);font-size:13px}
 .__addr_check{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);margin-top:4px}
 .__addr_check input{accent-color:var(--accent)}
+.__delivery_selected_card{margin:0 0 12px;padding:11px 12px;border-radius:12px;background:linear-gradient(180deg,#f8fbff,#ffffff);border:1px solid rgba(14,94,184,0.2)}
+.__delivery_selected_title{font-size:11px;font-weight:900;letter-spacing:.04em;text-transform:uppercase;color:#2f4e72;margin-bottom:6px}
+.__delivery_selected_line{font-size:14px;color:#0f2237;font-weight:700;line-height:1.35}
+.__delivery_selected_empty{font-size:13px;color:var(--muted)}
+.__delivery_alias_label{font-size:12px;font-weight:800;letter-spacing:.01em;color:#334155;margin-top:2px}
+.__delivery_alias_input{height:42px;border:1px solid rgba(10,34,64,0.12);border-radius:10px;padding:0 12px;font-size:14px;background:linear-gradient(180deg,#fff,#fcfdff)}
+.__delivery_add_btn{width:100%;justify-content:center}
+.__addr_search_overlay{backdrop-filter:blur(5px)}
+.__addr_search_dialog{width:700px;max-width:calc(100% - 26px);padding:16px}
+.__addr_search_head{display:flex;align-items:flex-start;gap:10px;margin-bottom:12px}
+.__addr_search_head h3{margin:0 0 3px;font-size:32px;line-height:1.05;font-weight:900;letter-spacing:-0.03em;color:#041124}
+.__addr_search_head p{margin:0;font-size:13px;color:#5f7088;font-weight:600}
+.__addr_search_back{min-width:38px;height:38px;padding:0;border-radius:10px}
+.__addr_search_box{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
+.__addr_search_input{height:46px;border:1px solid rgba(10,34,64,0.14);border-radius:12px;padding:0 14px;font-size:16px;background:#fff}
+.__addr_search_geo{height:46px;padding:0 14px;border-radius:12px;white-space:nowrap}
+.__addr_search_status{margin:8px 0 10px;color:#50637a;font-size:12px;font-weight:700}
+.__addr_search_manual_wrap{display:flex;justify-content:flex-start;margin:-2px 0 10px}
+.__addr_search_manual{min-height:34px;padding:6px 10px;border-radius:10px;font-size:12px;font-weight:800}
+.__addr_search_list{display:flex;flex-direction:column;gap:6px;max-height:45vh;overflow:auto;padding-right:3px}
+.__addr_search_item{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;padding:11px;border:1px solid rgba(10,34,64,0.08);border-radius:12px;background:#fff;color:#0f2237;font-weight:700;cursor:pointer}
+.__addr_search_item:hover{background:linear-gradient(180deg,#f7faff,#fefefe);border-color:rgba(14,94,184,0.26)}
+.__addr_search_pin{font-size:15px;line-height:1.2}
+.__addr_search_text{line-height:1.3}
+.__addr_map_overlay{backdrop-filter:blur(5px)}
+.__addr_map_dialog{width:760px;max-width:calc(100% - 22px);padding:14px}
+.__addr_map_head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.__addr_map_head h3{margin:0;font-size:26px;font-weight:900;letter-spacing:-0.02em;color:#03142a}
+.__addr_map_canvas{height:380px;border-radius:14px;overflow:hidden;border:1px solid rgba(10,34,64,0.12);background:linear-gradient(180deg,#edf4ff,#dce8f6)}
+.__addr_map_canvas iframe{width:100%;height:100%;border:0;display:block}
+.__addr_map_help{margin:8px 2px 10px;font-size:12px;font-weight:700;color:#4f6480}
+.__addr_map_address_wrap{margin-bottom:4px}
+.__addr_map_address{width:100%;height:44px;border-radius:12px;border:1px solid rgba(10,34,64,0.12);padding:0 12px;background:#fff;font-size:14px;font-weight:700;color:#0f2237}
+.__map_pin{background:transparent !important;border:none !important}
+.__map_pin span{position:relative;display:block;width:26px;height:26px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:linear-gradient(180deg,#071427,#192f4f);border:2px solid #ffffff;box-shadow:0 8px 18px rgba(7,20,39,0.34)}
+.__map_pin span::after{content:'';position:absolute;width:8px;height:8px;background:#fff;border-radius:50%;top:50%;left:50%;transform:translate(-50%,-50%)}
 .__account_dialog{width:900px;max-width:calc(100% - 20px);padding:18px 18px 14px}
 .__account_identity{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:12px;background:linear-gradient(90deg,rgba(242,107,56,0.08),rgba(255,184,77,0.1));margin-bottom:12px}
 .__account_identity_main{display:flex;align-items:center;gap:12px}
@@ -4024,10 +4120,12 @@ body.__lock_scroll{overflow:hidden}
 .__account_addr_last{font-size:11px;color:rgba(6,26,43,0.62);font-weight:700}
 .__account_addr_badge{font-size:11px;font-weight:800;color:#b45309;background:#fff7ed;border:1px solid rgba(242,107,56,0.3);padding:2px 7px;border-radius:999px}
 .__account_addr_line{font-size:13px;color:rgba(6,26,43,0.82);margin-bottom:8px}
+.__account_addr_notes{font-size:12px;color:#475569;line-height:1.35;margin:-4px 0 8px}
 .__account_addr_actions{display:flex;flex-wrap:wrap;gap:6px}
 .__account_addr_actions .btn{padding:6px 10px;border-radius:9px;font-size:12px}
 .__account_form{display:grid;gap:9px}
 .__account_form input{height:40px;border:1px solid rgba(10,34,64,0.12);border-radius:10px;padding:0 11px}
+.__account_form [data-action="add_address"]{width:100%;justify-content:center}
 .__account_form_actions{display:flex;gap:8px;justify-content:flex-end}
 .__account_empty{font-size:13px;color:var(--muted);padding:12px;border:1px dashed rgba(10,34,64,0.2);border-radius:10px;background:#fcfdff}
 .__account_subtle{font-size:12px;color:var(--muted)}
@@ -4175,11 +4273,121 @@ body.__lock_scroll{overflow:hidden}
   .__orders_more_btn{width:auto;min-width:180px}
   .__checkout_help_actions{display:grid;grid-template-columns:1fr;gap:8px}
   .__checkout_help_link{width:100%}
+  .__addr_search_head h3{font-size:26px}
+  .__addr_search_box{grid-template-columns:1fr}
+  .__addr_search_geo{width:100%}
+  .__addr_map_dialog{width:calc(100% - 14px)}
+  .__addr_map_canvas{height:320px}
 }
-@media(max-width:640px){ .__dialog{width:calc(100% - 32px)} }
+@media(max-width:640px){
+  .__dialog{width:calc(100% - 32px)}
+  .__addr_search_head h3{font-size:23px}
+  .__addr_map_head{flex-direction:column;align-items:stretch}
+  .__addr_map_head .btn{width:100%}
+  .__addr_map_canvas{height:280px}
+}
 `;
   document.head.appendChild(s);
 }
+
+function getTopDialogOverlay(){
+  try{
+    const overlays = Array.from(document.querySelectorAll('.__dialog_overlay')).filter((el) => !!el && el.isConnected);
+    if (!overlays.length) return null;
+    overlays.sort((a, b) => {
+      try{
+        const za = Number((window.getComputedStyle(a).zIndex || '').replace(/[^\d-]/g, '')) || 0;
+        const zb = Number((window.getComputedStyle(b).zIndex || '').replace(/[^\d-]/g, '')) || 0;
+        if (za !== zb) return za - zb;
+      }catch(_){ }
+      if (a === b) return 0;
+      const rel = a.compareDocumentPosition(b);
+      return (rel & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1;
+    });
+    return overlays[overlays.length - 1] || null;
+  }catch(_){
+    return null;
+  }
+}
+
+function isTopDialogOverlay(overlay){
+  if (!overlay) return false;
+  const top = getTopDialogOverlay();
+  return top === overlay;
+}
+
+function showAddressDetailsModal(initial = {}, { title = 'Nombre e instrucciones' } = {}){
+  return new Promise((resolve) => {
+    try{
+      ensureGlobalDialogStyles();
+      const startLabel = sanitizeAddressAlias(initial && (initial.label || initial.alias) ? (initial.label || initial.alias) : '');
+      const startNotes = sanitizeDeliveryNotes(initial && (initial.notes || initial.instrucciones || initial.instructions || initial.delivery_notes) ? (initial.notes || initial.instrucciones || initial.instructions || initial.delivery_notes) : '');
+      const overlay = document.createElement('div');
+      overlay.className = '__dialog_overlay';
+      overlay.style.zIndex = '5420';
+      overlay.innerHTML = `
+        <div class="__dialog __dialog--info" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+          <div class="dialog-header"><span class="dialog-icon">✍️</span><h3>${escapeHtml(title)}</h3></div>
+          <div class="dialog-body">
+            <label class="__delivery_alias_label" for="__addr_meta_alias">Nombre de la dirección (opcional)</label>
+            <input id="__addr_meta_alias" class="__delivery_alias_input" type="text" placeholder="Ej: Casa, Trabajo" value="${escapeHtml(startLabel)}" />
+            <label class="__addr_notes_label" for="__addr_meta_notes" style="margin-top:10px">Instrucciones (opcional)</label>
+            <textarea id="__addr_meta_notes" placeholder="Ej: portón negro, timbre 2, dejar en recepción">${escapeHtml(startNotes)}</textarea>
+          </div>
+          <div class="actions">
+            <button class="btn btn-ghost" data-action="cancel">Cancelar</button>
+            <button class="btn btn-primary" data-action="save">Guardar</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      const dialog = overlay.querySelector('.__dialog');
+      const aliasEl = overlay.querySelector('#__addr_meta_alias');
+      const notesEl = overlay.querySelector('#__addr_meta_notes');
+      let closed = false;
+      const cleanup = () => {
+        if (closed) return;
+        closed = true;
+        try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ }
+      };
+      const closeWith = (value) => {
+        cleanup();
+        resolve(value || null);
+      };
+      const onKey = (ev) => {
+        if (ev.key === 'Escape' && isTopDialogOverlay(overlay)) closeWith(null);
+      };
+      window.addEventListener('keydown', onKey);
+      overlay.addEventListener('click', (ev) => {
+        if (ev.target === overlay && isTopDialogOverlay(overlay)) closeWith(null);
+      });
+      overlay.querySelector('[data-action="cancel"]')?.addEventListener('click', () => closeWith(null));
+      overlay.querySelector('[data-action="save"]')?.addEventListener('click', () => {
+        const label = sanitizeAddressAlias(aliasEl && aliasEl.value ? aliasEl.value : '');
+        const notes = sanitizeDeliveryNotes(notesEl && notesEl.value ? notesEl.value : '');
+        closeWith({ label, notes });
+      });
+      requestAnimationFrame(() => {
+        try{
+          overlay.classList.add('open');
+          if (dialog) dialog.classList.add('open');
+        }catch(_){ }
+      });
+      setTimeout(() => {
+        try{
+          if (aliasEl){
+            aliasEl.focus();
+            aliasEl.select();
+          }
+        }catch(_){ }
+      }, 30);
+    }catch(e){
+      console.error('showAddressDetailsModal failed', e);
+      resolve(null);
+    }
+  });
+}
+
 function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', value: true, primary: true }], dismissible = true, type = ''} = {}){
   return new Promise((resolve) => {
     try{
@@ -4190,6 +4398,7 @@ function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', v
       const iconHtml = type ? ('<span class="dialog-icon">' + (iconMap[type] || '') + '</span>') : '';
 
       const overlay = document.createElement('div'); overlay.className = '__dialog_overlay'; overlay.id = '__dialog_overlay';
+      overlay.style.zIndex = '5400';
       const headerHtml = title ? ('<div class="dialog-header">' + iconHtml + '<h3>' + escapeHtml(title) + '</h3></div>') : '';
       const bodyHtml = html ? String(html) : ('<p>' + escapeHtml(message) + '</p>');
       overlay.innerHTML = `<div class="__dialog ${ type ? ('__dialog--' + type) : '' }" role="dialog" aria-modal="true" aria-label="${escapeHtml(title||'Dialog')}">` + headerHtml + `
@@ -4206,8 +4415,18 @@ function showDialog({title, message = '', html = '', buttons = [{ label: 'OK', v
       });
 
       function cleanup(){ try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ } }
-      if (dismissible) overlay.addEventListener('click', (ev)=>{ if (!ev.target.closest('.__dialog')){ cleanup(); resolve(false); } });
-      const onKey = (ev)=>{ if (ev.key === 'Escape'){ cleanup(); resolve(false); } };
+      if (dismissible) overlay.addEventListener('click', (ev)=>{
+        if (ev.target === overlay && isTopDialogOverlay(overlay)){
+          cleanup();
+          resolve(false);
+        }
+      });
+      const onKey = (ev)=>{
+        if (ev.key === 'Escape' && isTopDialogOverlay(overlay)){
+          cleanup();
+          resolve(false);
+        }
+      };
       window.addEventListener('keydown', onKey);
       requestAnimationFrame(()=> overlay.classList.add('open'));
       // animate dialog in
@@ -4392,6 +4611,9 @@ function sanitizeAddressAlias(value){
 function sanitizeAddressText(value, maxLen = 80){
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLen);
 }
+function sanitizeAddressLongText(value, maxLen = 200){
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLen);
+}
 function sanitizeAddressNumber(value){
   return String(value || '').replace(/\s+/g, '').trim().slice(0, 12);
 }
@@ -4472,24 +4694,150 @@ function validateAddressInput(
   }
   return { ok: true, value };
 }
+
+function parseStreetAndNumber(value){
+  const raw = sanitizeAddressLongText(value || '', 120);
+  if (!raw) return { calle: '', numeracion: '' };
+  const match = raw.match(/^(.+?)\s+([0-9]{1,6}[A-Za-z]?|s\/?n)$/i);
+  if (match){
+    return {
+      calle: sanitizeAddressText(match[1] || '', 80),
+      numeracion: sanitizeAddressNumber(match[2] || '')
+    };
+  }
+  return { calle: sanitizeAddressText(raw, 80), numeracion: '' };
+}
+
+function extractAddressPartsFromDisplay(displayName){
+  const raw = sanitizeAddressLongText(displayName || '', 220);
+  if (!raw) return { barrio: '', calle: '', numeracion: '' };
+  const pieces = raw.split(',').map(p => sanitizeAddressText(p, 80)).filter(Boolean);
+  const streetInfo = parseStreetAndNumber(pieces[0] || '');
+  const barrio = sanitizeAddressText(pieces[1] || pieces[2] || '', 80);
+  return { barrio, calle: streetInfo.calle, numeracion: streetInfo.numeracion };
+}
+
+function normalizeRegionToken(value){
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isMendozaText(value){
+  const token = normalizeRegionToken(value);
+  if (!token) return false;
+  return token.includes(ALLOWED_ADDRESS_REGION);
+}
+
+function hasNonMendozaRegionToken(value){
+  const token = normalizeRegionToken(value);
+  if (!token) return false;
+  return NON_MENDOZA_REGION_TOKENS.some((probe) => token.includes(probe));
+}
+
+function isMendozaSuggestion(item, normalized = null){
+  try{
+    const raw = item && typeof item === 'object' ? item : {};
+    const latRaw = Number(raw.lat);
+    const lonRaw = Number(raw.lon);
+    const latNorm = Number(normalized && normalized.lat);
+    const lonNorm = Number(normalized && normalized.lon);
+    const lat = Number.isFinite(latRaw) ? latRaw : (Number.isFinite(latNorm) ? latNorm : null);
+    const lon = Number.isFinite(lonRaw) ? lonRaw : (Number.isFinite(lonNorm) ? lonNorm : null);
+    const addr = (raw.address && typeof raw.address === 'object') ? raw.address : {};
+    const probe = [
+      raw.display_name,
+      raw.full_text,
+      raw.label,
+      addr.state,
+      addr.province,
+      addr.region,
+      addr.county,
+      addr.state_district,
+      addr.city,
+      addr.town,
+      normalized?.full_text,
+      normalized?.label,
+      normalized?.barrio
+    ];
+    const joined = normalizeRegionToken(probe.filter(Boolean).join(' '));
+    if (joined && hasNonMendozaRegionToken(joined)) return false;
+    if (probe.some(isMendozaText)) return true;
+    if (lat !== null && lon !== null){
+      return lat >= MENDOZA_BOUNDS.minLat &&
+        lat <= MENDOZA_BOUNDS.maxLat &&
+        lon >= MENDOZA_BOUNDS.minLon &&
+        lon <= MENDOZA_BOUNDS.maxLon;
+    }
+    return false;
+  }catch(_){ return false; }
+}
+
+function isMendozaPrefill(prefill){
+  try{
+    const p = prefill || {};
+    const lat = Number(p.lat);
+    const lon = Number(p.lon);
+    const probe = [
+      p.full_text,
+      p.label,
+      p.barrio,
+      p.calle
+    ];
+    const joined = normalizeRegionToken(probe.filter(Boolean).join(' '));
+    if (joined && hasNonMendozaRegionToken(joined)) return false;
+    if (probe.some(isMendozaText)) return true;
+    if (Number.isFinite(lat) && Number.isFinite(lon)){
+      return lat >= MENDOZA_BOUNDS.minLat &&
+        lat <= MENDOZA_BOUNDS.maxLat &&
+        lon >= MENDOZA_BOUNDS.minLon &&
+        lon <= MENDOZA_BOUNDS.maxLon;
+    }
+    if (!joined) return true;
+    // Compatibilidad con direcciones legacy guardadas sin provincia explícita.
+    return true;
+  }catch(_){ return false; }
+}
+
 function normalizeAddressEntry(entry){
   if (!entry || typeof entry !== 'object') return null;
-  const barrio = String(entry.barrio || '').trim();
-  const calle = String(entry.calle || '').trim();
-  const numeracion = String(entry.numeracion || entry.numero || '').trim();
+  const displayParts = extractAddressPartsFromDisplay(entry.full_text || entry.full || entry.display_name || '');
+  const barrio = sanitizeAddressText(entry.barrio || displayParts.barrio || '', 80);
+  const calle = sanitizeAddressText(entry.calle || displayParts.calle || '', 80);
+  const numeracion = sanitizeAddressNumber(entry.numeracion || entry.numero || displayParts.numeracion || '');
   if (!barrio || !calle || !numeracion) return null;
   const labelRaw = String(entry.label || entry.alias || '').trim();
-  return {
+  const hasNotesField = Object.prototype.hasOwnProperty.call(entry, 'notes') ||
+    Object.prototype.hasOwnProperty.call(entry, 'instrucciones') ||
+    Object.prototype.hasOwnProperty.call(entry, 'instructions') ||
+    Object.prototype.hasOwnProperty.call(entry, 'delivery_notes');
+  const notesValue = hasNotesField
+    ? sanitizeDeliveryNotes(entry.notes || entry.instrucciones || entry.instructions || entry.delivery_notes || '')
+    : null;
+  const fullText = sanitizeAddressLongText(entry.full_text || entry.full || entry.display_name || '', 200);
+  const latNum = Number(entry.lat);
+  const lonNum = Number(entry.lon);
+  const normalized = {
     id: String(entry.id || ('addr-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8))),
     label: labelRaw,
     barrio,
     calle,
     numeracion,
+    full_text: fullText,
+    lat: Number.isFinite(latNum) ? Number(latNum.toFixed(6)) : null,
+    lon: Number.isFinite(lonNum) ? Number(lonNum.toFixed(6)) : null,
     created_at: Number(entry.created_at || Date.now())
   };
+  if (hasNotesField) normalized.notes = notesValue;
+  return normalized;
 }
 function buildAddressDisplay(addr){
   if (!addr) return '';
+  const full = String(addr.full_text || '').trim();
+  if (full) return full.split(',').slice(0, 3).join(',').trim() || full;
   const street = [String(addr.calle || '').trim(), String(addr.numeracion || '').trim()].filter(Boolean).join(' ');
   const barrio = String(addr.barrio || '').trim();
   if (street && barrio) return street + ', ' + barrio;
@@ -4512,6 +4860,7 @@ function loadAddressBook(accountId = null){
       );
       if (dupe){
         if (!dupe.label && n.label) dupe.label = n.label;
+        if (!dupe.notes && n.notes) dupe.notes = n.notes;
       } else {
         normalized.push(n);
       }
@@ -4546,12 +4895,19 @@ function upsertAddressInBook(entry, { accountId = null, setDefault = false } = {
     target.barrio = normalized.barrio;
     target.calle = normalized.calle;
     target.numeracion = normalized.numeracion;
-    if (normalized.label) target.label = normalized.label;
+    if (normalized.full_text) target.full_text = normalized.full_text;
+    if (normalized.lat != null) target.lat = normalized.lat;
+    if (normalized.lon != null) target.lon = normalized.lon;
+    if (Object.prototype.hasOwnProperty.call(normalized, 'notes')) target.notes = normalized.notes;
+    if (normalized.label && (byId || !target.label)) target.label = normalized.label;
+    if (!target.label) target.label = buildUniqueAddressAlias(book.addresses, target.id);
     if (!target.created_at) target.created_at = Date.now();
     if (setDefault || !book.defaultId) book.defaultId = target.id;
     saveAddressBook(book, accountId);
     return target;
   }
+  if (!normalized.label) normalized.label = buildUniqueAddressAlias(book.addresses);
+  if (!Object.prototype.hasOwnProperty.call(normalized, 'notes')) normalized.notes = '';
   book.addresses.unshift(normalized);
   if (setDefault || !book.defaultId) book.defaultId = normalized.id;
   saveAddressBook(book, accountId);
@@ -4588,23 +4944,35 @@ function loadDeliveryAddressCache(){
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;
+    const latNum = Number(parsed.lat);
+    const lonNum = Number(parsed.lon);
     return {
       barrio: String(parsed.barrio || '').trim(),
       calle: String(parsed.calle || '').trim(),
       numeracion: String(parsed.numeracion || parsed.numero || '').trim(),
+      label: sanitizeAddressAlias(parsed.label || parsed.alias || ''),
+      full_text: sanitizeAddressLongText(parsed.full_text || parsed.full || '', 200),
+      lat: Number.isFinite(latNum) ? Number(latNum.toFixed(6)) : null,
+      lon: Number.isFinite(lonNum) ? Number(lonNum.toFixed(6)) : null,
       instrucciones: sanitizeDeliveryNotes(parsed.instrucciones || parsed.instructions || parsed.delivery_notes || '')
     };
   }catch(_){ return null; }
 }
 function saveDeliveryAddressCache(data){
   try{
+    const latNum = Number(data?.lat);
+    const lonNum = Number(data?.lon);
     const payload = {
       barrio: String(data?.barrio || '').trim(),
       calle: String(data?.calle || '').trim(),
       numeracion: String(data?.numeracion || data?.numero || '').trim(),
+      label: sanitizeAddressAlias(data?.label || data?.alias || ''),
+      full_text: sanitizeAddressLongText(data?.full_text || data?.full || data?.display_name || '', 200),
+      lat: Number.isFinite(latNum) ? Number(latNum.toFixed(6)) : null,
+      lon: Number.isFinite(lonNum) ? Number(lonNum.toFixed(6)) : null,
       instrucciones: sanitizeDeliveryNotes(data?.instrucciones || data?.instructions || data?.delivery_notes || '')
     };
-    if (!payload.barrio && !payload.calle && !payload.numeracion && !payload.instrucciones) return;
+    if (!payload.barrio && !payload.calle && !payload.numeracion && !payload.instrucciones && payload.lat === null && payload.lon === null) return;
     localStorage.setItem(DELIVERY_ADDRESS_CACHE_KEY, JSON.stringify(payload));
   }catch(_){ }
 }
@@ -4613,6 +4981,7 @@ function normalizeLocationPrefill(raw){
   try{
     const latNum = Number(raw?.lat);
     const lonNum = Number(raw?.lon);
+    const scoreNum = Number(raw?.provider_score);
     return {
       lat: Number.isFinite(latNum) ? latNum : null,
       lon: Number.isFinite(lonNum) ? lonNum : null,
@@ -4620,10 +4989,13 @@ function normalizeLocationPrefill(raw){
       calle: String(raw?.calle || '').trim(),
       numeracion: String(raw?.numeracion || raw?.numero || '').trim(),
       label: String(raw?.label || raw?.display_name || '').trim(),
+      full_text: sanitizeAddressLongText(raw?.full_text || raw?.full || raw?.display_name || raw?.label || '', 200),
+      source: String(raw?.source || '').trim().toLowerCase(),
+      provider_score: Number.isFinite(scoreNum) ? scoreNum : null,
       ts: Number(raw?.ts || Date.now()) || Date.now(),
     };
   }catch(_){
-    return { lat: null, lon: null, barrio: '', calle: '', numeracion: '', label: '', ts: Date.now() };
+    return { lat: null, lon: null, barrio: '', calle: '', numeracion: '', label: '', full_text: '', source: '', provider_score: null, ts: Date.now() };
   }
 }
 
@@ -4649,6 +5021,8 @@ function saveLocationPrefillCache(data){
 function buildLocationDisplayLabel(prefill){
   try{
     if (!prefill) return '';
+    const full = String(prefill.full_text || '').trim();
+    if (full) return full;
     const explicit = String(prefill.label || '').trim();
     if (explicit) return explicit;
     const parts = [prefill.calle, prefill.numeracion, prefill.barrio].map(v => String(v || '').trim()).filter(Boolean);
@@ -4658,6 +5032,14 @@ function buildLocationDisplayLabel(prefill){
     }
     return '';
   }catch(_){ return ''; }
+}
+
+function buildCompactLocationLabel(prefill, maxParts = 3){
+  const raw = buildLocationDisplayLabel(prefill);
+  if (!raw) return '';
+  const parts = raw.split(',').map(p => String(p || '').trim()).filter(Boolean);
+  if (parts.length <= maxParts) return raw;
+  return parts.slice(0, maxParts).join(', ');
 }
 
 function buildAuthLocationMapUrl(lat, lon){
@@ -4688,6 +5070,31 @@ function getAuthLocationLatLon(prefill){
 
 function hasLeafletForAuthLocation(){
   return typeof window !== 'undefined' && !!window.L && typeof window.L.map === 'function';
+}
+
+function createLeafletPinIcon(className = '__map_pin'){
+  try{
+    if (!hasLeafletForAuthLocation()) return null;
+    const L = window.L;
+    return L.divIcon({
+      className,
+      html: '<span></span>',
+      iconSize: [28, 28],
+      iconAnchor: [14, 24],
+      popupAnchor: [0, -22]
+    });
+  }catch(_){ return null; }
+}
+
+function createLeafletBaseLayer(){
+  try{
+    if (!hasLeafletForAuthLocation()) return null;
+    const L = window.L;
+    return L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 20,
+      attribution: '&copy; OpenStreetMap &copy; CARTO'
+    });
+  }catch(_){ return null; }
 }
 
 async function applyManualAuthLocationFromMap(lat, lon){
@@ -4734,12 +5141,11 @@ function syncAuthLocationMapPreview(prefill){
           zoomControl: true,
           attributionControl: true,
           scrollWheelZoom: true,
+          preferCanvas: true,
         });
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          maxZoom: 19,
-          attribution: '&copy; OpenStreetMap',
-        }).addTo(authLocationMapInstance);
-        authLocationMapMarker = L.marker([latLon.lat, latLon.lon], { draggable: true }).addTo(authLocationMapInstance);
+        const baseLayer = createLeafletBaseLayer();
+        if (baseLayer) baseLayer.addTo(authLocationMapInstance);
+        authLocationMapMarker = L.marker([latLon.lat, latLon.lon], { draggable: true, icon: createLeafletPinIcon('__map_pin __map_pin--auth') || undefined }).addTo(authLocationMapInstance);
         authLocationMapMarker.on('dragend', async () => {
           try{
             const point = authLocationMapMarker.getLatLng();
@@ -4755,7 +5161,7 @@ function syncAuthLocationMapPreview(prefill){
           }catch(_){ }
         });
       } else if (!authLocationMapMarker){
-        authLocationMapMarker = L.marker([latLon.lat, latLon.lon], { draggable: true }).addTo(authLocationMapInstance);
+        authLocationMapMarker = L.marker([latLon.lat, latLon.lon], { draggable: true, icon: createLeafletPinIcon('__map_pin __map_pin--auth') || undefined }).addTo(authLocationMapInstance);
       }
       if (authLocationMapMarker) authLocationMapMarker.setLatLng([latLon.lat, latLon.lon]);
       authLocationMapInstance.setView([latLon.lat, latLon.lon], 17, { animate: false });
@@ -4836,6 +5242,7 @@ async function reverseGeocodeLocation(lat, lon){
   const numeracion = String(addr.house_number || '').trim();
   const labelFromParts = [calle, numeracion, barrio].filter(Boolean).join(', ');
   const label = labelFromParts || String(data.display_name || '').split(',').slice(0, 3).join(',').trim();
+  const fullText = sanitizeAddressLongText(data.display_name || label, 200);
   return normalizeLocationPrefill({
     lat: latNum,
     lon: lonNum,
@@ -4843,8 +5250,738 @@ async function reverseGeocodeLocation(lat, lon){
     calle,
     numeracion,
     label,
+    full_text: fullText,
     ts: Date.now(),
   });
+}
+
+function normalizeAddressSuggestion(item){
+  if (!item || typeof item !== 'object') return null;
+  const lat = Number(item.lat);
+  const lon = Number(item.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const addr = (item.address && typeof item.address === 'object') ? item.address : {};
+  const derived = extractAddressPartsFromDisplay(item.display_name || item.label || '');
+  const barrio = sanitizeAddressText(
+    item.barrio ||
+    addr.suburb ||
+    addr.neighbourhood ||
+    addr.city_district ||
+    addr.city ||
+    addr.town ||
+    addr.village ||
+    addr.state_district ||
+    addr.state ||
+    derived.barrio ||
+    '',
+    80
+  );
+  const streetCandidate = sanitizeAddressText(
+    item.calle ||
+    addr.road ||
+    addr.pedestrian ||
+    addr.residential ||
+    addr.path ||
+    addr.footway ||
+    derived.calle ||
+    '',
+    80
+  );
+  const streetInfo = parseStreetAndNumber(streetCandidate);
+  const calle = sanitizeAddressText(streetInfo.calle || streetCandidate || '', 80);
+  const numeracion = sanitizeAddressNumber(
+    item.numeracion ||
+    item.numero ||
+    addr.house_number ||
+    derived.numeracion ||
+    streetInfo.numeracion ||
+    ''
+  ) || 'S/N';
+  const fullText = sanitizeAddressLongText(item.display_name || item.full_text || '', 200);
+  const label = sanitizeAddressLongText(
+    item.label ||
+    [calle, numeracion, barrio].filter(Boolean).join(', ') ||
+    fullText.split(',').slice(0, 3).join(','),
+    120
+  );
+  return normalizeLocationPrefill({
+    lat,
+    lon,
+    barrio,
+    calle,
+    numeracion,
+    label,
+    full_text: fullText || label,
+    source: 'nominatim',
+    ts: Date.now()
+  });
+}
+
+function locationPrefillToAddress(prefill, extra = {}){
+  const normalized = normalizeLocationPrefill(prefill || {});
+  const alias = sanitizeAddressAlias(extra.label || '');
+  const fromText = extractAddressPartsFromDisplay(normalized.full_text || normalized.label || '');
+  const streetParsed = parseStreetAndNumber(normalized.calle || fromText.calle || '');
+  const barrio = sanitizeAddressText(normalized.barrio || fromText.barrio || 'Mendoza', 80);
+  const calle = sanitizeAddressText(streetParsed.calle || normalized.calle || fromText.calle || '', 80);
+  const numeracion = sanitizeAddressNumber(normalized.numeracion || fromText.numeracion || streetParsed.numeracion || '') || 'S/N';
+  const check = validateAddressInput({
+    label: alias,
+    barrio,
+    calle,
+    numeracion
+  }, {
+    requireAlias: false
+  });
+  if (!check.ok) return null;
+  return Object.assign({}, check.value, {
+    lat: normalized.lat,
+    lon: normalized.lon,
+    full_text: sanitizeAddressLongText(normalized.full_text || normalized.label || buildLocationDisplayLabel(normalized), 200)
+  });
+}
+
+function buildAddressSearchQueryVariants(query){
+  const clean = sanitizeAddressLongText(query || '', 120);
+  if (!clean) return [];
+  const variants = [];
+  const add = (value) => {
+    const v = sanitizeAddressLongText(value || '', 120);
+    if (!v) return;
+    if (!variants.includes(v)) variants.push(v);
+  };
+  const withRegion = isMendozaText(clean) ? clean : `${clean}, Mendoza, Argentina`;
+  add(withRegion);
+  add(clean);
+  const noNumber = clean
+    .replace(/\b\d{1,6}[A-Za-z]?\b/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (noNumber && noNumber !== clean){
+    add(`${noNumber}, Mendoza, Argentina`);
+    add(`${noNumber}, Las Heras, Mendoza, Argentina`);
+  }
+  add(`${clean}, Las Heras, Mendoza, Argentina`);
+  return variants;
+}
+
+function buildSuggestionRankingScore(query, suggestion){
+  try{
+    const qRaw = normalizeRegionToken(query || '');
+    const sRaw = normalizeRegionToken(buildLocationDisplayLabel(suggestion) || '');
+    if (!qRaw || !sRaw) return 0;
+    const qStreetInfo = parseStreetAndNumber(qRaw);
+    const qNum = normalizeRegionToken(qStreetInfo.numeracion || '');
+    const qStreet = normalizeRegionToken(qStreetInfo.calle || qRaw.replace(/\b\d{1,6}[a-z]?\b/gi, ' ').replace(/\s+/g, ' ').trim());
+    const sStreetInfo = parseStreetAndNumber(normalizeRegionToken(suggestion?.calle || ''));
+    const sStreet = normalizeRegionToken(sStreetInfo.calle || suggestion?.calle || '');
+    const sNum = normalizeRegionToken(suggestion?.numeracion || sStreetInfo.numeracion || '');
+    let score = 0;
+    if (qNum && sNum && qNum === sNum) score += 11;
+    else if (qNum && sRaw.includes(qNum)) score += 8;
+    if (qStreet && sStreet && sStreet.includes(qStreet)) score += 9;
+    if (qStreet && sRaw.includes(qStreet)) score += 7;
+    const streetTokens = qStreet.split(' ').filter((token) => token.length >= 3);
+    let hits = 0;
+    streetTokens.forEach((token) => { if (sRaw.includes(token)) hits += 1; });
+    score += Math.min(5, hits);
+    if (suggestion && suggestion.calle) score += 1.5;
+    if (normalizeRegionToken(suggestion?.source || '') === 'arcgis') score += 2;
+    const providerScore = Number(suggestion?.provider_score);
+    if (Number.isFinite(providerScore) && providerScore > 0){
+      score += Math.min(5, providerScore / 20);
+    }
+    return score;
+  }catch(_){ return 0; }
+}
+
+function getManualMapSeedPrefill(query){
+  const cached = loadLocationPrefillCache();
+  const base = (cached && isMendozaPrefill(cached))
+    ? normalizeLocationPrefill(cached)
+    : normalizeLocationPrefill({
+        lat: MENDOZA_DEFAULT_CENTER.lat,
+        lon: MENDOZA_DEFAULT_CENTER.lon,
+        barrio: 'Mendoza',
+        label: 'Mendoza, Argentina',
+        full_text: 'Mendoza, Argentina',
+        ts: Date.now()
+      });
+  const cleanQuery = sanitizeAddressLongText(query || '', 120);
+  if (!cleanQuery) return base;
+  const parsed = extractAddressPartsFromDisplay(cleanQuery);
+  return normalizeLocationPrefill({
+    lat: base.lat,
+    lon: base.lon,
+    barrio: parsed.barrio || base.barrio || 'Mendoza',
+    calle: parsed.calle || base.calle || '',
+    numeracion: parsed.numeracion || base.numeracion || '',
+    label: cleanQuery,
+    full_text: isMendozaText(cleanQuery) ? cleanQuery : `${cleanQuery}, Mendoza, Argentina`,
+    ts: Date.now()
+  });
+}
+
+function normalizeArcGisSuggestion(candidate){
+  try{
+    if (!candidate || typeof candidate !== 'object') return null;
+    const loc = candidate.location && typeof candidate.location === 'object' ? candidate.location : {};
+    const lat = Number(loc.y);
+    const lon = Number(loc.x);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    const addressLineRaw = sanitizeAddressLongText(candidate.address || candidate.Match_addr || '', 200);
+    if (!addressLineRaw) return null;
+    const addressLine = /mendoza/i.test(addressLineRaw)
+      ? addressLineRaw
+      : (addressLineRaw + ', Mendoza, Argentina');
+    const parsed = extractAddressPartsFromDisplay(addressLine);
+    const firstSegment = String(addressLine.split(',')[0] || '').trim();
+    const streetParsed = parseStreetAndNumber(parsed.calle || firstSegment || '');
+    const calle = sanitizeAddressText(
+      String(streetParsed.calle || parsed.calle || firstSegment || '').replace(/^calle\s+/i, ''),
+      80
+    );
+    const numeracion = sanitizeAddressNumber(parsed.numeracion || streetParsed.numeracion || '') || 'S/N';
+    const barrio = sanitizeAddressText(parsed.barrio || String(addressLine.split(',')[1] || 'Mendoza'), 80);
+    const label = sanitizeAddressLongText([calle, numeracion, barrio].filter(Boolean).join(', '), 120);
+    return normalizeLocationPrefill({
+      lat,
+      lon,
+      barrio: barrio || 'Mendoza',
+      calle,
+      numeracion,
+      label,
+      full_text: addressLine,
+      source: 'arcgis',
+      provider_score: Number(candidate.score),
+      ts: Date.now(),
+    });
+  }catch(_){ return null; }
+}
+
+async function fetchArcGisAddressSuggestions(query, { limit = 6, signal = null } = {}){
+  const clean = sanitizeAddressLongText(query || '', 120);
+  if (clean.length < 3) return [];
+  try{
+    const params = new URLSearchParams({
+      SingleLine: clean,
+      f: 'pjson',
+      countryCode: 'ARG',
+      maxLocations: String(Math.min(8, Math.max(1, Number(limit) || 6))),
+      forStorage: 'false',
+      outFields: '*',
+      location: `${MENDOZA_DEFAULT_CENTER.lon},${MENDOZA_DEFAULT_CENTER.lat}`,
+      searchExtent: `${MENDOZA_BOUNDS.minLon},${MENDOZA_BOUNDS.minLat},${MENDOZA_BOUNDS.maxLon},${MENDOZA_BOUNDS.maxLat}`,
+    });
+    const url = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?${params.toString()}`;
+    const res = await fetch(url, {
+      mode: 'cors',
+      signal,
+      headers: { 'Accept': 'application/json' }
+    });
+    if (!res || !res.ok) return [];
+    const data = await res.json().catch(() => null);
+    const list = Array.isArray(data && data.candidates) ? data.candidates : [];
+    return list
+      .map(normalizeArcGisSuggestion)
+      .filter((item) => item && isMendozaPrefill(item));
+  }catch(_){
+    return [];
+  }
+}
+
+function seedAddressBookFromKnownLocations(accountId = null){
+  try{
+    const bookBefore = loadAddressBook(accountId);
+    let shouldSetDefault = !bookBefore.defaultId;
+    const candidates = [];
+    const cachedLocation = loadLocationPrefillCache();
+    const deliveryCache = loadDeliveryAddressCache();
+    if (cachedLocation) candidates.push(cachedLocation);
+    if (deliveryCache) candidates.push(deliveryCache);
+    for (const candidate of candidates){
+      const payload = locationPrefillToAddress(candidate, { label: '' });
+      if (!payload) continue;
+      if (!isMendozaPrefill(payload)) continue;
+      const saved = upsertAddressInBook(payload, { accountId, setDefault: shouldSetDefault });
+      if (saved && saved.id){
+        setLastUsedAddressId(saved.id, accountId);
+        shouldSetDefault = false;
+      }
+    }
+  }catch(_){ }
+}
+
+function getCurrentLocationPrefill(){
+  return new Promise((resolve) => {
+    try{
+      if (!navigator.geolocation){
+        resolve(null);
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(async (position) => {
+        try{
+          const lat = Number(position?.coords?.latitude);
+          const lon = Number(position?.coords?.longitude);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) { resolve(null); return; }
+          const reverse = await reverseGeocodeLocation(lat, lon);
+          if (reverse) {
+            resolve(reverse);
+            return;
+          }
+          resolve(normalizeLocationPrefill({ lat, lon, ts: Date.now() }));
+        }catch(_){
+          resolve(null);
+        }
+      }, () => resolve(null), {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      });
+    }catch(_){
+      resolve(null);
+    }
+  });
+}
+
+async function fetchAddressSuggestions(query, { limit = 6 } = {}){
+  const clean = sanitizeAddressLongText(query || '', 120);
+  if (clean.length < 3) return [];
+  const requestId = ++addressSearchActiveRequestId;
+  try{
+    if (addressSearchAbortController) addressSearchAbortController.abort();
+  }catch(_){ }
+  try{
+    addressSearchAbortController = new AbortController();
+    const queries = buildAddressSearchQueryVariants(clean);
+    const out = [];
+    const seen = new Set();
+    const maxLimit = Math.min(12, Math.max(3, Number(limit) || 6));
+    for (const q of queries){
+      if (requestId !== addressSearchActiveRequestId) return [];
+      const params = new URLSearchParams({
+        format: 'jsonv2',
+        addressdetails: '1',
+        limit: String(maxLimit),
+        countrycodes: 'ar',
+        bounded: '1',
+        viewbox: `${MENDOZA_BOUNDS.minLon},${MENDOZA_BOUNDS.maxLat},${MENDOZA_BOUNDS.maxLon},${MENDOZA_BOUNDS.minLat}`,
+        'accept-language': 'es',
+        q
+      });
+      const url = `https://nominatim.openstreetmap.org/search?${params.toString()}`;
+      const res = await fetch(url, {
+        mode: 'cors',
+        signal: addressSearchAbortController.signal,
+        headers: { 'Accept': 'application/json' }
+      });
+      if (requestId !== addressSearchActiveRequestId) return [];
+      if (!res || !res.ok) continue;
+      const data = await res.json().catch(() => []);
+      if (!Array.isArray(data) || !data.length) continue;
+      data.forEach((item) => {
+        const normalized = normalizeAddressSuggestion(item);
+        if (!normalized) return;
+        if (!isMendozaSuggestion(item, normalized)) return;
+        const key = `${Number(normalized.lat).toFixed(6)}|${Number(normalized.lon).toFixed(6)}|${normalizeRegionToken(normalized.full_text || normalized.label || '')}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(normalized);
+      });
+      if (out.length >= maxLimit) break;
+    }
+    const arcQueries = [];
+    const pushArcQuery = (value) => {
+      const normalized = sanitizeAddressLongText(value || '', 120);
+      if (!normalized) return;
+      if (!arcQueries.includes(normalized)) arcQueries.push(normalized);
+    };
+    pushArcQuery(clean);
+    queries.slice(0, 3).forEach(pushArcQuery);
+    for (let idx = 0; idx < arcQueries.length; idx += 1){
+      if (requestId !== addressSearchActiveRequestId) return [];
+      const q = arcQueries[idx];
+      const arcItems = await fetchArcGisAddressSuggestions(q, {
+        limit: maxLimit,
+        signal: addressSearchAbortController ? addressSearchAbortController.signal : undefined
+      });
+      arcItems.forEach((item) => {
+        const key = `${Number(item.lat).toFixed(6)}|${Number(item.lon).toFixed(6)}|${normalizeRegionToken(item.full_text || item.label || '')}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(item);
+      });
+      if (out.length >= maxLimit && idx > 0) break;
+    }
+    out.sort((a, b) => {
+      const scoreA = buildSuggestionRankingScore(clean, a);
+      const scoreB = buildSuggestionRankingScore(clean, b);
+      if (scoreA !== scoreB) return scoreB - scoreA;
+      return 0;
+    });
+    return out.slice(0, maxLimit);
+  }catch(_){
+    return [];
+  }
+}
+
+function showAddressSearchModal({
+  title = 'Ingresa tu dirección',
+  subtitle = 'Escribe una dirección o punto de referencia en Mendoza.',
+  initialQuery = ''
+} = {}){
+  return new Promise((resolve) => {
+    try{
+      ensureGlobalDialogStyles();
+      const overlay = document.createElement('div');
+      overlay.className = '__dialog_overlay __addr_search_overlay';
+      overlay.style.zIndex = 3400;
+      overlay.innerHTML = `
+        <div class="__dialog __dialog--info __addr_search_dialog" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+          <div class="__addr_search_head">
+            <button type="button" class="btn btn-ghost __addr_search_back" data-action="cancel" aria-label="Volver">←</button>
+            <div>
+              <h3>${escapeHtml(title)}</h3>
+              <p>${escapeHtml(subtitle)}</p>
+            </div>
+          </div>
+          <div class="__addr_search_box">
+            <input id="__addr_search_input" class="__addr_search_input" type="text" placeholder="Dirección o punto de referencia" />
+            <button type="button" class="btn btn-ghost __addr_search_geo" data-action="use_current">Mi ubicación actual</button>
+          </div>
+          <div id="__addr_search_status" class="__addr_search_status">Escribí al menos 3 caracteres para buscar en Mendoza.</div>
+          <div class="__addr_search_manual_wrap">
+            <button type="button" class="btn btn-ghost __addr_search_manual" data-action="manual_map">No aparece mi dirección, ubicar en mapa</button>
+          </div>
+          <div id="__addr_search_list" class="__addr_search_list"></div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      const dialog = overlay.querySelector('.__dialog');
+      const input = overlay.querySelector('#__addr_search_input');
+      const listEl = overlay.querySelector('#__addr_search_list');
+      const statusEl = overlay.querySelector('#__addr_search_status');
+      const currentBtn = overlay.querySelector('[data-action="use_current"]');
+      const manualMapBtn = overlay.querySelector('[data-action="manual_map"]');
+      let closed = false;
+      let optionsCache = [];
+
+      const cleanup = () => {
+        if (closed) return;
+        closed = true;
+        try{
+          if (addressSearchTimer) clearTimeout(addressSearchTimer);
+          addressSearchTimer = null;
+          if (addressSearchAbortController) addressSearchAbortController.abort();
+        }catch(_){ }
+        try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ }
+      };
+      const closeWith = (value) => { cleanup(); resolve(value || null); };
+      const onKey = (ev) => {
+        if (ev.key === 'Escape' && isTopDialogOverlay(overlay)) closeWith(null);
+        if (ev.key === 'Enter'){
+          if (ev.shiftKey){
+            const typed = sanitizeAddressLongText(input && input.value ? input.value : '', 120);
+            closeWith({ __manual_map: true, query: typed });
+            return;
+          }
+          const first = optionsCache[0];
+          if (first) closeWith(first);
+        }
+      };
+      window.addEventListener('keydown', onKey);
+      overlay.addEventListener('click', (ev) => {
+        if (ev.target === overlay && isTopDialogOverlay(overlay)) closeWith(null);
+      });
+
+      overlay.querySelector('[data-action="cancel"]')?.addEventListener('click', () => closeWith(null));
+      manualMapBtn?.addEventListener('click', () => {
+        const typed = sanitizeAddressLongText(input && input.value ? input.value : '', 120);
+        closeWith({ __manual_map: true, query: typed });
+      });
+      currentBtn?.addEventListener('click', async () => {
+        if (currentBtn) currentBtn.disabled = true;
+        if (statusEl) statusEl.textContent = 'Buscando tu ubicación actual...';
+        const current = await getCurrentLocationPrefill();
+        if (!current){
+          if (statusEl) statusEl.textContent = 'No pudimos obtener tu ubicación actual.';
+          if (currentBtn) currentBtn.disabled = false;
+          return;
+        }
+        if (!isMendozaPrefill(current)){
+          if (statusEl) statusEl.textContent = 'Tu ubicación actual está fuera de Mendoza.';
+          if (currentBtn) currentBtn.disabled = false;
+          return;
+        }
+        closeWith(current);
+      });
+
+      const renderList = (items) => {
+        optionsCache = Array.isArray(items) ? items : [];
+        if (!listEl) return;
+        if (!optionsCache.length){
+          listEl.innerHTML = '';
+          return;
+        }
+        listEl.innerHTML = optionsCache.map((option, idx) => `
+          <button type="button" class="__addr_search_item" data-index="${idx}">
+            <span class="__addr_search_pin" aria-hidden="true">📍</span>
+            <span class="__addr_search_text">${escapeHtml(buildCompactLocationLabel(option, 4) || 'Ubicación')}</span>
+          </button>
+        `).join('');
+      };
+
+      listEl?.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('button[data-index]');
+        if (!btn) return;
+        const idx = Number(btn.getAttribute('data-index'));
+        if (!Number.isFinite(idx) || !optionsCache[idx]) return;
+        closeWith(optionsCache[idx]);
+      });
+
+      const executeSearch = async (query) => {
+        const q = sanitizeAddressLongText(query || '', 120);
+        if (q.length < 3){
+          renderList([]);
+          if (statusEl) statusEl.textContent = 'Escribí al menos 3 caracteres para buscar en Mendoza.';
+          return;
+        }
+        if (statusEl) statusEl.textContent = 'Buscando direcciones en Mendoza...';
+        const result = await fetchAddressSuggestions(q, { limit: 7 });
+        if (result.length){
+          renderList(result);
+          if (statusEl) statusEl.textContent = 'Selecciona una dirección para continuar.';
+        } else {
+          renderList([]);
+          if (statusEl) statusEl.textContent = 'No encontramos coincidencias en Mendoza. Probá con más detalle.';
+        }
+      };
+
+      input?.addEventListener('input', () => {
+        const q = String(input.value || '');
+        if (addressSearchTimer) clearTimeout(addressSearchTimer);
+        addressSearchTimer = setTimeout(() => { executeSearch(q); }, 220);
+      });
+
+      requestAnimationFrame(() => {
+        try{
+          overlay.classList.add('open');
+          if (dialog) dialog.classList.add('open');
+        }catch(_){ }
+      });
+
+      setTimeout(() => {
+        try{
+          if (input){
+            input.value = String(initialQuery || '').trim();
+            input.focus();
+            const value = input.value || '';
+            if (value.length >= 3) executeSearch(value);
+          }
+        }catch(_){ }
+      }, 40);
+    }catch(e){
+      console.error('showAddressSearchModal failed', e);
+      resolve(null);
+    }
+  });
+}
+
+function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' } = {}){
+  return new Promise((resolve) => {
+    try{
+      const initial = normalizeAddressSuggestion(prefill) || normalizeLocationPrefill(prefill || {});
+      const latLon = getAuthLocationLatLon(initial);
+      if (!latLon){
+        resolve(null);
+        return;
+      }
+      ensureGlobalDialogStyles();
+      const overlay = document.createElement('div');
+      overlay.className = '__dialog_overlay __addr_map_overlay';
+      overlay.style.zIndex = 3410;
+      overlay.innerHTML = `
+        <div class="__dialog __dialog--info __addr_map_dialog" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+          <div class="__addr_map_head">
+            <h3>${escapeHtml(title)}</h3>
+            <button type="button" class="btn btn-ghost" data-action="use_current">Usar mi ubicación</button>
+          </div>
+          <div id="__addr_map_canvas" class="__addr_map_canvas" aria-label="Mapa para confirmar ubicación"></div>
+          <div class="__addr_map_help">Podés mover el pin para ajustar la ubicación exacta.</div>
+          <div class="__addr_map_address_wrap">
+            <input id="__addr_map_address" class="__addr_map_address" type="text" readonly />
+          </div>
+          <div class="actions">
+            <button class="btn btn-ghost" data-action="cancel">Cancelar</button>
+            <button class="btn btn-primary" data-action="confirm">Confirmar ubicación</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      const dialog = overlay.querySelector('.__dialog');
+      const mapCanvas = overlay.querySelector('#__addr_map_canvas');
+      const addressInput = overlay.querySelector('#__addr_map_address');
+      const useCurrentBtn = overlay.querySelector('[data-action="use_current"]');
+      let currentPrefill = normalizeLocationPrefill(initial);
+      let currentIsMendoza = isMendozaPrefill(currentPrefill);
+      let reverseRequestId = 0;
+
+      const setAddressLabel = (data) => {
+        const value = buildCompactLocationLabel(data, 4) || [data?.calle, data?.numeracion, data?.barrio].filter(Boolean).join(', ');
+        if (addressInput) addressInput.value = (value || 'Ubicación seleccionada') + (currentIsMendoza ? '' : ' (Fuera de Mendoza)');
+      };
+      setAddressLabel(currentPrefill);
+
+      const cleanupMap = () => {
+        try{
+          if (addressPickerMapInstance){
+            addressPickerMapInstance.remove();
+          }
+        }catch(_){ }
+        addressPickerMapInstance = null;
+        addressPickerMapMarker = null;
+      };
+      const cleanup = () => {
+        try{ cleanupMap(); }catch(_){ }
+        try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ }
+      };
+      const closeWith = (value) => {
+        cleanup();
+        resolve(value || null);
+      };
+      const onKey = (ev) => {
+        if (ev.key === 'Escape' && isTopDialogOverlay(overlay)) closeWith(null);
+      };
+      window.addEventListener('keydown', onKey);
+      overlay.addEventListener('click', (ev) => {
+        if (ev.target === overlay && isTopDialogOverlay(overlay)) closeWith(null);
+      });
+
+      const applyFromMapPoint = async (lat, lon) => {
+        try{
+          const requestId = ++reverseRequestId;
+          const reverse = await reverseGeocodeLocation(lat, lon);
+          if (requestId !== reverseRequestId) return;
+          currentPrefill = reverse
+            ? normalizeLocationPrefill(Object.assign({}, currentPrefill || {}, reverse, { lat, lon, ts: Date.now() }))
+            : normalizeLocationPrefill(Object.assign({}, currentPrefill || {}, { lat, lon, ts: Date.now() }));
+          if (!currentPrefill.numeracion) currentPrefill.numeracion = 'S/N';
+          currentIsMendoza = isMendozaPrefill(currentPrefill);
+          setAddressLabel(currentPrefill);
+        }catch(_){ }
+      };
+
+      if (hasLeafletForAuthLocation() && mapCanvas){
+        const L = window.L;
+        addressPickerMapInstance = L.map(mapCanvas, {
+          zoomControl: true,
+          attributionControl: true,
+          scrollWheelZoom: true,
+          preferCanvas: true
+        });
+        const baseLayer = createLeafletBaseLayer();
+        if (baseLayer) baseLayer.addTo(addressPickerMapInstance);
+        addressPickerMapMarker = L.marker([latLon.lat, latLon.lon], {
+          draggable: true,
+          icon: createLeafletPinIcon('__map_pin __map_pin--picker') || undefined
+        }).addTo(addressPickerMapInstance);
+        addressPickerMapMarker.on('dragend', async () => {
+          try{
+            const point = addressPickerMapMarker.getLatLng();
+            await applyFromMapPoint(point.lat, point.lng);
+          }catch(_){ }
+        });
+        addressPickerMapInstance.on('click', async (ev) => {
+          try{
+            const point = ev && ev.latlng ? ev.latlng : null;
+            if (!point) return;
+            if (addressPickerMapMarker) addressPickerMapMarker.setLatLng(point);
+            await applyFromMapPoint(point.lat, point.lng);
+          }catch(_){ }
+        });
+        addressPickerMapInstance.setView([latLon.lat, latLon.lon], 17, { animate: false });
+        setTimeout(() => {
+          try{ addressPickerMapInstance.invalidateSize(); }catch(_){ }
+        }, 60);
+      } else if (mapCanvas){
+        mapCanvas.innerHTML = `
+          <iframe
+            title="Mapa de dirección"
+            loading="lazy"
+            referrerpolicy="no-referrer-when-downgrade"
+            src="${escapeHtml(buildAuthLocationMapUrl(latLon.lat, latLon.lon))}"
+          ></iframe>
+        `;
+      }
+
+      useCurrentBtn?.addEventListener('click', async () => {
+        if (useCurrentBtn) useCurrentBtn.disabled = true;
+        const loc = await getCurrentLocationPrefill();
+        if (!loc){
+          if (useCurrentBtn) useCurrentBtn.disabled = false;
+          try{ showAlert('No pudimos obtener tu ubicación actual.', 'warning'); }catch(_){ }
+          return;
+        }
+        const point = getAuthLocationLatLon(loc);
+        currentPrefill = loc;
+        currentIsMendoza = isMendozaPrefill(currentPrefill);
+        setAddressLabel(currentPrefill);
+        if (point && addressPickerMapMarker && addressPickerMapInstance){
+          addressPickerMapMarker.setLatLng([point.lat, point.lon]);
+          addressPickerMapInstance.setView([point.lat, point.lon], 17, { animate: true });
+        }
+        if (useCurrentBtn) useCurrentBtn.disabled = false;
+      });
+
+      overlay.querySelector('[data-action="cancel"]')?.addEventListener('click', () => closeWith(null));
+      overlay.querySelector('[data-action="confirm"]')?.addEventListener('click', () => {
+        if (!currentIsMendoza){
+          try{ showAlert('Solo se permiten direcciones de Mendoza.', 'warning'); }catch(_){ }
+          return;
+        }
+        if (!currentPrefill.numeracion) currentPrefill.numeracion = 'S/N';
+        const asAddress = locationPrefillToAddress(currentPrefill, { label: '' });
+        if (!asAddress){
+          try{ showAlert('No pudimos validar la dirección. Ajustá el pin e intenta de nuevo.'); }catch(_){ }
+          return;
+        }
+        closeWith(Object.assign({}, currentPrefill, asAddress));
+      });
+
+      requestAnimationFrame(() => {
+        try{
+          overlay.classList.add('open');
+          if (dialog) dialog.classList.add('open');
+        }catch(_){ }
+      });
+    }catch(e){
+      console.error('showAddressMapConfirmModal failed', e);
+      resolve(null);
+    }
+  });
+}
+
+async function pickAddressWithSearchAndMap({
+  title = 'Ingresa tu dirección',
+  subtitle = 'Escribe una dirección o punto de referencia en Mendoza.',
+  initialQuery = ''
+} = {}){
+  const picked = await showAddressSearchModal({ title, subtitle, initialQuery });
+  if (!picked) return null;
+  const wantsManualMap = !!(picked && picked.__manual_map);
+  const mapSeed = wantsManualMap ? getManualMapSeedPrefill(picked.query || initialQuery || '') : picked;
+  const confirmed = await showAddressMapConfirmModal(mapSeed, { title: 'Confirma tu dirección' });
+  if (!confirmed) return null;
+  const payload = locationPrefillToAddress(confirmed, { label: '' });
+  if (!payload){
+    try{ await showAlert('No pudimos guardar esa ubicación. Intenta con otra dirección.', 'warning'); }catch(_){ }
+    return null;
+  }
+  if (!isMendozaPrefill(payload)){
+    try{ await showAlert('Solo se permiten direcciones de Mendoza.', 'warning'); }catch(_){ }
+    return null;
+  }
+  return payload;
 }
 
 async function requestAuthLocation(options = {}){
@@ -4927,28 +6064,19 @@ function showDeliveryAddressModal(prefill = {}){
       ensureGlobalDialogStyles();
       const token = getToken();
       const accountId = getCurrentAccountStorageId();
+      seedAddressBookFromKnownLocations(accountId);
       const cached = loadDeliveryAddressCache() || {};
       const defaultAddress = getDefaultAddressFromBook(accountId) || {};
       const addressBook = loadAddressBook(accountId);
-      const savedAddresses = Array.isArray(addressBook.addresses) ? [...addressBook.addresses].sort((a, b) => {
+      const savedAddresses = Array.isArray(addressBook.addresses) ? [...addressBook.addresses]
+        .filter((addr) => isMendozaPrefill(addr))
+        .sort((a, b) => {
         if (a.id === addressBook.defaultId) return -1;
         if (b.id === addressBook.defaultId) return 1;
         return Number(b.created_at || 0) - Number(a.created_at || 0);
       }) : [];
-      const initial = {
-        label: String(prefill?.label || defaultAddress.label || '').trim(),
-        barrio: String(prefill?.barrio || defaultAddress.barrio || cached.barrio || '').trim(),
-        calle: String(prefill?.calle || defaultAddress.calle || cached.calle || '').trim(),
-        numeracion: String(prefill?.numeracion || prefill?.numero || defaultAddress.numeracion || cached.numeracion || '').trim(),
-        instrucciones: sanitizeDeliveryNotes(prefill?.instrucciones || prefill?.instructions || prefill?.delivery_notes || cached.instrucciones || '')
-      };
-      const savedHtml = savedAddresses.length
-        ? savedAddresses.map((addr) => {
-            const name = addr.label || buildAddressDisplay(addr);
-            const isDefault = addr.id === addressBook.defaultId;
-            return `<button type="button" class="__addr_saved_chip ${isDefault ? 'active' : ''}" data-address-id="${escapeHtml(String(addr.id))}" title="${escapeHtml(buildAddressDisplay(addr))}">${escapeHtml(name)}</button>`;
-          }).join('')
-        : '';
+      const initialNotes = sanitizeDeliveryNotes(prefill?.instrucciones || prefill?.instructions || prefill?.delivery_notes || cached.instrucciones || '');
+      const initialAlias = sanitizeAddressAlias(prefill?.label || defaultAddress.label || cached.label || '');
       const overlay = document.createElement('div');
       overlay.className = '__dialog_overlay';
       overlay.style.zIndex = 3360;
@@ -4959,15 +6087,16 @@ function showDeliveryAddressModal(prefill = {}){
             <p class="__delivery_hint">Confirma dónde entregamos este pedido.</p>
             <div class="__addr_saved_block">
               <div class="__addr_saved_title">Direcciones guardadas</div>
-              ${savedAddresses.length
-                ? `<div class="__addr_saved_list">${savedHtml}</div>`
-                : `<p class="__addr_saved_empty">${token ? 'Aún no guardaste direcciones en tu cuenta.' : 'Aún no guardaste direcciones en este dispositivo.'}</p>`}
+              ${savedAddresses.length ? '<div class="__addr_saved_list"></div>' : `<p class="__addr_saved_empty">${token ? 'Aún no guardaste direcciones en tu cuenta.' : 'Aún no guardaste direcciones en este dispositivo.'}</p>`}
             </div>
             <div class="__delivery_inputs">
-              <input id="__addr_alias" type="text" placeholder="Alias (Casa, Trabajo) - opcional" />
-              <input id="__addr_barrio" type="text" placeholder="Barrio" />
-              <input id="__addr_calle" type="text" placeholder="Calle" />
-              <input id="__addr_numero" type="text" placeholder="Numeración" />
+              <div class="__delivery_selected_card">
+                <div class="__delivery_selected_title">Dirección seleccionada</div>
+                <div id="__delivery_selected_line" class="__delivery_selected_line">Sin dirección seleccionada.</div>
+              </div>
+              <label for="__addr_alias" class="__delivery_alias_label">Nombre de la dirección (opcional)</label>
+              <input id="__addr_alias" class="__delivery_alias_input" type="text" placeholder="Ej: Casa, Trabajo" />
+              <button id="__addr_add_new" type="button" class="btn btn-primary __delivery_add_btn">Añadir nueva ubicación</button>
               <label for="__addr_notes" class="__addr_notes_label">Instrucciones de entrega (opcional)</label>
               <textarea id="__addr_notes" placeholder="Ej: dejar en portería, tocar timbre 2, entregar a nombre de..."></textarea>
               <small class="__addr_notes_hint">Estas indicaciones se guardan para este pedido y se incluyen en el resumen.</small>
@@ -4984,18 +6113,47 @@ function showDeliveryAddressModal(prefill = {}){
       document.body.appendChild(overlay);
       const dialog = overlay.querySelector('.__dialog');
       let selectedAddressId = addressBook.defaultId || null;
-      const setFields = (addr) => {
-        if (!addr) return;
-        try{
-          const aliasEl = document.getElementById('__addr_alias');
-          const b = document.getElementById('__addr_barrio');
-          const c = document.getElementById('__addr_calle');
-          const n = document.getElementById('__addr_numero');
-          if (aliasEl) aliasEl.value = String(addr.label || '').trim();
-          if (b) b.value = String(addr.barrio || '').trim();
-          if (c) c.value = String(addr.calle || '').trim();
-          if (n) n.value = String(addr.numeracion || addr.numero || '').trim();
-        }catch(_){ }
+      let selectedAddress = null;
+      const initialFromManual = locationPrefillToAddress({
+        barrio: prefill?.barrio || defaultAddress.barrio || cached.barrio || '',
+        calle: prefill?.calle || defaultAddress.calle || cached.calle || '',
+        numeracion: prefill?.numeracion || prefill?.numero || defaultAddress.numeracion || cached.numeracion || '',
+        label: prefill?.label || defaultAddress.label || '',
+        full_text: prefill?.full_text || cached.full_text || '',
+        lat: prefill?.lat || cached.lat || null,
+        lon: prefill?.lon || cached.lon || null
+      }, { label: initialAlias });
+      if (selectedAddressId){
+        selectedAddress = savedAddresses.find(a => String(a.id) === String(selectedAddressId)) || null;
+      }
+      if (!selectedAddress && initialFromManual && isMendozaPrefill(initialFromManual)) selectedAddress = initialFromManual;
+
+      const selectedLine = overlay.querySelector('#__delivery_selected_line');
+      const aliasInput = overlay.querySelector('#__addr_alias');
+      const notesInput = overlay.querySelector('#__addr_notes');
+      const savedList = overlay.querySelector('.__addr_saved_list');
+      const renderSelectedAddress = () => {
+        if (!selectedLine) return;
+        if (!selectedAddress){
+          selectedLine.textContent = 'Sin dirección seleccionada.';
+          selectedLine.classList.add('__delivery_selected_empty');
+          if (aliasInput) aliasInput.value = '';
+          return;
+        }
+        selectedLine.classList.remove('__delivery_selected_empty');
+        const alias = sanitizeAddressAlias(selectedAddress.label || '');
+        const display = buildAddressDisplay(selectedAddress);
+        selectedLine.textContent = alias ? (alias + ' · ' + display) : display;
+        if (aliasInput) aliasInput.value = alias || '';
+      };
+      const renderSavedChips = () => {
+        if (!savedList) return;
+        savedList.innerHTML = savedAddresses.map((addr) => {
+          const isDefault = String(addr.id) === String(addressBook.defaultId || '');
+          const active = String(addr.id) === String(selectedAddressId || '');
+          const name = addr.label || buildAddressDisplay(addr);
+          return `<button type="button" class="__addr_saved_chip ${active ? 'active' : ''}" data-address-id="${escapeHtml(String(addr.id))}" title="${escapeHtml(buildAddressDisplay(addr))}">${escapeHtml(name)}${isDefault ? ' • Predeterminada' : ''}</button>`;
+        }).join('');
       };
       requestAnimationFrame(()=>{
         try{
@@ -5003,84 +6161,103 @@ function showDeliveryAddressModal(prefill = {}){
           if (dialog) dialog.classList.add('open');
         }catch(_){ }
       });
+      renderSavedChips();
+      renderSelectedAddress();
       try{
-        const a = document.getElementById('__addr_alias'); if (a) a.value = initial.label;
-        const b = document.getElementById('__addr_barrio'); if (b) b.value = initial.barrio;
-        const c = document.getElementById('__addr_calle'); if (c) c.value = initial.calle;
-        const n = document.getElementById('__addr_numero'); if (n) n.value = initial.numeracion;
-        const notes = document.getElementById('__addr_notes'); if (notes) notes.value = initial.instrucciones;
+        const notesFromSelected = selectedAddress ? sanitizeDeliveryNotes(selectedAddress.notes || '') : '';
+        if (notesInput) notesInput.value = notesFromSelected || initialNotes;
+        if (aliasInput && !aliasInput.value) aliasInput.value = initialAlias || '';
       }catch(_){ }
-      if (!initial.barrio && defaultAddress && defaultAddress.barrio && defaultAddress.calle && defaultAddress.numeracion){
-        setFields(defaultAddress);
-      }
-      const savedList = overlay.querySelector('.__addr_saved_list');
-      if (savedList){
-        savedList.addEventListener('click', (ev) => {
-          const chip = ev.target.closest('button[data-address-id]');
-          if (!chip) return;
-          const id = String(chip.getAttribute('data-address-id') || '').trim();
-          const selected = savedAddresses.find(a => String(a.id) === id);
-          if (!selected) return;
-          selectedAddressId = id;
-          setFields(selected);
-          savedList.querySelectorAll('button[data-address-id]').forEach(btn => btn.classList.remove('active'));
-          chip.classList.add('active');
-        });
-      }
+
+      savedList?.addEventListener('click', (ev) => {
+        const chip = ev.target.closest('button[data-address-id]');
+        if (!chip) return;
+        const id = String(chip.getAttribute('data-address-id') || '').trim();
+        const selected = savedAddresses.find(a => String(a.id) === id);
+        if (!selected) return;
+        selectedAddressId = id;
+        selectedAddress = selected;
+        renderSavedChips();
+        renderSelectedAddress();
+        if (notesInput){
+          const selectedNotes = sanitizeDeliveryNotes(selected && selected.notes ? selected.notes : '');
+          notesInput.value = selectedNotes || '';
+        }
+      });
 
       const cleanup = ()=>{ try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ } };
       const closeWith = (value)=>{ cleanup(); resolve(value); };
-      const onKey = (ev)=>{ if (ev.key === 'Escape') closeWith(null); };
+      const onKey = (ev)=>{ if (ev.key === 'Escape' && isTopDialogOverlay(overlay)) closeWith(null); };
       window.addEventListener('keydown', onKey);
-      overlay.addEventListener('click', (ev)=>{ if (!ev.target.closest('.__dialog')) closeWith(null); });
+      overlay.addEventListener('click', (ev)=>{ if (ev.target === overlay && isTopDialogOverlay(overlay)) closeWith(null); });
 
       const cancelBtn = overlay.querySelector('[data-action="cancel"]');
       const saveBtn = overlay.querySelector('[data-action="save"]');
       const manageBtn = overlay.querySelector('[data-action="manage"]');
+      const addLocationBtn = overlay.querySelector('#__addr_add_new');
       if (cancelBtn) cancelBtn.addEventListener('click', ()=> closeWith(null));
       if (manageBtn) manageBtn.addEventListener('click', ()=>{
         try{ openAccountModal(); }catch(_){ }
       });
+      if (addLocationBtn) addLocationBtn.addEventListener('click', async ()=>{
+        addLocationBtn.disabled = true;
+        try{
+          const searchQuery = selectedAddress ? buildAddressDisplay(selectedAddress) : '';
+          const added = await pickAddressWithSearchAndMap({
+            title: 'Ingresa tu dirección',
+            subtitle: 'Busca tu dirección y luego confirmala en el mapa.',
+            initialQuery: searchQuery
+          });
+          if (!added) return;
+          selectedAddress = added;
+          const same = savedAddresses.find(a =>
+            String(a.barrio || '').toLowerCase() === String(added.barrio || '').toLowerCase() &&
+            String(a.calle || '').toLowerCase() === String(added.calle || '').toLowerCase() &&
+            String(a.numeracion || '').toLowerCase() === String(added.numeracion || '').toLowerCase()
+          );
+          selectedAddressId = same ? same.id : null;
+          renderSavedChips();
+          renderSelectedAddress();
+        }finally{
+          addLocationBtn.disabled = false;
+        }
+      });
       if (saveBtn) saveBtn.addEventListener('click', ()=>{
         const saveToggle = document.getElementById('__addr_save_book');
         const defaultToggle = document.getElementById('__addr_set_default');
-        const notes = sanitizeDeliveryNotes(document.getElementById('__addr_notes')?.value || '');
-        const shouldPersist = token || (saveToggle && saveToggle.checked);
-        const bookNow = shouldPersist ? loadAddressBook(accountId) : { addresses: [] };
-        const check = validateAddressInput({
-          label: document.getElementById('__addr_alias')?.value || '',
-          barrio: document.getElementById('__addr_barrio')?.value || '',
-          calle: document.getElementById('__addr_calle')?.value || '',
-          numeracion: document.getElementById('__addr_numero')?.value || ''
-        }, {
-          addresses: bookNow.addresses,
-          excludeId: selectedAddressId || null,
-          requireAlias: false,
-          enforceUniqueAlias: shouldPersist,
-          autoAliasWhenEmpty: shouldPersist
-        });
-        if (!check.ok){
-          try{ showAlert(check.message || 'Revisa los datos de dirección para continuar.'); }catch(_){ }
-          try{
-            if (check.field === 'alias') document.getElementById('__addr_alias')?.focus();
-            else if (check.field === 'barrio') document.getElementById('__addr_barrio')?.focus();
-            else if (check.field === 'calle') document.getElementById('__addr_calle')?.focus();
-            else document.getElementById('__addr_numero')?.focus();
-          }catch(_){ }
+        const notes = sanitizeDeliveryNotes(notesInput && notesInput.value ? notesInput.value : '');
+        const alias = sanitizeAddressAlias(aliasInput && aliasInput.value ? aliasInput.value : (selectedAddress && selectedAddress.label ? selectedAddress.label : ''));
+        if (!selectedAddress){
+          try{ showAlert('Selecciona una dirección para continuar.'); }catch(_){ }
           return;
         }
-        const out = Object.assign({}, check.value, { instrucciones: notes });
+        const cleanSelected = locationPrefillToAddress(selectedAddress, { label: selectedAddress.label || '' });
+        if (!cleanSelected){
+          try{ showAlert('La dirección seleccionada no es válida.'); }catch(_){ }
+          return;
+        }
+        if (!isMendozaPrefill(cleanSelected)){
+          try{ showAlert('Solo se permiten direcciones de Mendoza.', 'warning'); }catch(_){ }
+          return;
+        }
+        const shouldPersist = token || (saveToggle && saveToggle.checked);
+        const out = Object.assign({}, cleanSelected, { label: alias, instrucciones: notes, notes });
         saveDeliveryAddressCache(out);
         if (shouldPersist){
+          const bookNow = loadAddressBook(accountId);
           const persisted = upsertAddressInBook({
             id: selectedAddressId || undefined,
-            label: out.label,
+            label: alias,
+            notes,
             barrio: out.barrio,
             calle: out.calle,
-            numeracion: out.numeracion
+            numeracion: out.numeracion,
+            full_text: out.full_text,
+            lat: out.lat,
+            lon: out.lon
           }, {
             accountId,
-            setDefault: Boolean(defaultToggle && defaultToggle.checked)
+            setDefault: Boolean(defaultToggle && defaultToggle.checked) || !bookNow.defaultId
           });
           if (persisted && persisted.id) selectedAddressId = persisted.id;
         }
@@ -5092,11 +6269,8 @@ function showDeliveryAddressModal(prefill = {}){
 
       setTimeout(()=>{
         try{
-          if (!initial.label) document.getElementById('__addr_alias')?.focus();
-          else if (!initial.barrio) document.getElementById('__addr_barrio')?.focus();
-          else if (!initial.calle) document.getElementById('__addr_calle')?.focus();
-          else if (!initial.numeracion) document.getElementById('__addr_numero')?.focus();
-          else document.getElementById('__addr_alias')?.focus();
+          if (!selectedAddress) document.getElementById('__addr_add_new')?.focus();
+          else (aliasInput || notesInput)?.focus();
         }catch(_){ }
       }, 50);
     }catch(e){ console.error('showDeliveryAddressModal failed', e); resolve(null); }
@@ -5132,17 +6306,7 @@ function openAccountModal(){
     const fallbackName = String(payload.full_name || payload.name || '').trim();
     const accountId = getCurrentAccountStorageId();
     try{
-      const cached = loadDeliveryAddressCache();
-      const hasBook = loadAddressBook(accountId).addresses.length > 0;
-      if (cached && cached.barrio && cached.calle && cached.numeracion){
-        const synced = upsertAddressInBook({
-          label: '',
-          barrio: cached.barrio,
-          calle: cached.calle,
-          numeracion: cached.numeracion
-        }, { accountId, setDefault: !hasBook });
-        if (synced && synced.id) setLastUsedAddressId(synced.id, accountId);
-      }
+      seedAddressBookFromKnownLocations(accountId);
     }catch(_){ }
 
     const overlay = document.createElement('div');
@@ -5180,17 +6344,10 @@ function openAccountModal(){
               <div id="__account_address_list" class="__account_address_list"></div>
             </section>
             <section class="__account_panel">
-              <h4 id="__acc_form_title">Nueva dirección</h4>
+              <h4>Añadir ubicación</h4>
               <div class="__account_form">
-                <input id="__acc_alias" type="text" placeholder="Alias (Casa, Trabajo)" />
-                <input id="__acc_barrio" type="text" placeholder="Barrio" />
-                <input id="__acc_calle" type="text" placeholder="Calle" />
-                <input id="__acc_numero" type="text" placeholder="Numeración" />
-                <label class="__addr_check"><input id="__acc_default" type="checkbox">Marcar como predeterminada</label>
-                <div class="__account_form_actions">
-                  <button class="btn btn-ghost" data-action="reset_form">Limpiar</button>
-                  <button class="btn btn-primary" data-action="save_address">Guardar</button>
-                </div>
+                <div class="__account_subtle">Buscá una dirección y confirmala en el mapa antes de guardar.</div>
+                <button class="btn btn-primary" data-action="add_address">Añadir nueva ubicación</button>
               </div>
             </section>
           </div>
@@ -5211,42 +6368,18 @@ function openAccountModal(){
       }catch(_){ }
     });
 
-    let editingId = null;
     const listEl = overlay.querySelector('#__account_address_list');
-    const formTitleEl = overlay.querySelector('#__acc_form_title');
-    const aliasEl = overlay.querySelector('#__acc_alias');
-    const barrioEl = overlay.querySelector('#__acc_barrio');
-    const calleEl = overlay.querySelector('#__acc_calle');
-    const numeroEl = overlay.querySelector('#__acc_numero');
-    const defaultEl = overlay.querySelector('#__acc_default');
+    const addAddressBtn = overlay.querySelector('[data-action="add_address"]');
 
     function closeModal(){
       try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ }
     }
-    function resetForm(){
-      editingId = null;
-      if (formTitleEl) formTitleEl.textContent = 'Nueva dirección';
-      if (aliasEl) aliasEl.value = '';
-      if (barrioEl) barrioEl.value = '';
-      if (calleEl) calleEl.value = '';
-      if (numeroEl) numeroEl.value = '';
-      if (defaultEl) defaultEl.checked = false;
-    }
-    function fillForm(addr){
-      if (!addr) return;
-      editingId = String(addr.id);
-      if (formTitleEl) formTitleEl.textContent = 'Editar dirección';
-      if (aliasEl) aliasEl.value = String(addr.label || '').trim();
-      if (barrioEl) barrioEl.value = String(addr.barrio || '').trim();
-      if (calleEl) calleEl.value = String(addr.calle || '').trim();
-      if (numeroEl) numeroEl.value = String(addr.numeracion || '').trim();
-      const book = loadAddressBook(accountId);
-      if (defaultEl) defaultEl.checked = String(book.defaultId || '') === String(addr.id || '');
-    }
     function renderList(){
       const book = loadAddressBook(accountId);
       const lastUsedId = getLastUsedAddressId(accountId);
-      const list = Array.isArray(book.addresses) ? [...book.addresses].sort((a, b) => {
+      const list = Array.isArray(book.addresses) ? [...book.addresses]
+        .filter((addr) => isMendozaPrefill(addr))
+        .sort((a, b) => {
         if (String(a.id) === String(book.defaultId)) return -1;
         if (String(b.id) === String(book.defaultId)) return 1;
         return Number(b.created_at || 0) - Number(a.created_at || 0);
@@ -5260,6 +6393,7 @@ function openAccountModal(){
         const label = addr.label || 'Dirección';
         const isDefault = String(addr.id) === String(book.defaultId || '');
         const isLastUsed = String(addr.id) === String(lastUsedId || '');
+        const notes = sanitizeDeliveryNotes(addr.notes || '');
         return `
           <div class="__account_addr_item ${isDefault ? 'is-default' : ''}">
             <div class="__account_addr_top">
@@ -5270,9 +6404,11 @@ function openAccountModal(){
               ${isDefault ? '<span class="__account_addr_badge">Predeterminada</span>' : ''}
             </div>
             <div class="__account_addr_line">${escapeHtml(buildAddressDisplay(addr))}</div>
+            ${notes ? `<div class="__account_addr_notes">Notas: ${escapeHtml(notes)}</div>` : ''}
             <div class="__account_addr_actions">
               <button class="btn btn-ghost" data-action="use" data-id="${escapeHtml(String(addr.id))}">Usar</button>
-              <button class="btn btn-ghost" data-action="edit" data-id="${escapeHtml(String(addr.id))}">Editar</button>
+              <button class="btn btn-ghost" data-action="edit_map" data-id="${escapeHtml(String(addr.id))}">Editar</button>
+              <button class="btn btn-ghost" data-action="edit_meta" data-id="${escapeHtml(String(addr.id))}">Nombre/Notas</button>
               <button class="btn btn-ghost" data-action="default" data-id="${escapeHtml(String(addr.id))}">Predeterminada</button>
               <button class="btn btn-ghost" data-action="delete" data-id="${escapeHtml(String(addr.id))}">Eliminar</button>
             </div>
@@ -5290,16 +6426,74 @@ function openAccountModal(){
       const addr = book.addresses.find(a => String(a.id) === id);
       if (!addr) return;
       if (action === 'use'){
-        saveDeliveryAddressCache(addr);
+        saveDeliveryAddressCache(Object.assign({}, addr, {
+          instrucciones: sanitizeDeliveryNotes(addr.notes || '')
+        }));
         setDefaultAddressInBook(id, accountId);
         setLastUsedAddressId(id, accountId);
         renderList();
         showToast('Dirección lista para usar en checkout', 2500);
         return;
       }
-      if (action === 'edit'){
-        fillForm(addr);
-        try{ aliasEl?.focus(); }catch(_){ }
+      if (action === 'edit_map'){
+        const picked = await pickAddressWithSearchAndMap({
+          title: 'Editar dirección',
+          subtitle: 'Busca la dirección actualizada y confirmala en el mapa.',
+          initialQuery: buildAddressDisplay(addr)
+        });
+        if (!picked) return;
+        const updated = upsertAddressInBook({
+          id: addr.id,
+          label: addr.label || '',
+          barrio: picked.barrio,
+          calle: picked.calle,
+          numeracion: picked.numeracion,
+          full_text: picked.full_text,
+          lat: picked.lat,
+          lon: picked.lon
+        }, {
+          accountId,
+          setDefault: String(book.defaultId || '') === String(addr.id || '')
+        });
+        if (updated){
+          saveDeliveryAddressCache(Object.assign({}, updated, {
+            instrucciones: sanitizeDeliveryNotes(updated.notes || '')
+          }));
+          setLastUsedAddressId(updated.id, accountId);
+          renderList();
+          showToast('Dirección actualizada', 2200);
+        }
+        return;
+      }
+      if (action === 'edit_meta'){
+        const meta = await showAddressDetailsModal({
+          label: addr.label || '',
+          notes: addr.notes || ''
+        }, { title: 'Nombre e instrucciones' });
+        if (!meta) return;
+        const updated = upsertAddressInBook({
+          id: addr.id,
+          label: meta.label || '',
+          notes: meta.notes || '',
+          barrio: addr.barrio,
+          calle: addr.calle,
+          numeracion: addr.numeracion,
+          full_text: addr.full_text,
+          lat: addr.lat,
+          lon: addr.lon
+        }, {
+          accountId,
+          setDefault: String(book.defaultId || '') === String(addr.id || '')
+        });
+        if (updated){
+          if (String(getLastUsedAddressId(accountId) || '') === String(updated.id || '')){
+            saveDeliveryAddressCache(Object.assign({}, updated, {
+              instrucciones: sanitizeDeliveryNotes(updated.notes || '')
+            }));
+          }
+          renderList();
+          showToast('Nombre e instrucciones actualizados', 2200);
+        }
         return;
       }
       if (action === 'default'){
@@ -5312,59 +6506,47 @@ function openAccountModal(){
         const ok = await showConfirm('¿Eliminar esta dirección?');
         if (!ok) return;
         removeAddressFromBook(id, accountId);
-        if (editingId === id) resetForm();
         renderList();
         showToast('Dirección eliminada', 2200);
       }
     });
 
-    overlay.querySelector('[data-action="save_address"]')?.addEventListener('click', () => {
-      const bookNow = loadAddressBook(accountId);
-      const check = validateAddressInput({
-        label: String(aliasEl?.value || ''),
-        barrio: String(barrioEl?.value || ''),
-        calle: String(calleEl?.value || ''),
-        numeracion: String(numeroEl?.value || '')
-      }, {
-        addresses: bookNow.addresses,
-        excludeId: editingId || null,
-        requireAlias: true,
-        enforceUniqueAlias: true,
-        autoAliasWhenEmpty: false
-      });
-      if (!check.ok){
-        showAlert(check.message || 'Revisa los datos para guardar esta dirección.');
-        try{
-          if (check.field === 'alias') aliasEl?.focus();
-          else if (check.field === 'barrio') barrioEl?.focus();
-          else if (check.field === 'calle') calleEl?.focus();
-          else numeroEl?.focus();
-        }catch(_){ }
-        return;
+    addAddressBtn?.addEventListener('click', async () => {
+      addAddressBtn.disabled = true;
+      try{
+        const picked = await pickAddressWithSearchAndMap({
+          title: 'Ingresa tu dirección',
+          subtitle: 'Escribe tu dirección y después confirmala en el mapa.'
+        });
+        if (!picked) return;
+        const meta = await showAddressDetailsModal({}, { title: 'Nombre e instrucciones' });
+        const alias = sanitizeAddressAlias(meta && meta.label ? meta.label : '');
+        const notes = sanitizeDeliveryNotes(meta && meta.notes ? meta.notes : '');
+        const bookNow = loadAddressBook(accountId);
+        const saved = upsertAddressInBook({
+          label: alias,
+          notes,
+          barrio: picked.barrio,
+          calle: picked.calle,
+          numeracion: picked.numeracion,
+          full_text: picked.full_text,
+          lat: picked.lat,
+          lon: picked.lon
+        }, {
+          accountId,
+          setDefault: !bookNow.defaultId
+        });
+        if (saved){
+          saveDeliveryAddressCache(Object.assign({}, saved, {
+            instrucciones: sanitizeDeliveryNotes(saved.notes || '')
+          }));
+          setLastUsedAddressId(saved.id, accountId);
+          renderList();
+          showToast('Dirección guardada', 2200);
+        }
+      } finally {
+        addAddressBtn.disabled = false;
       }
-      const clean = check.value;
-      const saved = upsertAddressInBook({
-        id: editingId || undefined,
-        label: clean.label,
-        barrio: clean.barrio,
-        calle: clean.calle,
-        numeracion: clean.numeracion
-      }, {
-        accountId,
-        setDefault: Boolean(defaultEl?.checked) || !bookNow.defaultId
-      });
-      if (saved){
-        saveDeliveryAddressCache(saved);
-        setLastUsedAddressId(saved.id, accountId);
-        resetForm();
-        renderList();
-        showToast('Dirección guardada', 2200);
-      }
-    });
-
-    overlay.querySelector('[data-action="reset_form"]')?.addEventListener('click', () => {
-      resetForm();
-      try{ aliasEl?.focus(); }catch(_){ }
     });
     overlay.querySelector('[data-action="close_top"]')?.addEventListener('click', closeModal);
     overlay.querySelector('[data-action="close_bottom"]')?.addEventListener('click', closeModal);
@@ -5376,14 +6558,16 @@ function openAccountModal(){
       logout();
     });
 
-    const onKey = (ev) => { if (ev.key === 'Escape') closeModal(); };
+    const onKey = (ev) => {
+      if (ev.key === 'Escape' && isTopDialogOverlay(overlay)) closeModal();
+    };
     window.addEventListener('keydown', onKey);
     overlay.addEventListener('click', (ev) => {
-      if (!ev.target.closest('.__dialog')) closeModal();
+      if (ev.target === overlay && isTopDialogOverlay(overlay)) closeModal();
     });
 
     renderList();
-    setTimeout(()=>{ try{ aliasEl?.focus(); }catch(_){ } }, 60);
+    setTimeout(()=>{ try{ addAddressBtn?.focus(); }catch(_){ } }, 60);
 
     fetchCurrentProfileSafe().then((profile) => {
       if (!profile) return;
@@ -5399,7 +6583,7 @@ function openAccountModal(){
         calle: profile.calle,
         numeracion: profile.numeracion
       });
-      if (profileAddress){
+      if (profileAddress && isMendozaPrefill(profileAddress)){
         upsertAddressInBook(profileAddress, { accountId, setDefault: false });
         renderList();
       }
@@ -5698,7 +6882,14 @@ async function doRegister(){
       return;
     }
     if (barrio || calle || numero){
-      saveDeliveryAddressCache({ barrio, calle, numeracion: numero });
+      saveDeliveryAddressCache({
+        barrio,
+        calle,
+        numeracion: numero,
+        lat: geoPrefill?.lat || null,
+        lon: geoPrefill?.lon || null,
+        full_text: geoPrefill?.full_text || geoPrefill?.label || ''
+      });
     }
     await doLogin(email, password);
     closeAuthModal();
@@ -5720,6 +6911,10 @@ async function doLogin(emailArg,passwordArg){
     if (data && data.access_token) {
       saveToken(data.access_token);
       updateAuthUI();
+      try{
+        const accountId = getCurrentAccountStorageId();
+        seedAddressBookFromKnownLocations(accountId);
+      }catch(_){ }
       // perform quick token check against the server so we can surface any mismatch early
       try{ debugWhoami().then(d => { try{ console.debug('[debugWhoami] result', d); if (d && d.ok && d.payload) { showToast(`Bienvenido, ${d.payload.full_name || d.payload.sub || email}`); } else { showToast('Bienvenido — pero el token no fue validado en el servidor', 'warning'); } }catch(_){}}).catch(e=>{ console.warn('debugWhoami failed', e); }); }catch(_){ }
       // derive display name from token if available

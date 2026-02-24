@@ -700,10 +700,12 @@ body.customer-type-locked{
   line-height:1.3;
 }
 .modal .auth-location-map{
+  position:relative;
   border-radius:12px;
   overflow:hidden;
   border:1px solid rgba(6,26,43,0.08);
-  background:#f2f4f7;
+  background:linear-gradient(180deg,#edf4ff,#dce8f6);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.65);
 }
 .modal .auth-location-map iframe,
 .modal .auth-location-map .auth-location-map-canvas{
@@ -711,6 +713,18 @@ body.customer-type-locked{
   height:220px;
   border:0;
   display:block;
+}
+.modal .auth-location-map .leaflet-container{
+  font-family:'Poppins',sans-serif;
+  background:linear-gradient(180deg,#edf4ff,#dce8f6);
+}
+.modal .auth-location-map .leaflet-control-zoom a{
+  border-radius:10px !important;
+  color:#0f2237 !important;
+}
+.modal .auth-location-map .leaflet-control-attribution{
+  background:rgba(255,255,255,0.86);
+  border-radius:8px 0 0 0;
 }
 .modal .auth-location-map-help{
   color:var(--muted);
@@ -736,6 +750,32 @@ body.customer-type-locked{
 }
 .modal .auth-location-actions .btn{
   flex:0 0 auto;
+}
+.leaflet-marker-icon.__map_pin{
+  background:transparent !important;
+  border:none !important;
+}
+.leaflet-marker-icon.__map_pin span{
+  position:relative;
+  display:block;
+  width:26px;
+  height:26px;
+  border-radius:50% 50% 50% 0;
+  transform:rotate(-45deg);
+  background:linear-gradient(180deg,#071427,#192f4f);
+  border:2px solid #ffffff;
+  box-shadow:0 8px 18px rgba(7,20,39,0.34);
+}
+.leaflet-marker-icon.__map_pin span::after{
+  content:'';
+  position:absolute;
+  width:8px;
+  height:8px;
+  background:#fff;
+  border-radius:50%;
+  top:50%;
+  left:50%;
+  transform:translate(-50%,-50%);
 }
 .modal .modal-close{position:absolute;right:24px;top:20px;border:0;background:transparent;font-size:20px;cursor:pointer;color:var(--muted)}
 .modal .auth-tabs{display:flex;flex-direction:row;gap:10px;align-items:center;min-width:0;padding-right:0;margin-bottom:10px;background:linear-gradient(180deg, rgba(255,255,255,0.6), rgba(255,255,255,0.4));padding:8px;border-radius:12px}
