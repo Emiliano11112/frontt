@@ -180,6 +180,51 @@ const MENDOZA_DEFAULT_CENTER = Object.freeze({
   lat: -32.8895,
   lon: -68.8458
 });
+const MENDOZA_POSTAL_TO_DEPARTMENTS = Object.freeze({
+  '5500': ['Capital'],
+  '5501': ['Godoy Cruz'],
+  '5502': ['Godoy Cruz'],
+  '5503': ['Godoy Cruz'],
+  '5507': ['Lujan de Cuyo'],
+  '5509': ['Lujan de Cuyo'],
+  '5511': ['Lujan de Cuyo'],
+  '5513': ['Maipu'],
+  '5515': ['Maipu'],
+  '5517': ['Maipu'],
+  '5519': ['Guaymallen'],
+  '5521': ['Guaymallen'],
+  '5523': ['Guaymallen'],
+  '5525': ['Guaymallen'],
+  '5533': ['Lavalle'],
+  '5535': ['Lavalle'],
+  '5539': ['Las Heras'],
+  '5540': ['Las Heras'],
+  '5541': ['Las Heras'],
+  '5549': ['Lujan de Cuyo'],
+  '5560': ['Tunuyan'],
+  '5561': ['Tupungato'],
+  '5569': ['San Carlos'],
+  '5570': ['San Martin'],
+  '5573': ['San Martin', 'Junin'],
+  '5575': ['Junin'],
+  '5577': ['Rivadavia'],
+  '5590': ['La Paz'],
+  '5596': ['Santa Rosa'],
+  '5600': ['San Rafael'],
+  '5603': ['San Rafael'],
+  '5613': ['Malargue'],
+  '5620': ['General Alvear']
+});
+const MENDOZA_DEPARTMENTS = Object.freeze(
+  Array.from(
+    new Set(
+      Object.values(MENDOZA_POSTAL_TO_DEPARTMENTS)
+        .flat()
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+    )
+  )
+);
 const NON_MENDOZA_REGION_TOKENS = Object.freeze([
   'buenos aires',
   'caba',
@@ -204,6 +249,11 @@ const NON_MENDOZA_REGION_TOKENS = Object.freeze([
   'chubut',
   'santa cruz',
   'tierra del fuego'
+]);
+const ADDRESS_QUERY_STOPWORDS = new Set([
+  'de', 'del', 'la', 'las', 'el', 'los',
+  'mendoza', 'argentina', 'provincia', 'departamento', 'distrito',
+  'calle', 'av', 'avenida'
 ]);
 const SUPPORT_WHATSAPP_E164 = '5492616838446';
 const SUPPORT_WHATSAPP_DISPLAY = '+54 9 2616 83-8446';
@@ -2379,6 +2429,265 @@ function openCart(prefillId){ const drawer = document.getElementById('cartDrawer
 }
 function closeCart(){ const drawer = document.getElementById('cartDrawer'); drawer.setAttribute('aria-hidden','true'); drawer.classList.remove('open'); const btn = document.getElementById('cartButton'); btn.setAttribute('aria-expanded','false'); }
 
+function shouldTryPageOriginOrders(pageOrigin){
+  try{
+    const origin = String(pageOrigin || '').trim();
+    if (!origin) return false;
+    if (!(typeof API_ORIGIN === 'string' && API_ORIGIN)) return true;
+    if (origin === API_ORIGIN) return true;
+    const localHosts = new Set(['localhost', '127.0.0.1']);
+    const pageHost = new URL(origin).hostname;
+    const apiHost = new URL(API_ORIGIN).hostname;
+    return localHosts.has(pageHost) && localHosts.has(apiHost);
+  }catch(_){ return false; }
+}
+
+function buildOrdersRequestUrls(query = ''){
+  const suffix = '/orders' + String(query || '');
+  const urls = [];
+  try{
+    const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
+    if (typeof API_ORIGIN === 'string' && API_ORIGIN) urls.push(API_ORIGIN + suffix);
+    if (pageOrigin && shouldTryPageOriginOrders(pageOrigin)) {
+      urls.push(pageOrigin + suffix);
+      urls.push(suffix);
+    }
+  }catch(_){
+    urls.push(suffix);
+  }
+  const seen = new Set();
+  return urls.filter((u) => {
+    const url = String(u || '').trim();
+    if (!url || seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
+}
+
+function buildBackupOrdersRequestUrls(){
+  const suffix = '/backup-orders';
+  const urls = [];
+  try{
+    const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
+    if (typeof API_ORIGIN === 'string' && API_ORIGIN) urls.push(API_ORIGIN + suffix);
+    if (pageOrigin && shouldTryPageOriginOrders(pageOrigin)) {
+      urls.push(pageOrigin + suffix);
+      urls.push(suffix);
+    }
+  }catch(_){
+    urls.push(suffix);
+  }
+  const seen = new Set();
+  return urls.filter((u) => {
+    const url = String(u || '').trim();
+    if (!url || seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
+}
+
+function waitMs(ms){
+  const delay = Number(ms || 0);
+  return new Promise((resolve) => setTimeout(resolve, delay > 0 ? delay : 0));
+}
+
+function extractOrderErrorDetail(rawBody){
+  const raw = String(rawBody || '').trim();
+  if (!raw) return '';
+  try{
+    const parsed = JSON.parse(raw);
+    const detail = parsed && (parsed.detail || parsed.error || parsed.message);
+    if (typeof detail === 'string') return detail.slice(0, 280);
+    if (detail && typeof detail === 'object') {
+      return JSON.stringify(detail).slice(0, 280);
+    }
+  }catch(_){ }
+  return raw.replace(/\s+/g, ' ').slice(0, 280);
+}
+
+function sanitizeOrderItemMetaForRequest(meta){
+  const src = (meta && typeof meta === 'object') ? meta : {};
+  const out = {};
+  const keepStr = ['name', 'code', 'codigo', 'unit_type', 'sale_unit', 'qty_label', 'key', 'price_mode'];
+  const keepNum = ['price', 'kg_per_unit', 'ordered_weight_kg', 'promo_id', 'consumo_id'];
+  const keepBool = ['consumo', 'force_regular'];
+
+  for (const key of keepStr){
+    if (!(key in src)) continue;
+    const val = src[key];
+    if (val == null) continue;
+    const txt = String(val);
+    const maxLen = (key === 'name' || key === 'qty_label') ? 140 : 80;
+    out[key] = txt.slice(0, maxLen);
+  }
+  for (const key of keepNum){
+    if (!(key in src)) continue;
+    const num = Number(src[key]);
+    if (Number.isFinite(num)) out[key] = num;
+  }
+  for (const key of keepBool){
+    if (!(key in src)) continue;
+    out[key] = !!src[key];
+  }
+  return out;
+}
+
+function buildSanitizedOrderPayload(payload){
+  const src = (payload && typeof payload === 'object') ? payload : {};
+  const clean = Object.assign({}, src);
+  clean.items = (Array.isArray(src.items) ? src.items : []).map((it) => {
+    const idRaw = (it && (it.id != null ? it.id : it._id)) || '';
+    const id = String(idRaw || '').trim();
+    const qtyRaw = Number(it && it.qty != null ? it.qty : 1);
+    return {
+      id,
+      qty: Number.isFinite(qtyRaw) ? qtyRaw : 1,
+      meta: sanitizeOrderItemMetaForRequest(it && it.meta ? it.meta : {}),
+    };
+  });
+  return clean;
+}
+
+function buildOrderSignature(items){
+  try{
+    if (!Array.isArray(items)) return '';
+    return items
+      .map((it) => {
+        const id = String((it && (it.id != null ? it.id : it._id)) || '').trim();
+        const qty = Number(it && it.qty != null ? it.qty : 0);
+        const q = Number.isFinite(qty) ? qty.toFixed(3) : '0.000';
+        return id + ':' + q;
+      })
+      .filter(Boolean)
+      .sort()
+      .join('|');
+  }catch(_){ return ''; }
+}
+
+async function findRecentlyCreatedMatchingOrder(payload, baseHeaders){
+  const targetEmail = String(payload && payload.user_email ? payload.user_email : '').trim().toLowerCase();
+  if (!targetEmail) return null;
+  const targetTotal = Number(payload && payload.total != null ? payload.total : 0);
+  const targetSignature = buildOrderSignature(payload && payload.items ? payload.items : []);
+  const nowMs = Date.now();
+  const urls = buildOrdersRequestUrls('?skip=0&limit=40');
+  for (const url of urls){
+    try{
+      const res = await fetch(url, { method: 'GET', headers: baseHeaders, mode: 'cors' });
+      if (!res.ok) continue;
+      const rows = await res.json().catch(() => null);
+      if (!Array.isArray(rows)) continue;
+      for (const row of rows){
+        const rowEmail = String(row && row.user_email ? row.user_email : '').trim().toLowerCase();
+        if (!rowEmail || rowEmail !== targetEmail) continue;
+        const rowTotal = Number(row && row.total != null ? row.total : 0);
+        if (!Number.isFinite(rowTotal) || Math.abs(rowTotal - targetTotal) > 0.01) continue;
+        const rowSignature = buildOrderSignature(row && row.items ? row.items : []);
+        if (targetSignature && rowSignature && targetSignature !== rowSignature) continue;
+        const createdAtMs = Date.parse(String(row && row.created_at ? row.created_at : ''));
+        if (Number.isFinite(createdAtMs) && Math.abs(nowMs - createdAtMs) > (15 * 60 * 1000)) continue;
+        return row;
+      }
+    }catch(_){ }
+  }
+  return null;
+}
+
+async function probeCreatedOrderAfterServerError(payload, baseHeaders){
+  const waitPlan = [250, 500, 900];
+  for (const ms of waitPlan){
+    await waitMs(ms);
+    try{
+      const existingOrder = await findRecentlyCreatedMatchingOrder(payload, baseHeaders);
+      if (existingOrder && existingOrder.id != null) return existingOrder;
+    }catch(_){ }
+  }
+  return null;
+}
+
+async function submitOrderPayload(payload, baseHeaders){
+  const requestPayload = buildSanitizedOrderPayload(payload);
+  const tryUrls = buildOrdersRequestUrls('');
+  const attemptErrors = [];
+  const primaryApiUrl = (typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/orders') : null;
+
+  for (const url of tryUrls){
+    try{
+      const res = await fetch(url, { method: 'POST', headers: baseHeaders, body: JSON.stringify(requestPayload), mode: 'cors' });
+      const rawBody = await res.text().catch(() => '');
+      if (!res.ok){
+        attemptErrors.push({
+          url,
+          status: res.status,
+          statusText: res.statusText,
+          detail: extractOrderErrorDetail(rawBody),
+          attempt: 1,
+        });
+        if (res.status >= 500){
+          try{
+            const createdFromProbe = await probeCreatedOrderAfterServerError(requestPayload, baseHeaders);
+            if (createdFromProbe && createdFromProbe.id != null){
+              return { ok: true, createdOrder: createdFromProbe, successfulUrl: url, attemptErrors, viaBackup: false };
+            }
+          }catch(_){ }
+        }
+        continue;
+      }
+      let createdOrder = null;
+      try{ createdOrder = rawBody ? JSON.parse(rawBody) : null; }catch(_){ createdOrder = null; }
+      return { ok: true, createdOrder, successfulUrl: url, attemptErrors, viaBackup: false };
+    }catch(err){
+      attemptErrors.push({ url, error: String(err || 'network error'), attempt: 1 });
+    }
+  }
+
+  try{
+    const hasServer5xx = attemptErrors.some((err) => {
+      const status = Number(err && err.status);
+      return Number.isFinite(status) && status >= 500;
+    });
+    if (hasServer5xx){
+      const existingOrder = await probeCreatedOrderAfterServerError(requestPayload, baseHeaders);
+      if (existingOrder && existingOrder.id != null){
+        return { ok: true, createdOrder: existingOrder, successfulUrl: primaryApiUrl || '', attemptErrors, viaBackup: false };
+      }
+    }
+  }catch(_){ }
+
+  const backupUrls = buildBackupOrdersRequestUrls();
+  for (const url of backupUrls){
+    try{
+      const res = await fetch(url, { method: 'POST', headers: baseHeaders, body: JSON.stringify([requestPayload]), mode: 'cors' });
+      const rawBody = await res.text().catch(() => '');
+      let parsed = null;
+      try{ parsed = rawBody ? JSON.parse(rawBody) : null; }catch(_){ parsed = null; }
+      if (!res.ok){
+        attemptErrors.push({
+          url,
+          status: res.status,
+          statusText: res.statusText,
+          detail: extractOrderErrorDetail(rawBody),
+          backup: true,
+        });
+        continue;
+      }
+      const results = Array.isArray(parsed && parsed.results) ? parsed.results : [];
+      const okRow = results.find((row) => row && (row.ok === true || row.id != null));
+      const saved = Number((parsed && parsed.saved) || 0);
+      if (saved > 0 || okRow){
+        const backupId = (okRow && okRow.id != null) ? okRow.id : null;
+        const createdOrder = backupId != null ? { id: backupId } : null;
+        return { ok: true, createdOrder, successfulUrl: url, attemptErrors, viaBackup: true };
+      }
+      attemptErrors.push({ url, detail: 'backup response without saved orders', backup: true });
+    }catch(err){
+      attemptErrors.push({ url, error: String(err || 'backup network error'), backup: true });
+    }
+  }
+
+  return { ok: false, createdOrder: null, successfulUrl: null, attemptErrors, viaBackup: false };
+}
+
 // bindings for cart UI
 (function bindCartUI(){
   document.addEventListener('click',(ev)=>{ 
@@ -2458,6 +2767,8 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
             barrio: basePayload.user_barrio || '',
             calle: basePayload.user_calle || '',
             numeracion: basePayload.user_numeracion || '',
+            postal_code: basePayload.user_postal_code || '',
+            department: basePayload.user_department || '',
             instrucciones: basePayload.user_delivery_notes || ''
           });
           if (!deliveryInfo) {
@@ -2467,6 +2778,29 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           basePayload.user_barrio = deliveryInfo.barrio;
           basePayload.user_calle = deliveryInfo.calle;
           basePayload.user_numeracion = deliveryInfo.numeracion;
+          const rawDeliveryPostalCode = normalizePostalCodeToken(
+            deliveryInfo.postal_code ||
+            deliveryInfo.postcode ||
+            deliveryInfo.query_hint ||
+            deliveryInfo.full_text ||
+            ''
+          );
+          basePayload.user_department = sanitizeAddressText(
+            deliveryInfo.department ||
+            findDepartmentInHints([deliveryInfo.query_hint, deliveryInfo.full_text, deliveryInfo.barrio]) ||
+            inferDepartmentFromPostalAndHints(rawDeliveryPostalCode, [deliveryInfo.barrio, deliveryInfo.full_text, deliveryInfo.query_hint]) ||
+            '',
+            80
+          );
+          basePayload.user_postal_code = selectPostalForDepartment(rawDeliveryPostalCode, basePayload.user_department, [
+            deliveryInfo.query_hint,
+            deliveryInfo.full_text,
+            deliveryInfo.barrio
+          ]);
+          basePayload.user_query_hint = sanitizeAddressLongText(
+            deliveryInfo.query_hint || deliveryInfo.full_text || buildAddressDisplay(deliveryInfo),
+            120
+          );
           {
             const latNum = Number(deliveryInfo && deliveryInfo.lat);
             const lonNum = Number(deliveryInfo && deliveryInfo.lon);
@@ -2534,12 +2868,18 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           if (basePayload.user_barrio) payload._token_preview.barrio = String(basePayload.user_barrio || '').trim();
           if (basePayload.user_calle) payload._token_preview.calle = String(basePayload.user_calle || '').trim();
           if (basePayload.user_numeracion) payload._token_preview.numeracion = String(basePayload.user_numeracion || '').trim();
+          if (basePayload.user_postal_code) payload._token_preview.postal_code = normalizePostalCodeToken(basePayload.user_postal_code);
+          if (basePayload.user_department) payload._token_preview.department = sanitizeAddressText(basePayload.user_department, 80);
+          if (basePayload.user_query_hint) payload._token_preview.query_hint = sanitizeAddressLongText(basePayload.user_query_hint, 120);
           if (basePayload.user_address) payload._token_preview.user_address = sanitizeAddressLongText(basePayload.user_address, 200);
           if (basePayload.user_address_label) payload._token_preview.address_label = sanitizeAddressAlias(basePayload.user_address_label);
           payload._token_preview.address = {
             barrio: String(basePayload.user_barrio || '').trim(),
             calle: String(basePayload.user_calle || '').trim(),
             numeracion: String(basePayload.user_numeracion || '').trim(),
+            postal_code: normalizePostalCodeToken(basePayload.user_postal_code || ''),
+            department: sanitizeAddressText(basePayload.user_department || '', 80),
+            query_hint: sanitizeAddressLongText(basePayload.user_query_hint || basePayload.user_address || '', 120),
             direccion: sanitizeAddressLongText(basePayload.user_address || '', 200)
           };
           if (Number.isFinite(Number(basePayload.user_lat))) payload._token_preview.address.lat = Number(basePayload.user_lat);
@@ -2582,58 +2922,23 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       const btn = document.getElementById('checkoutBtn');
       btn.disabled = true;
 
-      // Try local (same-origin) orders endpoint first so orders reach the local admin panel during dev.
-      // Fallback to configured API origin if same-origin is unreachable.
-      // Prefer the configured API origin first (ensures orders reach the backend),
-      // then fall back to same-origin '/orders' as a last resort for local admin-hosted pages.
-      // Prefer API_ORIGIN when it's different from the page origin (Netlify/static hosting),
-      // otherwise use the page origin. Always keep '/orders' as a last-resort fallback.
-      const tryUrls = [];
-      try {
-        const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
-        if (typeof API_ORIGIN === 'string' && API_ORIGIN) {
-          if (pageOrigin && pageOrigin !== API_ORIGIN) {
-            tryUrls.push(API_ORIGIN + '/orders');
-            tryUrls.push(pageOrigin + '/orders');
-          } else {
-            // API_ORIGIN equals page origin or pageOrigin not available
-            tryUrls.push((pageOrigin || API_ORIGIN) + '/orders');
-          }
-        } else if (pageOrigin) {
-          tryUrls.push(pageOrigin + '/orders');
-        }
-      } catch (e) {}
-      tryUrls.push('/orders');
-      // remove falsy entries
-      for (let i = tryUrls.length - 1; i >= 0; i--) if (!tryUrls[i]) tryUrls.splice(i, 1);
-
-      let succeeded = false;
-      let createdOrder = null;
-      let successfulUrl = null;
       // Attach Authorization header when token present
       const authToken = getToken();
       const baseHeaders = { 'Content-Type': 'application/json' };
       if (authToken) baseHeaders['Authorization'] = `Bearer ${authToken}`;
       try{ console.debug('[checkout] authToken present?', !!authToken, authToken ? ('***'+authToken.slice(-10)) : null, 'headers', baseHeaders); }catch(_){ }
-
-      const _attemptErrors = [];
-      for (const url of tryUrls) {
-        try {
-          const res = await fetch(url, { method: 'POST', headers: baseHeaders, body: JSON.stringify(payload), mode: 'cors' });
-          if (!res.ok) { const txt = await res.text().catch(()=>null); _attemptErrors.push({ url, status: res.status, statusText: res.statusText, body: txt }); throw new Error(`status:${res.status}`); }
-          createdOrder = await res.json().catch(() => null);
-          succeeded = true;
-          successfulUrl = url;
-          break;
-        } catch (err) {
-          console.warn('checkout attempt failed for', url, err);
-          try{ _attemptErrors.push({ url, error: String(err) }); }catch(_){ }
-          // try next url
-        }
-      }
+      const submitResult = await submitOrderPayload(payload, baseHeaders);
+      const succeeded = !!(submitResult && submitResult.ok);
+      let createdOrder = submitResult && submitResult.createdOrder ? submitResult.createdOrder : null;
+      let successfulUrl = submitResult && submitResult.successfulUrl ? submitResult.successfulUrl : null;
+      const usedBackup = !!(submitResult && submitResult.viaBackup);
+      const _attemptErrors = Array.isArray(submitResult && submitResult.attemptErrors) ? submitResult.attemptErrors : [];
 
       try {
         if (succeeded) {
+          if (usedBackup) {
+            try{ showToast('Pedido enviado por canal de respaldo.', 3500); }catch(_){ }
+          }
           if (selectedPaymentMethod === 'mercadopago') {
             const orderId = (createdOrder && createdOrder.id) ? createdOrder.id : null;
             if (!orderId) {
@@ -2763,7 +3068,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
           console.warn('Checkout failed — showing fallback modal and keeping cart locally.', _attemptErrors);
           try{ console.error('[checkout] attempts', _attemptErrors); }catch(_){ }
           // show modal and persist the failed payload so the user can retry later
-          try{ showOrderModal(payload); saveFailedOrder(payload); }catch(e){ showOrderModal(payload); }
+          try{ showOrderModal(payload, _attemptErrors); saveFailedOrder(payload); }catch(e){ showOrderModal(payload, _attemptErrors); }
           try{ showToast('No se pudo enviar el pedido. Se guardó localmente para reintento.', 5000); }catch(_){ }
         }
       } catch (err) {
@@ -2774,7 +3079,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
     });
   }
   /* helper: muestra modal accesible con resumen del pedido y opciones (copiar, descargar, reintentar) */
-  function showOrderModal(payload){
+  function showOrderModal(payload, attemptErrors = []){
     try{
       if(document.getElementById('__order_modal')) return document.getElementById('__order_modal').classList.add('open');
       const modal = document.createElement('div');
@@ -2784,6 +3089,14 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         const unitType = normalizeSaleUnit(i?.meta?.unit_type || i?.meta?.sale_unit || i?.meta?.unit);
         const qtyLabel = formatQtyLabel(i?.qty, unitType, i?.meta || {});
         return `<li style="margin:8px 0"><strong>${escapeHtml(String(i.meta?.name||i.id))}</strong> — ${escapeHtml(qtyLabel)} × $${Number(i.meta?.price||0).toFixed(2)}</li>`;
+      }).join('');
+      const errors = Array.isArray(attemptErrors) ? attemptErrors.slice(0, 3) : [];
+      const errorsHtml = errors.map((err) => {
+        const status = err && err.status != null ? ('[' + String(err.status) + '] ') : '';
+        const url = err && err.url ? String(err.url) : '';
+        const detailRaw = err && (err.detail || err.error || err.statusText) ? String(err.detail || err.error || err.statusText) : '';
+        const detail = detailRaw ? (' - ' + detailRaw) : '';
+        return `<li>${escapeHtml(status + url + detail)}</li>`;
       }).join('');
       modal.innerHTML = `
         <div class="order-modal" role="dialog" aria-modal="true" aria-label="Resumen del pedido">
@@ -2795,6 +3108,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
             <ul style="list-style:none;padding:0;margin:0 0 8px">${itemsHtml || '<li style="color:var(--muted)">(sin ítems)</li>'}</ul>
             <div style="font-weight:800;margin-top:8px">Total: <span>$${Number(payload.total||0).toFixed(2)}</span></div>
             <p style="color:var(--muted);margin-top:8px">No se pudo enviar la orden al servidor — puedes <strong>reintentar</strong>, <strong>copiar</strong> o <strong>descargar</strong> el pedido.</p>
+            ${errorsHtml ? `<div class="om-errors"><strong>Errores:</strong><ul>${errorsHtml}</ul></div>` : ''}
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
             <button class="btn btn-ghost om-copy">Copiar pedido</button>
@@ -2813,6 +3127,8 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         .order-modal .om-close{background:transparent;border:0;color:var(--muted);font-size:18px;cursor:pointer}
         .order-modal .om-copy, .order-modal .om-download{background:transparent;border:1px solid rgba(0,0,0,0.06);padding:8px 12px;border-radius:10px}
         .order-modal .om-retry{padding:10px 14px;border-radius:10px;background:linear-gradient(90deg,var(--accent),var(--accent-2));color:#fff;border:0}
+        .order-modal .om-errors{margin-top:10px;padding:10px;border-radius:10px;background:rgba(12,74,110,0.08);font-size:12px;color:#0b223f}
+        .order-modal .om-errors ul{margin:6px 0 0;padding-left:16px}
         @media(max-width:640px){ .order-modal{width:calc(100% - 28px)} }
       `; document.head.appendChild(ss);
       requestAnimationFrame(()=> modal.classList.add('open'));
@@ -2869,43 +3185,19 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       } catch (e) { console.warn('reAttemptOrder: profile fetch failed', e); }
     }
 
-    // Prefer the configured API origin first when re-attempting an order
-    // Prefer API_ORIGIN when it's different from the page origin (Netlify/static hosting),
-    // otherwise use the page origin. Always keep '/orders' as a last-resort fallback.
-    const tryUrls = [];
-    try {
-      const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
-      if (typeof API_ORIGIN === 'string' && API_ORIGIN) {
-        if (pageOrigin && pageOrigin !== API_ORIGIN) {
-          tryUrls.push(API_ORIGIN + '/orders');
-          tryUrls.push(pageOrigin + '/orders');
-        } else {
-          tryUrls.push((pageOrigin || API_ORIGIN) + '/orders');
-        }
-      } else if (pageOrigin) {
-        tryUrls.push(pageOrigin + '/orders');
-      }
-    } catch (e) {}
-    tryUrls.push('/orders');
-    for (let i = tryUrls.length - 1; i >= 0; i--) if (!tryUrls[i]) tryUrls.splice(i, 1);
     const authToken = getToken();
     const baseHeaders = { 'Content-Type': 'application/json' };
     if (authToken) baseHeaders['Authorization'] = `Bearer ${authToken}`;
-    for (const url of tryUrls){
-      try{
-        const res = await fetch(url, { method: 'POST', headers: baseHeaders, body: JSON.stringify(payload), mode: 'cors' });
-        if (res.ok) return true;
-        // provide diagnostic information when a server returns a non-OK response
-        try{
-          const _body = await res.text();
-          console.error('Order POST failed', { url, status: res.status, statusText: res.statusText, body: _body });
-        }catch(e){
-          console.error('Order POST failed and body could not be read', { url, status: res.status, statusText: res.statusText });
-        }
-      }catch(err){
-        console.error('Order POST network error', url, err);
+    const submitResult = await submitOrderPayload(payload, baseHeaders);
+    if (submitResult && submitResult.ok) {
+      if (submitResult.viaBackup) {
+        console.warn('Order reattempt stored through /backup-orders fallback.');
       }
+      return true;
     }
+    try{
+      console.error('Order reattempt failed', submitResult && submitResult.attemptErrors ? submitResult.attemptErrors : []);
+    }catch(_){ }
     return false;
   }
 
@@ -2925,7 +3217,8 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
         }
       }catch(e){}
       const existing = JSON.parse(localStorage.getItem(key) || '[]');
-      existing.push({ payload, ts: Date.now() });
+      const safePayload = buildSanitizedOrderPayload(payload);
+      existing.push({ payload: safePayload, ts: Date.now() });
       localStorage.setItem(key, JSON.stringify(existing));
       try{ showToast('Pedido guardado localmente para reintento', 4000); }catch(_){ }
       updateRetryButton();
@@ -2966,7 +3259,7 @@ function closeCart(){ const drawer = document.getElementById('cartDrawer'); draw
       const list = loadFailedOrders();
       if(!list || !list.length) return;
       // Extract payloads and POST as array to /backup-orders (server will persist each)
-      const payloads = list.map(r => r.payload);
+      const payloads = list.map(r => buildSanitizedOrderPayload(r.payload));
       try{
         const resp = await fetch((typeof API_ORIGIN === 'string' && API_ORIGIN) ? (API_ORIGIN + '/backup-orders') : '/backup-orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloads), mode: 'cors' });
         if(resp.ok){
@@ -3227,21 +3520,7 @@ async function fetchOrdersSnapshot(token, { limit = 200, source = 'web' } = {}){
   if (limit != null) params.set('limit', String(limit));
   if (source) params.set('source', String(source));
   const query = params.toString() ? ('?' + params.toString()) : '';
-  const tryUrls = [];
-  try{
-    const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
-    if (typeof API_ORIGIN === 'string' && API_ORIGIN) {
-      if (pageOrigin && pageOrigin !== API_ORIGIN) {
-        tryUrls.push(API_ORIGIN + '/orders' + query);
-        tryUrls.push(pageOrigin + '/orders' + query);
-      } else {
-        tryUrls.push((pageOrigin || API_ORIGIN) + '/orders' + query);
-      }
-    } else if (pageOrigin) {
-      tryUrls.push(pageOrigin + '/orders' + query);
-    }
-  }catch(_){ }
-  tryUrls.push('/orders' + query);
+  const tryUrls = buildOrdersRequestUrls(query);
 
   for (const url of tryUrls){
     try{
@@ -3527,8 +3806,10 @@ function buildCheckoutAddressLabel(payload){
   try{
     const street = [String(payload?.user_calle || '').trim(), String(payload?.user_numeracion || '').trim()].filter(Boolean).join(' ');
     const barrio = String(payload?.user_barrio || '').trim();
-    if (street && barrio) return street + ', ' + barrio;
-    return street || barrio || '-';
+    const department = String(payload?.user_department || '').trim();
+    const postalCode = normalizePostalCodeToken(payload?.user_postal_code || '');
+    const parts = [street, barrio, department, postalCode].filter(Boolean);
+    return parts.join(', ') || '-';
   }catch(_){ return '-'; }
 }
 function normalizeIsoDateKey(value){
@@ -3670,8 +3951,10 @@ function getOrderAddressLabel(order){
   try{
     const street = [String(order?.user_calle || '').trim(), String(order?.user_numeracion || '').trim()].filter(Boolean).join(' ');
     const barrio = String(order?.user_barrio || '').trim();
-    if (street && barrio) return street + ', ' + barrio;
-    return street || barrio || '-';
+    const department = String(order?.user_department || '').trim();
+    const postalCode = normalizePostalCodeToken(order?.user_postal_code || '');
+    const parts = [street, barrio, department, postalCode].filter(Boolean);
+    return parts.join(', ') || '-';
   }catch(_){ return '-'; }
 }
 function resolveOrderItemName(item){
@@ -4104,6 +4387,8 @@ body.__lock_scroll{overflow:hidden}
 .__addr_map_canvas{height:380px;border-radius:14px;overflow:hidden;border:1px solid rgba(10,34,64,0.12);background:linear-gradient(180deg,#edf4ff,#dce8f6)}
 .__addr_map_canvas iframe{width:100%;height:100%;border:0;display:block}
 .__addr_map_help{margin:8px 2px 10px;font-size:12px;font-weight:700;color:#4f6480}
+.__addr_map_precision{display:none;margin:-2px 2px 10px;padding:9px 11px;border-radius:11px;border:1px solid rgba(245,158,11,0.45);background:linear-gradient(180deg,rgba(255,248,235,0.98),rgba(255,243,218,0.98));font-size:12px;line-height:1.35;font-weight:800;color:#7c2d12}
+.__addr_map_precision.show{display:block}
 .__addr_map_address_wrap{margin-bottom:4px}
 .__addr_map_address{width:100%;height:44px;border-radius:12px;border:1px solid rgba(10,34,64,0.12);padding:0 12px;background:#fff;font-size:14px;font-weight:700;color:#0f2237}
 .__map_pin{background:transparent !important;border:none !important}
@@ -4625,6 +4910,37 @@ function sanitizeAddressLongText(value, maxLen = 200){
 function sanitizeAddressNumber(value){
   return String(value || '').replace(/\s+/g, '').trim().slice(0, 12);
 }
+function normalizeAddressSearchFreeText(value){
+  try{
+    return String(value || '')
+      .replace(/[;|]+/g, ' ')
+      .replace(/\bprovincia\s+de\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }catch(_){ return String(value || '').trim(); }
+}
+function stripAddressContextTokens(value){
+  try{
+    return normalizeRegionToken(value || '')
+      .replace(/\b(?:provincia|departamento|distrito|de|del|la|las|el|los)\b/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }catch(_){ return normalizeRegionToken(value || ''); }
+}
+function toAddressTitleCase(value){
+  return String(value || '')
+    .split(/\s+/)
+    .map((token) => {
+      const raw = String(token || '').trim();
+      if (!raw) return '';
+      if (!/[A-Za-z\u00c0-\u024f]/.test(raw)) return raw;
+      const lower = raw.toLocaleLowerCase('es-AR');
+      return lower.charAt(0).toLocaleUpperCase('es-AR') + lower.slice(1);
+    })
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 function sanitizeDeliveryNotes(value){
   return String(value || '')
     .replace(/\r/g, '')
@@ -4704,13 +5020,29 @@ function validateAddressInput(
 }
 
 function parseStreetAndNumber(value){
-  const raw = sanitizeAddressLongText(value || '', 120);
+  const raw = normalizeAddressSearchFreeText(sanitizeAddressLongText(value || '', 120));
   if (!raw) return { calle: '', numeracion: '' };
   const match = raw.match(/^(.+?)\s+([0-9]{1,6}[A-Za-z]?|s\/?n)$/i);
   if (match){
     return {
       calle: sanitizeAddressText(match[1] || '', 80),
       numeracion: sanitizeAddressNumber(match[2] || '')
+    };
+  }
+  // Allows queries like "Almirante Brown 1735 de Las Heras".
+  const inlineMatch = raw.match(/^(.+?)\s+([0-9]{1,6}[A-Za-z]?)\b(?:[\s,.-]+.*)?$/i);
+  if (inlineMatch){
+    return {
+      calle: sanitizeAddressText(inlineMatch[1] || '', 80),
+      numeracion: sanitizeAddressNumber(inlineMatch[2] || '')
+    };
+  }
+  // Allows inputs that start with number: "1735 Almirante Brown".
+  const invertedMatch = raw.match(/^([0-9]{1,6}[A-Za-z]?)\s+(.+)$/i);
+  if (invertedMatch){
+    return {
+      calle: sanitizeAddressText(invertedMatch[2] || '', 80),
+      numeracion: sanitizeAddressNumber(invertedMatch[1] || '')
     };
   }
   return { calle: sanitizeAddressText(raw, 80), numeracion: '' };
@@ -4732,6 +5064,307 @@ function normalizeRegionToken(value){
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function escapeRegexToken(value){
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasNormalizedWordToken(text, token){
+  try{
+    const haystack = normalizeRegionToken(text || '');
+    const needle = normalizeRegionToken(token || '');
+    if (!haystack || !needle) return false;
+    return new RegExp(`(^|\\s)${escapeRegexToken(needle)}(\\s|$)`, 'i').test(haystack);
+  }catch(_){ return false; }
+}
+
+function isKnownMendozaPostalDigits(value){
+  try{
+    const digits = String(value || '').trim();
+    if (!/^\d{4}$/.test(digits)) return false;
+    return Object.prototype.hasOwnProperty.call(MENDOZA_POSTAL_TO_DEPARTMENTS, digits);
+  }catch(_){ return false; }
+}
+
+function hasPostalContextHint(value){
+  try{
+    const token = normalizeRegionToken(value || '').replace(/\./g, ' ');
+    if (!token) return false;
+    if (/\b(?:cp|codigo postal|cod postal|postal)\b/.test(token)) return true;
+    if (/(?:^|,)\s*\d{4}\b/.test(String(value || ''))) return true;
+    if (/\bargentina\b/.test(token) && /\bmendoza\b/.test(token)) return true;
+    return false;
+  }catch(_){ return false; }
+}
+
+function extractNormalizedPostalToken(value){
+  try{
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const explicitMatch = raw.match(/\bM\s*(\d{4})\b/i);
+    if (explicitMatch && explicitMatch[1]) return String(explicitMatch[1]);
+
+    const bareMatches = Array.from(raw.matchAll(/\b(\d{4})\b/g)).map((m) => String(m && m[1] || '').trim()).filter(Boolean);
+    if (!bareMatches.length) return '';
+    const knownMatch = bareMatches.find((digits) => isKnownMendozaPostalDigits(digits)) || '';
+    if (!knownMatch) return '';
+    if (hasPostalContextHint(raw)) return knownMatch;
+
+    const regionProbe = normalizeRegionToken(raw);
+    const hasDepartmentHint = MENDOZA_DEPARTMENTS.some((dep) => {
+      const depToken = normalizeRegionToken(dep);
+      return depToken && regionProbe.includes(depToken);
+    });
+    if (hasDepartmentHint) return knownMatch;
+    if (bareMatches.length >= 2) return knownMatch;
+    return '';
+  }catch(_){ return ''; }
+}
+
+function normalizePostalCodeToken(value){
+  try{
+    const digits = extractNormalizedPostalToken(value);
+    return digits ? ('M' + digits) : '';
+  }catch(_){ return ''; }
+}
+
+function getDepartmentsForPostalToken(value){
+  try{
+    const digits = extractNormalizedPostalToken(value);
+    if (!digits) return [];
+    const departments = MENDOZA_POSTAL_TO_DEPARTMENTS[digits];
+    return Array.isArray(departments) ? departments.slice() : [];
+  }catch(_){ return []; }
+}
+
+function inferDepartmentFromPostalAndHints(postalCode, hints = []){
+  try{
+    const departments = getDepartmentsForPostalToken(postalCode);
+    if (!departments.length) return '';
+    const probe = normalizeRegionToken((Array.isArray(hints) ? hints : []).filter(Boolean).join(' '));
+    if (!probe) return String(departments[0] || '');
+    for (const dep of departments){
+      const token = normalizeRegionToken(dep);
+      if (token && probe.includes(token)) return String(dep || '');
+    }
+    return String(departments[0] || '');
+  }catch(_){ return ''; }
+}
+
+function extractDepartmentsFromQueryText(value){
+  try{
+    const token = normalizeRegionToken(value || '');
+    if (!token) return [];
+    const out = [];
+    for (const dep of MENDOZA_DEPARTMENTS){
+      const depToken = normalizeRegionToken(dep);
+      if (!depToken) continue;
+      if (token.includes(depToken)) out.push(dep);
+    }
+    return out;
+  }catch(_){ return []; }
+}
+
+function normalizeDepartmentToken(value){
+  return normalizeRegionToken(String(value || '').replace(/\./g, ' '));
+}
+
+function findDepartmentInHints(hints = []){
+  try{
+    const probe = normalizeRegionToken((Array.isArray(hints) ? hints : [hints]).filter(Boolean).join(' '));
+    if (!probe) return '';
+    for (const dep of MENDOZA_DEPARTMENTS){
+      const token = normalizeDepartmentToken(dep);
+      if (!token) continue;
+      if (probe.includes(token)) return String(dep || '');
+    }
+    return '';
+  }catch(_){ return ''; }
+}
+
+function normalizeKnownMendozaDepartment(value){
+  try{
+    const token = normalizeDepartmentToken(value);
+    if (!token) return '';
+    for (const dep of MENDOZA_DEPARTMENTS){
+      if (normalizeDepartmentToken(dep) === token) return String(dep || '');
+    }
+    return '';
+  }catch(_){ return ''; }
+}
+
+function collectAddressSearchPreferredDepartments(query = ''){
+  try{
+    const out = [];
+    const seen = new Set();
+    const pushDepartment = (candidate = '', hints = []) => {
+      const hintList = Array.isArray(hints) ? hints : [hints];
+      const inferredDepartment = sanitizeAddressText(
+        candidate ||
+        findDepartmentInHints(hintList) ||
+        inferDepartmentFromPostalAndHints(normalizePostalCodeToken(hintList.join(' ')), hintList) ||
+        '',
+        80
+      );
+      const canonicalDepartment = normalizeKnownMendozaDepartment(inferredDepartment);
+      if (!canonicalDepartment) return;
+      const canonicalToken = normalizeDepartmentToken(canonicalDepartment);
+      if (!canonicalToken || seen.has(canonicalToken)) return;
+      seen.add(canonicalToken);
+      out.push(canonicalDepartment);
+    };
+
+    const cleanQuery = sanitizeAddressLongText(query || '', 120);
+    extractDepartmentsFromQueryText(cleanQuery).forEach((dep) => pushDepartment(dep, [cleanQuery]));
+    getDepartmentsForPostalToken(normalizePostalCodeToken(cleanQuery)).forEach((dep) => pushDepartment(dep, [cleanQuery]));
+
+    const accountId = getCurrentAccountStorageId();
+    const book = loadAddressBook(accountId);
+    const addresses = Array.isArray(book && book.addresses) ? book.addresses : [];
+    const lastUsedId = getLastUsedAddressId(accountId);
+    const lastUsedAddress = addresses.find((addr) => String(addr && addr.id || '') === String(lastUsedId || '')) || null;
+    const defaultAddress = addresses.find((addr) => String(addr && addr.id || '') === String(book && book.defaultId || '')) ||
+      addresses[0] ||
+      null;
+    const deliveryCache = loadDeliveryAddressCache();
+    const prefillCache = loadLocationPrefillCache();
+    [deliveryCache, prefillCache, lastUsedAddress, defaultAddress].forEach((entry) => {
+      if (!entry || typeof entry !== 'object') return;
+      const hints = [
+        entry.department,
+        entry.barrio,
+        entry.query_hint,
+        entry.full_text,
+        entry.label
+      ].filter(Boolean);
+      pushDepartment(entry.department || '', hints);
+      const cachedPostal = normalizePostalCodeToken(
+        entry.postal_code ||
+        entry.query_hint ||
+        entry.full_text ||
+        entry.label ||
+        ''
+      );
+      getDepartmentsForPostalToken(cachedPostal).forEach((dep) => pushDepartment(dep, hints));
+    });
+
+    return out.slice(0, 3);
+  }catch(_){ return []; }
+}
+
+function suggestionMatchesDepartmentToken(suggestion, department){
+  try{
+    const depToken = normalizeDepartmentToken(department);
+    if (!depToken || !suggestion || typeof suggestion !== 'object') return false;
+    const suggestionDepartment = normalizeDepartmentToken(
+      suggestion.department ||
+      findDepartmentInHints([suggestion.full_text, suggestion.label, suggestion.barrio, suggestion.query_hint]) ||
+      ''
+    );
+    if (suggestionDepartment && suggestionDepartment === depToken) return true;
+    const probe = normalizeRegionToken([
+      suggestion.full_text,
+      suggestion.label,
+      suggestion.barrio,
+      suggestion.department
+    ].filter(Boolean).join(' '));
+    return !!probe && probe.includes(depToken);
+  }catch(_){ return false; }
+}
+
+function suggestionMatchesStreetToken(suggestion, streetToken){
+  try{
+    const queryStreetToken = normalizeRegionToken(streetToken || '');
+    if (!queryStreetToken) return false;
+    const suggestionStreetToken = normalizeRegionToken(
+      suggestion?.calle ||
+      parseStreetAndNumber(suggestion?.full_text || suggestion?.label || '').calle ||
+      ''
+    );
+    if (!suggestionStreetToken) return false;
+    return suggestionStreetToken.includes(queryStreetToken) || queryStreetToken.includes(suggestionStreetToken);
+  }catch(_){ return false; }
+}
+
+function normalizeArcGisAddrType(value){
+  return normalizeRegionToken(String(value || '').replace(/[^a-z0-9 ]/ig, ' '));
+}
+
+function isArcGisPointAddressType(value){
+  try{
+    const token = normalizeArcGisAddrType(value);
+    if (!token) return false;
+    return token.includes('pointaddress') || token.includes('streetaddress');
+  }catch(_){ return false; }
+}
+
+function haversineDistanceKm(lat1, lon1, lat2, lon2){
+  try{
+    const toRad = (deg) => Number(deg) * Math.PI / 180;
+    const aLat = Number(lat1);
+    const aLon = Number(lon1);
+    const bLat = Number(lat2);
+    const bLon = Number(lon2);
+    if (![aLat, aLon, bLat, bLon].every(Number.isFinite)) return Number.POSITIVE_INFINITY;
+    const dLat = toRad(bLat - aLat);
+    const dLon = toRad(bLon - aLon);
+    const rLat1 = toRad(aLat);
+    const rLat2 = toRad(bLat);
+    const h = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(rLat1) * Math.cos(rLat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+    return 6371 * c;
+  }catch(_){ return Number.POSITIVE_INFINITY; }
+}
+
+function postalMatchesDepartment(postalCode, department){
+  try{
+    const postal = normalizePostalCodeToken(postalCode);
+    const depToken = normalizeDepartmentToken(department);
+    if (!postal || !depToken) return true;
+    const deps = getDepartmentsForPostalToken(postal);
+    if (!deps.length) return true;
+    return deps.some((dep) => normalizeDepartmentToken(dep) === depToken);
+  }catch(_){ return true; }
+}
+
+function selectPostalForDepartment(postalCode, department, hints = []){
+  try{
+    const desiredDepartment = sanitizeAddressText(
+      department ||
+      findDepartmentInHints(hints) ||
+      '',
+      80
+    );
+    const direct = normalizePostalCodeToken(postalCode || '');
+    if (direct && postalMatchesDepartment(direct, desiredDepartment)) return direct;
+    const candidates = Array.isArray(hints) ? hints : [hints];
+    for (const source of candidates){
+      const candidate = normalizePostalCodeToken(source || '');
+      if (!candidate) continue;
+      if (postalMatchesDepartment(candidate, desiredDepartment)) return candidate;
+    }
+    return direct && !desiredDepartment ? direct : '';
+  }catch(_){ return normalizePostalCodeToken(postalCode || ''); }
+}
+
+function expandAddressAbbreviationsForSearch(value){
+  try{
+    let v = sanitizeAddressLongText(value || '', 120);
+    if (!v) return '';
+    v = v
+      .replace(/\bgral\.?\b/gi, 'General')
+      .replace(/\bav\.?\b/gi, 'Avenida')
+      .replace(/\bpje\.?\b/gi, 'Pasaje')
+      .replace(/\bpto\.?\b/gi, 'Punto');
+    return v.replace(/\s+/g, ' ').trim();
+  }catch(_){ return sanitizeAddressLongText(value || '', 120); }
+}
+
+function isLikelyLasHerasPostal(postal){
+  const departments = getDepartmentsForPostalToken(postal);
+  return departments.some((dep) => normalizeRegionToken(dep) === 'las heras');
 }
 
 function isMendozaText(value){
@@ -4816,6 +5449,42 @@ function normalizeAddressEntry(entry){
   const barrio = sanitizeAddressText(entry.barrio || displayParts.barrio || '', 80);
   const calle = sanitizeAddressText(entry.calle || displayParts.calle || '', 80);
   const numeracion = sanitizeAddressNumber(entry.numeracion || entry.numero || displayParts.numeracion || '');
+  const rawPostalCode = normalizePostalCodeToken(
+    entry.postal_code ||
+    entry.postcode ||
+    entry.zip_code ||
+    entry.zip ||
+    entry.query_hint ||
+    entry.query ||
+    entry.full_text ||
+    ''
+  );
+  const department = sanitizeAddressText(
+    entry.department ||
+    findDepartmentInHints([
+      entry.department,
+      entry.query_hint,
+      entry.query,
+      entry.full_text,
+      entry.label,
+      entry.barrio
+    ]) ||
+    inferDepartmentFromPostalAndHints(rawPostalCode, [
+      entry.department,
+      entry.barrio,
+      entry.full_text,
+      entry.label
+    ]) ||
+    '',
+    80
+  );
+  const postalCode = selectPostalForDepartment(rawPostalCode, department, [
+    entry.query_hint,
+    entry.query,
+    entry.full_text,
+    entry.label,
+    entry.barrio
+  ]);
   if (!barrio || !calle || !numeracion) return null;
   const labelRaw = String(entry.label || entry.alias || '').trim();
   const hasNotesField = Object.prototype.hasOwnProperty.call(entry, 'notes') ||
@@ -4834,6 +5503,9 @@ function normalizeAddressEntry(entry){
     barrio,
     calle,
     numeracion,
+    postal_code: postalCode,
+    department,
+    query_hint: sanitizeAddressLongText(entry.query_hint || entry.query || entry.full_text || '', 120),
     full_text: fullText,
     lat: Number.isFinite(latNum) ? Number(latNum.toFixed(6)) : null,
     lon: Number.isFinite(lonNum) ? Number(lonNum.toFixed(6)) : null,
@@ -4848,8 +5520,10 @@ function buildAddressDisplay(addr){
   if (full) return full.split(',').slice(0, 3).join(',').trim() || full;
   const street = [String(addr.calle || '').trim(), String(addr.numeracion || '').trim()].filter(Boolean).join(' ');
   const barrio = String(addr.barrio || '').trim();
-  if (street && barrio) return street + ', ' + barrio;
-  return street || barrio;
+  const department = String(addr.department || '').trim();
+  const postalCode = normalizePostalCodeToken(addr.postal_code || addr.postcode || '');
+  const parts = [street, barrio, department, postalCode].filter(Boolean);
+  return parts.join(', ');
 }
 function loadAddressBook(accountId = null){
   try{
@@ -4869,6 +5543,7 @@ function loadAddressBook(accountId = null){
       if (dupe){
         if (!dupe.label && n.label) dupe.label = n.label;
         if (!dupe.notes && n.notes) dupe.notes = n.notes;
+        if (!dupe.query_hint && n.query_hint) dupe.query_hint = n.query_hint;
       } else {
         normalized.push(n);
       }
@@ -4903,6 +5578,9 @@ function upsertAddressInBook(entry, { accountId = null, setDefault = false } = {
     target.barrio = normalized.barrio;
     target.calle = normalized.calle;
     target.numeracion = normalized.numeracion;
+    target.postal_code = normalized.postal_code || target.postal_code || '';
+    target.department = normalized.department || target.department || '';
+    target.query_hint = normalized.query_hint || target.query_hint || '';
     if (normalized.full_text) target.full_text = normalized.full_text;
     if (normalized.lat != null) target.lat = normalized.lat;
     if (normalized.lon != null) target.lon = normalized.lon;
@@ -4946,6 +5624,53 @@ function getDefaultAddressFromBook(accountId = null){
   const selected = book.addresses.find(a => a.id === book.defaultId) || book.addresses[0];
   return selected || null;
 }
+
+function getSavedAddressSuggestionMatches(query, { limit = 4, accountId = null } = {}){
+  try{
+    const clean = normalizeRegionToken(query || '');
+    if (!clean || clean.length < 2) return [];
+    const tokens = clean.split(' ').filter((token) => token.length >= 2);
+    const book = loadAddressBook(accountId);
+    const list = Array.isArray(book && book.addresses) ? book.addresses : [];
+    const out = [];
+    const seen = new Set();
+    for (const addr of list){
+      if (!addr || !isMendozaPrefill(addr)) continue;
+      const haystack = normalizeRegionToken([
+        addr.label,
+        buildAddressDisplay(addr),
+        addr.full_text,
+        addr.barrio,
+        addr.calle,
+        addr.numeracion
+      ].filter(Boolean).join(' '));
+      if (!haystack) continue;
+      const matches = haystack.includes(clean) || tokens.every((token) => haystack.includes(token));
+      if (!matches) continue;
+      const normalized = normalizeLocationPrefill({
+        lat: addr.lat,
+        lon: addr.lon,
+        barrio: addr.barrio,
+        calle: addr.calle,
+        numeracion: addr.numeracion,
+        postal_code: addr.postal_code,
+        department: addr.department,
+        query_hint: addr.query_hint,
+        label: addr.label || buildAddressDisplay(addr),
+        full_text: addr.full_text || buildAddressDisplay(addr),
+        source: 'saved',
+        ts: Date.now()
+      });
+      const key = `${normalizeRegionToken(normalized.full_text || normalized.label || '')}|${Number(normalized.lat || 0).toFixed(6)}|${Number(normalized.lon || 0).toFixed(6)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(normalized);
+      if (out.length >= Math.max(1, Number(limit) || 4)) break;
+    }
+    return out;
+  }catch(_){ return []; }
+}
+
 function loadDeliveryAddressCache(){
   try{
     const raw = localStorage.getItem(DELIVERY_ADDRESS_CACHE_KEY);
@@ -4958,6 +5683,9 @@ function loadDeliveryAddressCache(){
       barrio: String(parsed.barrio || '').trim(),
       calle: String(parsed.calle || '').trim(),
       numeracion: String(parsed.numeracion || parsed.numero || '').trim(),
+      postal_code: normalizePostalCodeToken(parsed.postal_code || parsed.postcode || parsed.zip_code || parsed.zip || ''),
+      department: sanitizeAddressText(parsed.department || '', 80),
+      query_hint: sanitizeAddressLongText(parsed.query_hint || parsed.query || '', 120),
       label: sanitizeAddressAlias(parsed.label || parsed.alias || ''),
       full_text: sanitizeAddressLongText(parsed.full_text || parsed.full || '', 200),
       lat: Number.isFinite(latNum) ? Number(latNum.toFixed(6)) : null,
@@ -4974,6 +5702,9 @@ function saveDeliveryAddressCache(data){
       barrio: String(data?.barrio || '').trim(),
       calle: String(data?.calle || '').trim(),
       numeracion: String(data?.numeracion || data?.numero || '').trim(),
+      postal_code: normalizePostalCodeToken(data?.postal_code || data?.postcode || data?.zip_code || data?.zip || ''),
+      department: sanitizeAddressText(data?.department || '', 80),
+      query_hint: sanitizeAddressLongText(data?.query_hint || data?.query || data?.full_text || '', 120),
       label: sanitizeAddressAlias(data?.label || data?.alias || ''),
       full_text: sanitizeAddressLongText(data?.full_text || data?.full || data?.display_name || '', 200),
       lat: Number.isFinite(latNum) ? Number(latNum.toFixed(6)) : null,
@@ -4990,20 +5721,77 @@ function normalizeLocationPrefill(raw){
     const latNum = Number(raw?.lat);
     const lonNum = Number(raw?.lon);
     const scoreNum = Number(raw?.provider_score);
+    const addrTypeRaw = sanitizeAddressText(raw?.provider_addr_type || raw?.addr_type || '', 40);
+    const precisionRaw = normalizeRegionToken(raw?.precision_level || raw?.precision || '');
+    const requiresPinAdjustmentRaw = !!raw?.requires_pin_adjustment;
+    const queryHint = sanitizeAddressLongText(raw?.query_hint || raw?.query || '', 120);
+    const rawPostalCode = normalizePostalCodeToken(
+      raw?.postal_code ||
+      raw?.postcode ||
+      raw?.zip_code ||
+      raw?.zip ||
+      raw?.full_text ||
+      raw?.label ||
+      raw?.query_hint ||
+      raw?.query ||
+      ''
+    );
+    const hintedDepartment = sanitizeAddressText(
+      raw?.department ||
+      findDepartmentInHints([raw?.department, raw?.barrio, raw?.full_text, raw?.label, queryHint]) ||
+      inferDepartmentFromPostalAndHints(rawPostalCode, [raw?.barrio, raw?.full_text, raw?.label, queryHint]) ||
+      '',
+      80
+    );
+    const postalCode = selectPostalForDepartment(rawPostalCode, hintedDepartment, [
+      raw?.full_text,
+      raw?.label,
+      raw?.barrio,
+      queryHint
+    ]);
+    const department = sanitizeAddressText(
+      hintedDepartment ||
+      inferDepartmentFromPostalAndHints(postalCode, [raw?.barrio, raw?.full_text, raw?.label, queryHint]) ||
+      '',
+      80
+    );
     return {
       lat: Number.isFinite(latNum) ? latNum : null,
       lon: Number.isFinite(lonNum) ? lonNum : null,
       barrio: String(raw?.barrio || '').trim(),
       calle: String(raw?.calle || '').trim(),
       numeracion: String(raw?.numeracion || raw?.numero || '').trim(),
+      postal_code: postalCode,
+      department,
       label: String(raw?.label || raw?.display_name || '').trim(),
       full_text: sanitizeAddressLongText(raw?.full_text || raw?.full || raw?.display_name || raw?.label || '', 200),
+      query_hint: queryHint,
       source: String(raw?.source || '').trim().toLowerCase(),
       provider_score: Number.isFinite(scoreNum) ? scoreNum : null,
+      provider_addr_type: addrTypeRaw,
+      precision_level: precisionRaw === 'exact' ? 'exact' : (precisionRaw === 'approx' ? 'approx' : ''),
+      requires_pin_adjustment: requiresPinAdjustmentRaw,
       ts: Number(raw?.ts || Date.now()) || Date.now(),
     };
   }catch(_){
-    return { lat: null, lon: null, barrio: '', calle: '', numeracion: '', label: '', full_text: '', source: '', provider_score: null, ts: Date.now() };
+    return {
+      lat: null,
+      lon: null,
+      barrio: '',
+      calle: '',
+      numeracion: '',
+      postal_code: '',
+      department: '',
+      label: '',
+      full_text: '',
+      query_hint: '',
+      source: '',
+      provider_score: null,
+      provider_addr_type: '',
+      precision_level: '',
+      requires_pin_adjustment: false,
+      ts: Date.now()
+    };
   }
 }
 
@@ -5033,7 +5821,9 @@ function buildLocationDisplayLabel(prefill){
     if (full) return full;
     const explicit = String(prefill.label || '').trim();
     if (explicit) return explicit;
-    const parts = [prefill.calle, prefill.numeracion, prefill.barrio].map(v => String(v || '').trim()).filter(Boolean);
+    const parts = [prefill.calle, prefill.numeracion, prefill.barrio, prefill.department, normalizePostalCodeToken(prefill.postal_code || '')]
+      .map(v => String(v || '').trim())
+      .filter(Boolean);
     if (parts.length) return parts.join(', ');
     if (prefill.lat != null && prefill.lon != null){
       return `Lat ${Number(prefill.lat).toFixed(5)}, Lon ${Number(prefill.lon).toFixed(5)}`;
@@ -5111,11 +5901,25 @@ async function applyManualAuthLocationFromMap(lat, lon){
     const lonNum = Number(lon);
     if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) return;
     setAuthLocationStatus('Actualizando dirección desde el mapa...');
+    const previousPostal = normalizePostalCodeToken(authLocationPrefill?.postal_code || authLocationPrefill?.query_hint || '');
+    const previousDepartment = sanitizeAddressText(
+      authLocationPrefill?.department ||
+      inferDepartmentFromPostalAndHints(previousPostal, [authLocationPrefill?.barrio, authLocationPrefill?.full_text, authLocationPrefill?.query_hint]) ||
+      '',
+      80
+    );
     let prefill = normalizeLocationPrefill({ lat: latNum, lon: lonNum, ts: Date.now() });
     try{
       const reverse = await reverseGeocodeLocation(latNum, lonNum);
       if (reverse) prefill = reverse;
     }catch(_){ }
+    if (!prefill.postal_code && previousPostal) prefill.postal_code = previousPostal;
+    if (!prefill.department){
+      prefill.department = previousDepartment || sanitizeAddressText(
+        inferDepartmentFromPostalAndHints(prefill.postal_code, [prefill.barrio, prefill.full_text]),
+        80
+      );
+    }
     authLocationPrefill = prefill;
     saveLocationPrefillCache(prefill);
     if (prefill.barrio || prefill.calle || prefill.numeracion){
@@ -5248,6 +6052,18 @@ async function reverseGeocodeLocation(lat, lon){
   const barrio = String(addr.suburb || addr.neighbourhood || addr.city_district || addr.city || addr.town || addr.village || '').trim();
   const calle = String(addr.road || addr.pedestrian || addr.residential || addr.path || '').trim();
   const numeracion = String(addr.house_number || '').trim();
+  const postalCode = normalizePostalCodeToken(addr.postcode || data.postcode || data.display_name || '');
+  const department = sanitizeAddressText(
+    String(
+      addr.county ||
+      addr.state_district ||
+      findDepartmentInHints([data.display_name, barrio, addr.city_district, addr.city]) ||
+      inferDepartmentFromPostalAndHints(postalCode, [addr.city_district, addr.city, barrio, data.display_name]) ||
+      ''
+    ).trim(),
+    80
+  );
+  const safePostalCode = selectPostalForDepartment(postalCode, department, [data.display_name, barrio, calle, numeracion]);
   const labelFromParts = [calle, numeracion, barrio].filter(Boolean).join(', ');
   const label = labelFromParts || String(data.display_name || '').split(',').slice(0, 3).join(',').trim();
   const fullText = sanitizeAddressLongText(data.display_name || label, 200);
@@ -5257,6 +6073,8 @@ async function reverseGeocodeLocation(lat, lon){
     barrio,
     calle,
     numeracion,
+    postal_code: safePostalCode,
+    department,
     label,
     full_text: fullText,
     ts: Date.now(),
@@ -5305,6 +6123,42 @@ function normalizeAddressSuggestion(item){
     streetInfo.numeracion ||
     ''
   ) || 'S/N';
+  const postalCode = normalizePostalCodeToken(
+    item.postal_code ||
+    item.postcode ||
+    item.zip_code ||
+    addr.postcode ||
+    item.query_hint ||
+    item.query ||
+    item.display_name ||
+    item.label ||
+    ''
+  );
+  const department = sanitizeAddressText(
+    item.department ||
+    addr.county ||
+    addr.state_district ||
+    findDepartmentInHints([item.query_hint, item.query, item.display_name, item.full_text, item.label, barrio]) ||
+    inferDepartmentFromPostalAndHints(postalCode, [
+      item.display_name,
+      item.full_text,
+      item.label,
+      barrio,
+      addr.city_district,
+      addr.city,
+      addr.town
+    ]) ||
+    '',
+    80
+  );
+  const safePostalCode = selectPostalForDepartment(postalCode, department, [
+    item.query_hint,
+    item.query,
+    item.display_name,
+    item.full_text,
+    item.label,
+    barrio
+  ]);
   const fullText = sanitizeAddressLongText(item.display_name || item.full_text || '', 200);
   const label = sanitizeAddressLongText(
     item.label ||
@@ -5318,6 +6172,9 @@ function normalizeAddressSuggestion(item){
     barrio,
     calle,
     numeracion,
+    postal_code: safePostalCode,
+    department,
+    query_hint: sanitizeAddressLongText(item.query_hint || item.query || '', 120),
     label,
     full_text: fullText || label,
     source: 'nominatim',
@@ -5333,6 +6190,26 @@ function locationPrefillToAddress(prefill, extra = {}){
   const barrio = sanitizeAddressText(normalized.barrio || fromText.barrio || 'Mendoza', 80);
   const calle = sanitizeAddressText(streetParsed.calle || normalized.calle || fromText.calle || '', 80);
   const numeracion = sanitizeAddressNumber(normalized.numeracion || fromText.numeracion || streetParsed.numeracion || '') || 'S/N';
+  const rawPostalCode = normalizePostalCodeToken(
+    normalized.postal_code ||
+    normalized.query_hint ||
+    normalized.full_text ||
+    normalized.label ||
+    ''
+  );
+  const department = sanitizeAddressText(
+    normalized.department ||
+    findDepartmentInHints([normalized.query_hint, normalized.full_text, normalized.label, normalized.barrio]) ||
+    inferDepartmentFromPostalAndHints(rawPostalCode, [normalized.barrio, normalized.full_text, normalized.label, normalized.query_hint]) ||
+    '',
+    80
+  );
+  const postalCode = selectPostalForDepartment(rawPostalCode, department, [
+    normalized.query_hint,
+    normalized.full_text,
+    normalized.label,
+    normalized.barrio
+  ]);
   const check = validateAddressInput({
     label: alias,
     barrio,
@@ -5343,6 +6220,9 @@ function locationPrefillToAddress(prefill, extra = {}){
   });
   if (!check.ok) return null;
   return Object.assign({}, check.value, {
+    postal_code: postalCode,
+    department,
+    query_hint: sanitizeAddressLongText(normalized.query_hint || normalized.full_text || normalized.label || '', 120),
     lat: normalized.lat,
     lon: normalized.lon,
     full_text: sanitizeAddressLongText(normalized.full_text || normalized.label || buildLocationDisplayLabel(normalized), 200)
@@ -5353,6 +6233,16 @@ function buildAddressSearchQueryVariants(query){
   const clean = sanitizeAddressLongText(query || '', 120);
   if (!clean) return [];
   const variants = [];
+  const expanded = expandAddressAbbreviationsForSearch(clean);
+  const parsedStreetInfo = parseStreetAndNumber(clean);
+  const parsedStreet = sanitizeAddressText(parsedStreetInfo.calle || '', 90);
+  const parsedNumber = sanitizeAddressNumber(parsedStreetInfo.numeracion || '');
+  const postalCode = normalizePostalCodeToken(clean);
+  const textDepartmentHints = extractDepartmentsFromQueryText(clean);
+  const postalDepartmentHints = getDepartmentsForPostalToken(postalCode);
+  const departmentHints = Array.from(new Set(
+    textDepartmentHints.length ? textDepartmentHints : postalDepartmentHints
+  )).filter(Boolean);
   const add = (value) => {
     const v = sanitizeAddressLongText(value || '', 120);
     if (!v) return;
@@ -5361,20 +6251,31 @@ function buildAddressSearchQueryVariants(query){
   const withRegion = isMendozaText(clean) ? clean : `${clean}, Mendoza, Argentina`;
   add(withRegion);
   add(clean);
-  const titleCase = clean
-    .split(/\s+/)
-    .map((token) => {
-      const raw = String(token || '').trim();
-      if (!raw) return '';
-      if (!/[A-Za-z\u00c0-\u024f]/.test(raw)) return raw;
-      const lower = raw.toLocaleLowerCase('es-AR');
-      return lower.charAt(0).toLocaleUpperCase('es-AR') + lower.slice(1);
-    })
-    .join(' ')
-    .trim();
+  if (parsedStreet){
+    const titleStreet = toAddressTitleCase(parsedStreet);
+    const streetWithNumber = [titleStreet || parsedStreet, parsedNumber].filter(Boolean).join(' ').trim();
+    if (streetWithNumber){
+      add(streetWithNumber);
+      add(`${streetWithNumber}, Mendoza, Argentina`);
+      departmentHints.forEach((dep) => add(`${streetWithNumber}, ${dep}, Mendoza, Argentina`));
+    }
+    const streetOnly = titleStreet || parsedStreet;
+    if (streetOnly){
+      add(`${streetOnly}, Mendoza, Argentina`);
+      departmentHints.forEach((dep) => add(`${streetOnly}, ${dep}, Mendoza, Argentina`));
+    }
+  }
+  if (expanded && expanded !== clean){
+    add(expanded);
+    add(isMendozaText(expanded) ? expanded : `${expanded}, Mendoza, Argentina`);
+    departmentHints.forEach((dep) => add(`${expanded}, ${dep}, Mendoza, Argentina`));
+  }
+  departmentHints.forEach((dep) => add(`${clean}, ${dep}, Mendoza, Argentina`));
+  const titleCase = toAddressTitleCase(clean);
   if (titleCase && titleCase !== clean){
     add(`${titleCase}, Mendoza, Argentina`);
     add(titleCase);
+    departmentHints.forEach((dep) => add(`${titleCase}, ${dep}, Mendoza, Argentina`));
   }
   const noNumber = clean
     .replace(/\b\d{1,6}[A-Za-z]?\b/g, ' ')
@@ -5382,6 +6283,7 @@ function buildAddressSearchQueryVariants(query){
     .trim();
   if (noNumber && noNumber !== clean){
     add(`${noNumber}, Mendoza, Argentina`);
+    departmentHints.forEach((dep) => add(`${noNumber}, ${dep}, Mendoza, Argentina`));
     add(`${noNumber}, Las Heras, Mendoza, Argentina`);
   }
   if (titleCase && titleCase !== clean){
@@ -5391,6 +6293,7 @@ function buildAddressSearchQueryVariants(query){
       .trim();
     if (noNumberTitle && noNumberTitle !== titleCase){
       add(`${noNumberTitle}, Mendoza, Argentina`);
+      departmentHints.forEach((dep) => add(`${noNumberTitle}, ${dep}, Mendoza, Argentina`));
       add(`${noNumberTitle}, Las Heras, Mendoza, Argentina`);
     }
   }
@@ -5406,21 +6309,64 @@ function buildSuggestionRankingScore(query, suggestion){
     if (!qRaw || !sRaw) return 0;
     const qStreetInfo = parseStreetAndNumber(qRaw);
     const qNum = normalizeRegionToken(qStreetInfo.numeracion || '');
-    const qStreet = normalizeRegionToken(qStreetInfo.calle || qRaw.replace(/\b\d{1,6}[a-z]?\b/gi, ' ').replace(/\s+/g, ' ').trim());
+    const qStreet = normalizeRegionToken(
+      qStreetInfo.calle ||
+      stripAddressContextTokens(qRaw.replace(/\b\d{1,6}[a-z]?\b/gi, ' '))
+    );
     const sStreetInfo = parseStreetAndNumber(normalizeRegionToken(suggestion?.calle || ''));
     const sStreet = normalizeRegionToken(sStreetInfo.calle || suggestion?.calle || '');
     const sNum = normalizeRegionToken(suggestion?.numeracion || sStreetInfo.numeracion || '');
+    const qPostal = normalizePostalCodeToken(query || qRaw);
+    const sPostal = normalizePostalCodeToken(
+      suggestion?.postal_code ||
+      suggestion?.postcode ||
+      suggestion?.zip_code ||
+      buildLocationDisplayLabel(suggestion) ||
+      ''
+    );
+    const qPostalDigits = extractNormalizedPostalToken(qPostal);
+    const sPostalDigits = extractNormalizedPostalToken(sPostal);
+    const explicitDepartments = extractDepartmentsFromQueryText(qRaw);
+    const qDepartments = Array.from(new Set(
+      explicitDepartments.length ? explicitDepartments : getDepartmentsForPostalToken(qPostal)
+    )).filter(Boolean);
+    const sDepartmentToken = normalizeRegionToken(
+      suggestion?.department ||
+      inferDepartmentFromPostalAndHints(sPostal, [suggestion?.full_text, suggestion?.label, suggestion?.barrio]) ||
+      ''
+    );
     let score = 0;
     if (qNum && sNum && qNum === sNum) score += 11;
-    else if (qNum && sRaw.includes(qNum)) score += 8;
-    if (qStreet && sStreet && sStreet.includes(qStreet)) score += 9;
+    else if (qNum && (hasNormalizedWordToken(sRaw, qNum) || sRaw.includes(qNum))) score += 8;
+    if (qStreet && sStreet && (sStreet === qStreet || qStreet === sStreet)) score += 12;
+    else if (qStreet && sStreet && (sStreet.includes(qStreet) || qStreet.includes(sStreet))) score += 10;
     if (qStreet && sRaw.includes(qStreet)) score += 7;
-    const streetTokens = qStreet.split(' ').filter((token) => token.length >= 3);
+    const streetTokens = qStreet
+      .split(' ')
+      .filter((token) => token.length >= 3 && !ADDRESS_QUERY_STOPWORDS.has(token));
     let hits = 0;
     streetTokens.forEach((token) => { if (sRaw.includes(token)) hits += 1; });
     score += Math.min(5, hits);
+    if (qDepartments.length){
+      const depMatch = qDepartments.some((dep) => {
+        const depToken = normalizeRegionToken(dep);
+        return depToken && (sRaw.includes(depToken) || sDepartmentToken === depToken);
+      });
+      if (depMatch) score += 12;
+      else score -= 8;
+    }
+    if (!explicitDepartments.length && qPostalDigits && sPostalDigits){
+      if (qPostalDigits === sPostalDigits) score += 8;
+      else score -= 3;
+    }
     if (suggestion && suggestion.calle) score += 1.5;
     if (normalizeRegionToken(suggestion?.source || '') === 'arcgis') score += 2;
+    const arcAddrType = normalizeArcGisAddrType(suggestion?.provider_addr_type || '');
+    if (qNum && arcAddrType){
+      if (isArcGisPointAddressType(arcAddrType)) score += 10;
+      else if (arcAddrType.includes('streetname')) score -= 4;
+      else if (arcAddrType.includes('poi') || arcAddrType.includes('locality') || arcAddrType.includes('postal')) score -= 8;
+    }
     const providerScore = Number(suggestion?.provider_score);
     if (Number.isFinite(providerScore) && providerScore > 0){
       score += Math.min(5, providerScore / 20);
@@ -5444,12 +6390,22 @@ function getManualMapSeedPrefill(query){
   const cleanQuery = sanitizeAddressLongText(query || '', 120);
   if (!cleanQuery) return base;
   const parsed = extractAddressPartsFromDisplay(cleanQuery);
+  const rawPostalCode = normalizePostalCodeToken(cleanQuery);
+  const department = sanitizeAddressText(
+    findDepartmentInHints([cleanQuery, parsed.barrio]) ||
+    inferDepartmentFromPostalAndHints(rawPostalCode, [cleanQuery, parsed.barrio]) ||
+    '',
+    80
+  );
+  const postalCode = selectPostalForDepartment(rawPostalCode, department, [cleanQuery, parsed.barrio]);
   return normalizeLocationPrefill({
     lat: base.lat,
     lon: base.lon,
     barrio: parsed.barrio || base.barrio || 'Mendoza',
     calle: parsed.calle || base.calle || '',
     numeracion: parsed.numeracion || base.numeracion || '',
+    postal_code: postalCode,
+    department,
     label: cleanQuery,
     full_text: isMendozaText(cleanQuery) ? cleanQuery : `${cleanQuery}, Mendoza, Argentina`,
     ts: Date.now()
@@ -5460,6 +6416,7 @@ function normalizeArcGisSuggestion(candidate){
   try{
     if (!candidate || typeof candidate !== 'object') return null;
     const loc = candidate.location && typeof candidate.location === 'object' ? candidate.location : {};
+    const attrs = candidate.attributes && typeof candidate.attributes === 'object' ? candidate.attributes : {};
     const lat = Number(loc.y);
     const lon = Number(loc.x);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
@@ -5477,17 +6434,31 @@ function normalizeArcGisSuggestion(candidate){
     );
     const numeracion = sanitizeAddressNumber(parsed.numeracion || streetParsed.numeracion || '') || 'S/N';
     const barrio = sanitizeAddressText(parsed.barrio || String(addressLine.split(',')[1] || 'Mendoza'), 80);
+    const rawPostalCode = normalizePostalCodeToken(attrs.Postal || addressLine || '');
+    const department = sanitizeAddressText(
+      attrs.Subregion ||
+      attrs.District ||
+      findDepartmentInHints([addressLine, barrio, attrs.City, attrs.Subregion, attrs.District]) ||
+      inferDepartmentFromPostalAndHints(rawPostalCode, [addressLine, barrio, attrs.City]) ||
+      '',
+      80
+    );
+    const postalCode = selectPostalForDepartment(rawPostalCode, department, [addressLine, barrio, attrs.City, attrs.Subregion, attrs.District]);
     const label = sanitizeAddressLongText([calle, numeracion, barrio].filter(Boolean).join(', '), 120);
+    const addrType = sanitizeAddressText(attrs.Addr_type || attrs.Type || '', 40);
     return normalizeLocationPrefill({
       lat,
       lon,
       barrio: barrio || 'Mendoza',
       calle,
       numeracion,
+      postal_code: postalCode,
+      department,
       label,
       full_text: addressLine,
       source: 'arcgis',
       provider_score: Number(candidate.score),
+      provider_addr_type: addrType,
       ts: Date.now(),
     });
   }catch(_){ return null; }
@@ -5521,6 +6492,464 @@ async function fetchArcGisAddressSuggestions(query, { limit = 6, signal = null }
       .filter((item) => item && isMendozaPrefill(item));
   }catch(_){
     return [];
+  }
+}
+
+async function fetchArcGisStructuredAddressSuggestions({
+  street = '',
+  number = '',
+  department = '',
+  barrio = '',
+  postalCode = '',
+  limit = 8,
+  signal = null
+} = {}){
+  const cleanStreet = sanitizeAddressText(street || '', 90);
+  const cleanNumber = sanitizeAddressNumber(number || '');
+  if (!cleanStreet) return [];
+  try{
+    const cityHint = sanitizeAddressText(
+      department ||
+      findDepartmentInHints([department, barrio, cleanStreet]) ||
+      barrio ||
+      '',
+      80
+    );
+    const postalDigits = extractNormalizedPostalToken(postalCode);
+    const params = new URLSearchParams({
+      Address: [cleanStreet, cleanNumber].filter(Boolean).join(' ').trim(),
+      Region: 'Mendoza',
+      CountryCode: 'ARG',
+      f: 'pjson',
+      maxLocations: String(Math.min(10, Math.max(1, Number(limit) || 8))),
+      forStorage: 'false',
+      outFields: '*',
+      location: `${MENDOZA_DEFAULT_CENTER.lon},${MENDOZA_DEFAULT_CENTER.lat}`,
+      searchExtent: `${MENDOZA_BOUNDS.minLon},${MENDOZA_BOUNDS.minLat},${MENDOZA_BOUNDS.maxLon},${MENDOZA_BOUNDS.maxLat}`,
+    });
+    if (cityHint) params.set('City', cityHint);
+    if (postalDigits) params.set('Postal', postalDigits);
+    if (cleanNumber) params.set('category', 'Address');
+    const url = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?${params.toString()}`;
+    const res = await fetch(url, {
+      mode: 'cors',
+      signal,
+      headers: { 'Accept': 'application/json' }
+    });
+    if (!res || !res.ok) return [];
+    const data = await res.json().catch(() => null);
+    const list = Array.isArray(data && data.candidates) ? data.candidates : [];
+    return list
+      .map(normalizeArcGisSuggestion)
+      .filter((item) => item && isMendozaPrefill(item));
+  }catch(_){
+    return [];
+  }
+}
+
+async function fetchArcGisSuggestSuggestions(text, { limit = 10, signal = null } = {}){
+  const clean = sanitizeAddressLongText(text || '', 140);
+  if (!clean) return [];
+  try{
+    const params = new URLSearchParams({
+      f: 'pjson',
+      text: clean,
+      countryCode: 'ARG',
+      maxSuggestions: String(Math.min(15, Math.max(1, Number(limit) || 10))),
+      location: `${MENDOZA_DEFAULT_CENTER.lon},${MENDOZA_DEFAULT_CENTER.lat}`,
+      searchExtent: `${MENDOZA_BOUNDS.minLon},${MENDOZA_BOUNDS.minLat},${MENDOZA_BOUNDS.maxLon},${MENDOZA_BOUNDS.maxLat}`,
+    });
+    const url = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/suggest?${params.toString()}`;
+    const res = await fetch(url, {
+      mode: 'cors',
+      signal,
+      headers: { 'Accept': 'application/json' }
+    });
+    if (!res || !res.ok) return [];
+    const data = await res.json().catch(() => null);
+    const list = Array.isArray(data && data.suggestions) ? data.suggestions : [];
+    return list
+      .map((item) => ({
+        text: sanitizeAddressLongText(item && item.text || '', 180),
+        magicKey: String(item && item.magicKey || '').trim(),
+        isCollection: !!(item && item.isCollection)
+      }))
+      .filter((item) => !!item.text && !!item.magicKey && !item.isCollection);
+  }catch(_){
+    return [];
+  }
+}
+
+async function fetchArcGisCandidatesByMagicKey(suggestionText, magicKey, { limit = 5, signal = null } = {}){
+  const text = sanitizeAddressLongText(suggestionText || '', 180);
+  const key = String(magicKey || '').trim();
+  if (!text || !key) return [];
+  try{
+    const params = new URLSearchParams({
+      f: 'pjson',
+      singleLine: text,
+      magicKey: key,
+      outFields: '*',
+      forStorage: 'false',
+      maxLocations: String(Math.min(8, Math.max(1, Number(limit) || 5))),
+      location: `${MENDOZA_DEFAULT_CENTER.lon},${MENDOZA_DEFAULT_CENTER.lat}`,
+      searchExtent: `${MENDOZA_BOUNDS.minLon},${MENDOZA_BOUNDS.minLat},${MENDOZA_BOUNDS.maxLon},${MENDOZA_BOUNDS.maxLat}`,
+    });
+    const url = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?${params.toString()}`;
+    const res = await fetch(url, {
+      mode: 'cors',
+      signal,
+      headers: { 'Accept': 'application/json' }
+    });
+    if (!res || !res.ok) return [];
+    const data = await res.json().catch(() => null);
+    const list = Array.isArray(data && data.candidates) ? data.candidates : [];
+    return list
+      .map(normalizeArcGisSuggestion)
+      .filter((item) => item && isMendozaPrefill(item));
+  }catch(_){
+    return [];
+  }
+}
+
+function extractNumericHintsFromAddressText(text){
+  try{
+    const raw = String(text || '');
+    if (!raw) return [];
+    const matches = Array.from(raw.matchAll(/\b(\d{1,6})\b/g)).map((m) => String(m && m[1] || '').trim()).filter(Boolean);
+    const seen = new Set();
+    const out = [];
+    matches.forEach((token) => {
+      if (!token) return;
+      if (token.length === 4 && isKnownMendozaPostalDigits(token)) return;
+      const num = Number(token);
+      if (!Number.isFinite(num) || num <= 0) return;
+      if (seen.has(num)) return;
+      seen.add(num);
+      out.push(num);
+    });
+    return out.slice(0, 8);
+  }catch(_){ return []; }
+}
+
+async function fetchArcGisStreetNumberAnchors({
+  street = '',
+  targetNumber = '',
+  department = '',
+  postalCode = '',
+  signal = null
+} = {}){
+  const cleanStreet = sanitizeAddressText(street || '', 90);
+  const targetNum = Number(sanitizeAddressNumber(targetNumber || ''));
+  if (!cleanStreet || !Number.isFinite(targetNum) || targetNum <= 0) return [];
+  try{
+    const dep = sanitizeAddressText(department || 'Las Heras', 80);
+    const postal = normalizePostalCodeToken(postalCode || '');
+    const suggestQueries = [];
+    const addSuggestQuery = (value) => {
+      const v = sanitizeAddressLongText(value || '', 140);
+      if (!v) return;
+      if (!suggestQueries.includes(v)) suggestQueries.push(v);
+    };
+    addSuggestQuery(`${cleanStreet} ${targetNum}, ${dep}, Mendoza, Argentina`);
+    addSuggestQuery(`${cleanStreet}, ${dep}, Mendoza, Argentina`);
+    if (postal){
+      addSuggestQuery(`${cleanStreet} ${targetNum}, ${dep}, ${postal}, Mendoza, Argentina`);
+    }
+    const anchors = [];
+    const seen = new Set();
+    for (const suggestQuery of suggestQueries){
+      const suggestions = await fetchArcGisSuggestSuggestions(suggestQuery, { limit: 12, signal });
+      for (const suggestion of suggestions){
+        if (!suggestion || !suggestion.magicKey) continue;
+        const suggestionToken = normalizeRegionToken(suggestion.text || '');
+        const streetToken = normalizeRegionToken(cleanStreet);
+        if (streetToken && suggestionToken && !suggestionToken.includes(streetToken)) continue;
+        const numericHints = extractNumericHintsFromAddressText(suggestion.text || '');
+        if (!numericHints.length) continue;
+        const geocoded = await fetchArcGisCandidatesByMagicKey(suggestion.text, suggestion.magicKey, { limit: 3, signal });
+        for (const candidate of geocoded){
+          if (!candidate) continue;
+          if (!suggestionMatchesStreetToken(candidate, cleanStreet)) continue;
+          if (dep && !suggestionMatchesDepartmentToken(candidate, dep)) continue;
+          const lat = Number(candidate.lat);
+          const lon = Number(candidate.lon);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon) || !isMendozaPrefill(candidate)) continue;
+          const score = Number(candidate.provider_score);
+          numericHints.forEach((numberHint) => {
+            const key = `${numberHint}|${lat.toFixed(6)}|${lon.toFixed(6)}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            anchors.push({
+              number: Number(numberHint),
+              lat,
+              lon,
+              score: Number.isFinite(score) ? score : 0,
+              candidate
+            });
+          });
+        }
+      }
+    }
+    return anchors;
+  }catch(_){
+    return [];
+  }
+}
+
+function scorePrecisionCandidate(candidate, context = {}){
+  try{
+    if (!candidate || typeof candidate !== 'object') return -9999;
+    const streetToken = normalizeRegionToken(context.street || '');
+    const numberToken = sanitizeAddressNumber(context.number || '');
+    const departmentToken = normalizeDepartmentToken(context.department || '');
+    const postalToken = extractNormalizedPostalToken(context.postalCode || '');
+    const baseLat = Number(context.baseLat);
+    const baseLon = Number(context.baseLon);
+    const candidatePostalToken = extractNormalizedPostalToken(candidate.postal_code || candidate.postcode || candidate.full_text || candidate.label || '');
+    const candidateNumber = sanitizeAddressNumber(candidate.numeracion || '');
+    const candidateAddrType = normalizeArcGisAddrType(candidate.provider_addr_type || '');
+    const candidateText = normalizeRegionToken([candidate.full_text, candidate.label].filter(Boolean).join(' '));
+    let score = 0;
+
+    if (streetToken){
+      if (suggestionMatchesStreetToken(candidate, streetToken)) score += 26;
+      else score -= 24;
+    }
+    if (numberToken){
+      const numberInText = hasNormalizedWordToken(candidateText, numberToken);
+      if (candidateNumber && candidateNumber === numberToken) score += 30;
+      else if (numberInText) score += 22;
+      else if (/^s\/?n$/i.test(candidateNumber || '')) score -= 14;
+      else score -= 22;
+    }
+    if (departmentToken){
+      if (suggestionMatchesDepartmentToken(candidate, departmentToken)) score += 24;
+      else score -= 26;
+    }
+    if (postalToken){
+      if (candidatePostalToken && candidatePostalToken === postalToken) score += 10;
+      else if (candidatePostalToken) score -= 8;
+    }
+
+    if (candidateAddrType){
+      if (isArcGisPointAddressType(candidateAddrType)) score += 24;
+      else if (candidateAddrType.includes('streetname')) score += 3;
+      else if (candidateAddrType.includes('poi') || candidateAddrType.includes('locality') || candidateAddrType.includes('postal')) score -= 20;
+    }
+
+    if (normalizeRegionToken(candidate.source || '') === 'arcgis') score += 3;
+    const providerScore = Number(candidate.provider_score);
+    if (Number.isFinite(providerScore) && providerScore > 0){
+      score += Math.min(8, providerScore / 12);
+    }
+
+    const candLat = Number(candidate.lat);
+    const candLon = Number(candidate.lon);
+    if (Number.isFinite(baseLat) && Number.isFinite(baseLon) && Number.isFinite(candLat) && Number.isFinite(candLon)){
+      const km = haversineDistanceKm(baseLat, baseLon, candLat, candLon);
+      if (Number.isFinite(km)) score -= Math.min(18, km * 1.5);
+    }
+
+    return score;
+  }catch(_){ return -9999; }
+}
+
+function inferMapSeedPrecision(prefill, { street = '', number = '', department = '' } = {}){
+  try{
+    const result = Object.assign({}, prefill || {});
+    const hasNumberHint = !!sanitizeAddressNumber(number || '');
+    if (!hasNumberHint){
+      result.precision_level = result.precision_level || 'exact';
+      result.requires_pin_adjustment = false;
+      return result;
+    }
+    const numberHint = sanitizeAddressNumber(number || '');
+    const numberInResult = sanitizeAddressNumber(result.numeracion || '');
+    const resultText = normalizeRegionToken([result.full_text, result.label].filter(Boolean).join(' '));
+    const numberMatched = (!!numberInResult && numberInResult === numberHint) || hasNormalizedWordToken(resultText, numberHint);
+    const streetMatched = suggestionMatchesStreetToken(result, street || result.calle || '');
+    const departmentMatched = !department || suggestionMatchesDepartmentToken(result, department);
+    const addrType = normalizeArcGisAddrType(result.provider_addr_type || '');
+    const pointPrecision = isArcGisPointAddressType(addrType);
+    const exact = numberMatched && streetMatched && departmentMatched && (pointPrecision || normalizeRegionToken(result.source || '') !== 'arcgis');
+    result.precision_level = exact ? 'exact' : 'approx';
+    result.requires_pin_adjustment = !exact;
+    return result;
+  }catch(_){
+    return Object.assign({}, prefill || {}, { precision_level: 'approx', requires_pin_adjustment: true });
+  }
+}
+
+async function resolveAddressSeedForMap(prefill, queryHint = ''){
+  try{
+    const base = normalizeAddressSuggestion(prefill) || normalizeLocationPrefill(prefill || {});
+    const typedQuery = sanitizeAddressLongText(queryHint || base.query_hint || '', 120);
+    const parsedTyped = parseStreetAndNumber(typedQuery);
+    const streetHint = sanitizeAddressText(base.calle || parsedTyped.calle || '', 80);
+    const numberHint = sanitizeAddressNumber(
+      (base.numeracion && !/^s\/?n$/i.test(String(base.numeracion || ''))) ? base.numeracion : (parsedTyped.numeracion || '')
+    );
+    const departmentHint = sanitizeAddressText(
+      base.department ||
+      findDepartmentInHints([typedQuery, base.full_text, base.barrio, base.label]) ||
+      inferDepartmentFromPostalAndHints(base.postal_code, [typedQuery, base.full_text, base.barrio]) ||
+      '',
+      80
+    );
+    const postalHint = selectPostalForDepartment(
+      normalizePostalCodeToken(base.postal_code || typedQuery || base.full_text || ''),
+      departmentHint,
+      [typedQuery, base.full_text, base.barrio, departmentHint]
+    );
+    const hasStreetAndNumber = !!(streetHint && numberHint);
+    if (!hasStreetAndNumber){
+      return inferMapSeedPrecision(normalizeLocationPrefill(Object.assign({}, base, { query_hint: typedQuery || base.query_hint || '' })), {
+        street: streetHint,
+        number: numberHint,
+        department: departmentHint
+      });
+    }
+
+    const candidates = [];
+    const seen = new Set();
+    const pushCandidate = (item) => {
+      if (!item) return;
+      const normalized = normalizeLocationPrefill(item);
+      if (!isMendozaPrefill(normalized)) return;
+      const key = `${Number(normalized.lat || 0).toFixed(6)}|${Number(normalized.lon || 0).toFixed(6)}|${normalizeRegionToken(normalized.full_text || normalized.label || '')}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      candidates.push(normalized);
+    };
+
+    const arcStructured = await fetchArcGisStructuredAddressSuggestions({
+      street: streetHint,
+      number: numberHint,
+      department: departmentHint,
+      barrio: base.barrio,
+      postalCode: postalHint || base.postal_code,
+      limit: 10,
+    });
+    arcStructured.forEach(pushCandidate);
+
+    if (candidates.length < 4){
+      const canonical = sanitizeAddressLongText(
+        [streetHint, numberHint, departmentHint || base.barrio, postalHint, 'Mendoza', 'Argentina'].filter(Boolean).join(', '),
+        120
+      );
+      const fromSearch = await fetchAddressSuggestions(canonical, { limit: 10 }).catch(() => []);
+      (Array.isArray(fromSearch) ? fromSearch : []).forEach(pushCandidate);
+    }
+
+    pushCandidate(base);
+    const context = {
+      street: streetHint,
+      number: numberHint,
+      department: departmentHint,
+      postalCode: postalHint,
+      baseLat: base.lat,
+      baseLon: base.lon
+    };
+    let best = normalizeLocationPrefill(Object.assign({}, base, { query_hint: typedQuery || base.query_hint || '' }));
+    let bestScore = scorePrecisionCandidate(best, context);
+    for (const candidate of candidates){
+      const score = scorePrecisionCandidate(candidate, context);
+      if (score > bestScore){
+        best = candidate;
+        bestScore = score;
+      }
+    }
+
+    const merged = normalizeLocationPrefill(Object.assign({}, base, best, {
+      query_hint: typedQuery || best.query_hint || base.query_hint || '',
+      department: best.department || departmentHint,
+      postal_code: selectPostalForDepartment(best.postal_code || postalHint, best.department || departmentHint, [
+        typedQuery,
+        best.full_text,
+        best.barrio,
+        departmentHint
+      ])
+    }));
+
+    if (numberHint && /^s\/?n$/i.test(String(merged.numeracion || '')) && suggestionMatchesStreetToken(merged, streetHint)){
+      merged.numeracion = numberHint;
+      if (!merged.label || /s\/?n/i.test(String(merged.label || ''))){
+        merged.label = sanitizeAddressLongText([merged.calle, merged.numeracion, merged.barrio].filter(Boolean).join(', '), 120);
+      }
+      if (!merged.full_text || !hasNormalizedWordToken(merged.full_text, numberHint)){
+        merged.full_text = sanitizeAddressLongText(
+          [merged.calle, merged.numeracion, merged.barrio, merged.department, normalizePostalCodeToken(merged.postal_code || '')]
+            .filter(Boolean)
+            .join(', '),
+          200
+        );
+      }
+    }
+    let resolved = inferMapSeedPrecision(merged, {
+      street: streetHint,
+      number: numberHint,
+      department: departmentHint
+    });
+    if (numberHint && resolved && resolved.requires_pin_adjustment){
+      const anchors = await fetchArcGisStreetNumberAnchors({
+        street: streetHint,
+        targetNumber: numberHint,
+        department: departmentHint || 'Las Heras',
+        postalCode: postalHint || resolved.postal_code,
+      }).catch(() => []);
+      if (Array.isArray(anchors) && anchors.length){
+        const targetNum = Number(numberHint);
+        let bestAnchor = null;
+        for (const anchor of anchors){
+          const anchorNum = Number(anchor && anchor.number);
+          if (!Number.isFinite(anchorNum) || anchorNum <= 0) continue;
+          const anchorCandidate = anchor && anchor.candidate && typeof anchor.candidate === 'object'
+            ? anchor.candidate
+            : {};
+          const sameDepartment = suggestionMatchesDepartmentToken(anchorCandidate, departmentHint || 'Las Heras');
+          const sameStreet = suggestionMatchesStreetToken(anchorCandidate, streetHint);
+          if (!sameStreet) continue;
+          const numDiff = Math.abs(anchorNum - targetNum);
+          const providerScore = Number(anchor && anchor.score);
+          const anchorRank = (sameDepartment ? 50 : 0) - numDiff + (Number.isFinite(providerScore) ? Math.min(20, providerScore / 5) : 0);
+          if (!bestAnchor || anchorRank > bestAnchor.rank){
+            bestAnchor = { anchor, rank: anchorRank, numDiff };
+          }
+        }
+        if (bestAnchor && bestAnchor.anchor && bestAnchor.numDiff <= 350){
+          const anchorCandidate = bestAnchor.anchor.candidate || {};
+          resolved = normalizeLocationPrefill(Object.assign({}, resolved, anchorCandidate, {
+            lat: Number(bestAnchor.anchor.lat),
+            lon: Number(bestAnchor.anchor.lon),
+            calle: resolved.calle || anchorCandidate.calle || streetHint,
+            numeracion: numberHint,
+            department: resolved.department || anchorCandidate.department || departmentHint,
+            postal_code: selectPostalForDepartment(
+              resolved.postal_code || anchorCandidate.postal_code || postalHint,
+              resolved.department || anchorCandidate.department || departmentHint,
+              [resolved.full_text, resolved.barrio, departmentHint, postalHint]
+            ),
+            query_hint: typedQuery || resolved.query_hint || '',
+            source: 'arcgis',
+            precision_level: 'approx',
+            requires_pin_adjustment: true,
+          }));
+          const postalText = normalizePostalCodeToken(resolved.postal_code || '');
+          resolved.full_text = sanitizeAddressLongText(
+            [resolved.calle, resolved.numeracion, resolved.barrio, resolved.department, postalText].filter(Boolean).join(', '),
+            200
+          );
+          resolved.label = sanitizeAddressLongText(
+            [resolved.calle, resolved.numeracion, resolved.barrio].filter(Boolean).join(', '),
+            120
+          );
+        }
+      }
+    }
+    return resolved;
+  }catch(_){
+    return normalizeAddressSuggestion(prefill) || normalizeLocationPrefill(prefill || {});
   }
 }
 
@@ -5591,39 +7020,99 @@ async function fetchAddressSuggestions(query, { limit = 6 } = {}){
     const out = [];
     const seen = new Set();
     const maxLimit = Math.min(12, Math.max(3, Number(limit) || 6));
-    for (const q of queries){
-      if (requestId !== addressSearchActiveRequestId) return [];
-      const params = new URLSearchParams({
-        format: 'jsonv2',
-        addressdetails: '1',
-        limit: String(maxLimit),
-        countrycodes: 'ar',
-        bounded: '1',
-        viewbox: `${MENDOZA_BOUNDS.minLon},${MENDOZA_BOUNDS.maxLat},${MENDOZA_BOUNDS.maxLon},${MENDOZA_BOUNDS.minLat}`,
-        'accept-language': 'es',
-        q
-      });
-      const url = `https://nominatim.openstreetmap.org/search?${params.toString()}`;
-      const res = await fetch(url, {
-        mode: 'cors',
-        signal: addressSearchAbortController.signal,
-        headers: { 'Accept': 'application/json' }
-      });
-      if (requestId !== addressSearchActiveRequestId) return [];
-      if (!res || !res.ok) continue;
-      const data = await res.json().catch(() => []);
-      if (!Array.isArray(data) || !data.length) continue;
-      data.forEach((item) => {
-        const normalized = normalizeAddressSuggestion(item);
-        if (!normalized) return;
-        if (!isMendozaSuggestion(item, normalized)) return;
-        const key = `${Number(normalized.lat).toFixed(6)}|${Number(normalized.lon).toFixed(6)}|${normalizeRegionToken(normalized.full_text || normalized.label || '')}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-        out.push(normalized);
-      });
-      if (out.length >= maxLimit) break;
+    const queryToken = normalizeRegionToken(clean);
+    const queryStreetInfo = parseStreetAndNumber(clean);
+    const queryNumberHint = sanitizeAddressNumber(queryStreetInfo.numeracion || '');
+    const queryStreetHintToken = normalizeRegionToken(queryStreetInfo.calle || '');
+    const queryPostalCode = normalizePostalCodeToken(clean);
+    const queryPostalDigits = extractNormalizedPostalToken(queryPostalCode);
+    const explicitDepartments = extractDepartmentsFromQueryText(queryToken);
+    const hasStreetAndNumber = !!(queryStreetHintToken && queryNumberHint);
+    let preferredDepartments = Array.from(new Set(
+      explicitDepartments.length ? explicitDepartments : collectAddressSearchPreferredDepartments(clean)
+    )).filter(Boolean);
+    if (!preferredDepartments.length && !explicitDepartments.length && hasStreetAndNumber){
+      preferredDepartments = ['Las Heras'];
     }
+    const requiredDepartments = Array.from(new Set(
+      explicitDepartments.length ? explicitDepartments : getDepartmentsForPostalToken(queryPostalCode)
+    )).filter(Boolean);
+    const enforcePostalStrictly = !explicitDepartments.length;
+    const shouldForceDepartmentDiversity = !explicitDepartments.length && hasStreetAndNumber;
+    const poolLimit = Math.min(
+      20,
+      Math.max(maxLimit, shouldForceDepartmentDiversity ? (maxLimit + 6) : maxLimit)
+    );
+    const pushUnique = (item) => {
+      if (!item) return;
+      const labelToken = normalizeRegionToken(item.full_text || item.label || '');
+      let resolvedPostalCode = normalizePostalCodeToken(item.postal_code || item.postcode || item.zip_code || item.zip || item.full_text || item.label || item.query_hint || '');
+      if (!resolvedPostalCode && queryPostalCode) resolvedPostalCode = queryPostalCode;
+      let resolvedDepartment = String(
+        item.department ||
+        findDepartmentInHints([item.query_hint, item.full_text, item.label, item.barrio, clean]) ||
+        inferDepartmentFromPostalAndHints(resolvedPostalCode, [item.full_text, item.label, item.barrio, clean]) ||
+        ''
+      ).trim();
+      if (!resolvedDepartment && requiredDepartments.length === 1){
+        resolvedDepartment = String(requiredDepartments[0] || '').trim();
+      }
+      resolvedPostalCode = selectPostalForDepartment(resolvedPostalCode, resolvedDepartment, [
+        item.query_hint,
+        item.full_text,
+        item.label,
+        item.barrio,
+        clean
+      ]);
+      const itemPostalDigits = extractNormalizedPostalToken(resolvedPostalCode);
+      const itemDepartment = normalizeRegionToken(resolvedDepartment);
+      if (enforcePostalStrictly && queryPostalDigits && itemPostalDigits && queryPostalDigits !== itemPostalDigits){
+        return;
+      }
+      if (requiredDepartments.length){
+        const hasDepartment = requiredDepartments.some((dep) => {
+          const depToken = normalizeRegionToken(dep);
+          return depToken && (labelToken.includes(depToken) || itemDepartment === depToken);
+        });
+        if (!hasDepartment && !(queryPostalDigits && itemPostalDigits && queryPostalDigits === itemPostalDigits)){
+          return;
+        }
+      }
+      const preparedItem = normalizeLocationPrefill(Object.assign({}, item, {
+        postal_code: resolvedPostalCode,
+        department: resolvedDepartment,
+        query_hint: clean
+      }));
+      if (queryNumberHint && /^s\/?n$/i.test(String(preparedItem.numeracion || ''))){
+        const itemStreetToken = normalizeRegionToken(preparedItem.calle || '');
+        if (queryStreetHintToken && itemStreetToken &&
+          (itemStreetToken.includes(queryStreetHintToken) || queryStreetHintToken.includes(itemStreetToken))){
+          preparedItem.numeracion = queryNumberHint;
+          const streetForText = sanitizeAddressText(preparedItem.calle || '', 80);
+          const neighborhoodForText = sanitizeAddressText(preparedItem.barrio || '', 80);
+          const departmentForText = sanitizeAddressText(preparedItem.department || '', 80);
+          const postalForText = normalizePostalCodeToken(preparedItem.postal_code || '');
+          if (!preparedItem.full_text || !hasNormalizedWordToken(preparedItem.full_text, queryNumberHint)){
+            preparedItem.full_text = sanitizeAddressLongText(
+              [streetForText, preparedItem.numeracion, neighborhoodForText, departmentForText, postalForText]
+                .filter(Boolean)
+                .join(', '),
+              200
+            );
+          }
+          if (!preparedItem.label || /s\/?n/i.test(String(preparedItem.label || ''))){
+            preparedItem.label = sanitizeAddressLongText(
+              [preparedItem.calle, preparedItem.numeracion, preparedItem.barrio].filter(Boolean).join(', '),
+              120
+            );
+          }
+        }
+      }
+      const key = `${Number(preparedItem.lat).toFixed(6)}|${Number(preparedItem.lon).toFixed(6)}|${normalizeRegionToken(preparedItem.full_text || preparedItem.label || '')}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(preparedItem);
+    };
     const arcQueries = [];
     const pushArcQuery = (value) => {
       const normalized = sanitizeAddressLongText(value || '', 120);
@@ -5631,28 +7120,124 @@ async function fetchAddressSuggestions(query, { limit = 6 } = {}){
       if (!arcQueries.includes(normalized)) arcQueries.push(normalized);
     };
     pushArcQuery(clean);
-    queries.slice(0, 3).forEach(pushArcQuery);
+    const titleCase = toAddressTitleCase(clean);
+    if (titleCase && titleCase !== clean) pushArcQuery(titleCase);
+    if (shouldForceDepartmentDiversity){
+      pushArcQuery(`${clean}, Las Heras, Mendoza, Argentina`);
+      const streetTitleForLh = toAddressTitleCase(queryStreetInfo.calle || '');
+      if (streetTitleForLh){
+        const streetWithNumberForLh = [streetTitleForLh, queryNumberHint].filter(Boolean).join(' ').trim();
+        if (streetWithNumberForLh) pushArcQuery(`${streetWithNumberForLh}, Las Heras, Mendoza, Argentina`);
+      }
+    }
+    preferredDepartments.forEach((dep) => {
+      const depLabel = sanitizeAddressText(dep || '', 80);
+      if (!depLabel) return;
+      pushArcQuery(`${clean}, ${depLabel}, Mendoza, Argentina`);
+      const streetTitle = toAddressTitleCase(queryStreetInfo.calle || '');
+      if (streetTitle){
+        const streetWithNumber = [streetTitle, queryNumberHint].filter(Boolean).join(' ').trim();
+        if (streetWithNumber) pushArcQuery(`${streetWithNumber}, ${depLabel}, Mendoza, Argentina`);
+        pushArcQuery(`${streetTitle}, ${depLabel}, Mendoza, Argentina`);
+      }
+    });
+    queries.slice(0, 6).forEach(pushArcQuery);
     for (let idx = 0; idx < arcQueries.length; idx += 1){
       if (requestId !== addressSearchActiveRequestId) return [];
       const q = arcQueries[idx];
       const arcItems = await fetchArcGisAddressSuggestions(q, {
-        limit: maxLimit,
+        limit: poolLimit,
         signal: addressSearchAbortController ? addressSearchAbortController.signal : undefined
       });
-      arcItems.forEach((item) => {
-        const key = `${Number(item.lat).toFixed(6)}|${Number(item.lon).toFixed(6)}|${normalizeRegionToken(item.full_text || item.label || '')}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-        out.push(item);
-      });
-      if (out.length >= maxLimit && idx > 0) break;
+      arcItems.forEach(pushUnique);
+      if (out.length >= poolLimit && idx > 1) break;
     }
-    out.sort((a, b) => {
+    if (out.length < maxLimit || shouldForceDepartmentDiversity){
+      const nominatimQueries = [];
+      const pushNominatimQuery = (value) => {
+        const normalized = sanitizeAddressLongText(value || '', 120);
+        if (!normalized) return;
+        if (!nominatimQueries.includes(normalized)) nominatimQueries.push(normalized);
+      };
+      if (shouldForceDepartmentDiversity){
+        pushNominatimQuery(`${clean}, Las Heras, Mendoza, Argentina`);
+        const streetTitleForLh = toAddressTitleCase(queryStreetInfo.calle || '');
+        if (streetTitleForLh){
+          const streetWithNumberForLh = [streetTitleForLh, queryNumberHint].filter(Boolean).join(' ').trim();
+          if (streetWithNumberForLh) pushNominatimQuery(`${streetWithNumberForLh}, Las Heras, Mendoza, Argentina`);
+        }
+      }
+      preferredDepartments.forEach((dep) => {
+        const depLabel = sanitizeAddressText(dep || '', 80);
+        if (!depLabel) return;
+        pushNominatimQuery(`${clean}, ${depLabel}, Mendoza, Argentina`);
+      });
+      queries.forEach(pushNominatimQuery);
+      for (const q of nominatimQueries){
+        if (requestId !== addressSearchActiveRequestId) return [];
+        const params = new URLSearchParams({
+          format: 'jsonv2',
+          addressdetails: '1',
+          limit: String(poolLimit),
+          countrycodes: 'ar',
+          bounded: '1',
+          viewbox: `${MENDOZA_BOUNDS.minLon},${MENDOZA_BOUNDS.maxLat},${MENDOZA_BOUNDS.maxLon},${MENDOZA_BOUNDS.minLat}`,
+          'accept-language': 'es',
+          q
+        });
+        const url = `https://nominatim.openstreetmap.org/search?${params.toString()}`;
+        const res = await fetch(url, {
+          mode: 'cors',
+          signal: addressSearchAbortController.signal,
+          headers: { 'Accept': 'application/json' }
+        });
+        if (requestId !== addressSearchActiveRequestId) return [];
+        if (!res || !res.ok) continue;
+        const data = await res.json().catch(() => []);
+        if (!Array.isArray(data) || !data.length) continue;
+        data.forEach((item) => {
+          const normalized = normalizeAddressSuggestion(item);
+          if (!normalized) return;
+          if (!isMendozaSuggestion(item, normalized)) return;
+          pushUnique(normalized);
+        });
+        if (out.length >= poolLimit) break;
+        if (!shouldForceDepartmentDiversity && out.length >= maxLimit) break;
+      }
+    }
+    const compareByScore = (a, b) => {
       const scoreA = buildSuggestionRankingScore(clean, a);
       const scoreB = buildSuggestionRankingScore(clean, b);
       if (scoreA !== scoreB) return scoreB - scoreA;
       return 0;
-    });
+    };
+    out.sort(compareByScore);
+    if (shouldForceDepartmentDiversity){
+      const preferredDepartment = preferredDepartments.find((dep) => normalizeDepartmentToken(dep) === 'las heras') ||
+        preferredDepartments[0] ||
+        '';
+      const topResults = out.slice(0, maxLimit);
+      const preferredStreetMatch = out.find((item) =>
+        suggestionMatchesDepartmentToken(item, preferredDepartment) &&
+        suggestionMatchesStreetToken(item, queryStreetHintToken)
+      ) || null;
+      if (preferredStreetMatch){
+        const withoutPreferredFirst = topResults.filter((item) => item !== preferredStreetMatch);
+        const reordered = [preferredStreetMatch].concat(withoutPreferredFirst);
+        return reordered.slice(0, maxLimit);
+      }
+      const hasPreferredInTop = topResults.some((item) => suggestionMatchesDepartmentToken(item, preferredDepartment));
+      if (!hasPreferredInTop){
+        const fallbackMatch = out.slice(maxLimit).find((item) => suggestionMatchesDepartmentToken(item, preferredDepartment));
+        if (fallbackMatch){
+          if (topResults.length >= maxLimit) topResults[topResults.length - 1] = fallbackMatch;
+          else topResults.push(fallbackMatch);
+          topResults.sort(compareByScore);
+          return topResults.slice(0, maxLimit);
+        }
+      }
+      return topResults;
+    }
     return out.slice(0, maxLimit);
   }catch(_){
     return [];
@@ -5720,7 +7305,10 @@ function showAddressSearchModal({
             return;
           }
           const first = optionsCache[0];
-          if (first) closeWith(first);
+          if (first){
+            const typed = sanitizeAddressLongText(input && input.value ? input.value : '', 120);
+            closeWith(Object.assign({}, first, { query_hint: typed }));
+          }
         }
       };
       window.addEventListener('keydown', onKey);
@@ -5770,7 +7358,8 @@ function showAddressSearchModal({
         if (!btn) return;
         const idx = Number(btn.getAttribute('data-index'));
         if (!Number.isFinite(idx) || !optionsCache[idx]) return;
-        closeWith(optionsCache[idx]);
+        const typed = sanitizeAddressLongText(input && input.value ? input.value : '', 120);
+        closeWith(Object.assign({}, optionsCache[idx], { query_hint: typed }));
       });
 
       const executeSearch = async (query) => {
@@ -5781,9 +7370,29 @@ function showAddressSearchModal({
           return;
         }
         if (statusEl) statusEl.textContent = 'Buscando direcciones en Mendoza...';
-        const result = await fetchAddressSuggestions(q, { limit: 7 });
-        if (result.length){
-          renderList(result);
+        let result = await fetchAddressSuggestions(q, { limit: 7 });
+        if (!result.length){
+          const titleCase = toAddressTitleCase(q);
+          if (titleCase && titleCase !== q){
+            result = await fetchAddressSuggestions(titleCase, { limit: 7 });
+          }
+        }
+        const accountId = getCurrentAccountStorageId();
+        const localMatches = getSavedAddressSuggestionMatches(q, { limit: 4, accountId });
+        const merged = [];
+        const seen = new Set();
+        const pushUnique = (item) => {
+          if (!item) return;
+          const key = `${normalizeRegionToken(item.full_text || item.label || '')}|${Number(item.lat || 0).toFixed(6)}|${Number(item.lon || 0).toFixed(6)}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          merged.push(item);
+        };
+        localMatches.forEach(pushUnique);
+        (result || []).forEach(pushUnique);
+        const finalResult = merged.slice(0, 7);
+        if (finalResult.length){
+          renderList(finalResult);
           if (statusEl) statusEl.textContent = 'Selecciona una dirección para continuar.';
         } else {
           renderList([]);
@@ -5842,6 +7451,7 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' 
           </div>
           <div id="__addr_map_canvas" class="__addr_map_canvas" aria-label="Mapa para confirmar ubicación"></div>
           <div class="__addr_map_help">Podés mover el pin para ajustar la ubicación exacta.</div>
+          <div id="__addr_map_precision" class="__addr_map_precision"></div>
           <div class="__addr_map_address_wrap">
             <input id="__addr_map_address" class="__addr_map_address" type="text" readonly />
           </div>
@@ -5855,6 +7465,7 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' 
       const dialog = overlay.querySelector('.__dialog');
       const mapCanvas = overlay.querySelector('#__addr_map_canvas');
       const addressInput = overlay.querySelector('#__addr_map_address');
+      const precisionHintEl = overlay.querySelector('#__addr_map_precision');
       const useCurrentBtn = overlay.querySelector('[data-action="use_current"]');
       let currentPrefill = normalizeLocationPrefill(initial);
       let currentIsMendoza = isMendozaPrefill(currentPrefill);
@@ -5864,7 +7475,19 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' 
         const value = buildCompactLocationLabel(data, 4) || [data?.calle, data?.numeracion, data?.barrio].filter(Boolean).join(', ');
         if (addressInput) addressInput.value = (value || 'Ubicación seleccionada') + (currentIsMendoza ? '' : ' (Fuera de Mendoza)');
       };
+      const setPrecisionHint = (data) => {
+        if (!precisionHintEl) return;
+        const needsAdjust = !!(data && data.requires_pin_adjustment);
+        if (!needsAdjust){
+          precisionHintEl.classList.remove('show');
+          precisionHintEl.textContent = '';
+          return;
+        }
+        precisionHintEl.classList.add('show');
+        precisionHintEl.textContent = 'Ubicación aproximada para esa numeración. Mueve el pin hasta la puerta exacta antes de confirmar.';
+      };
       setAddressLabel(currentPrefill);
+      setPrecisionHint(currentPrefill);
 
       const cleanupMap = () => {
         try{
@@ -5894,14 +7517,48 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' 
       const applyFromMapPoint = async (lat, lon) => {
         try{
           const requestId = ++reverseRequestId;
+          const previousPostal = normalizePostalCodeToken(currentPrefill?.postal_code || currentPrefill?.query_hint || '');
+          const previousDepartment = sanitizeAddressText(
+            currentPrefill?.department ||
+            findDepartmentInHints([currentPrefill?.query_hint, currentPrefill?.full_text, currentPrefill?.barrio]) ||
+            inferDepartmentFromPostalAndHints(previousPostal, [currentPrefill?.barrio, currentPrefill?.full_text, currentPrefill?.query_hint]) ||
+            '',
+            80
+          );
+          const previousQueryHint = sanitizeAddressLongText(currentPrefill?.query_hint || '', 120);
           const reverse = await reverseGeocodeLocation(lat, lon);
           if (requestId !== reverseRequestId) return;
           currentPrefill = reverse
             ? normalizeLocationPrefill(Object.assign({}, currentPrefill || {}, reverse, { lat, lon, ts: Date.now() }))
             : normalizeLocationPrefill(Object.assign({}, currentPrefill || {}, { lat, lon, ts: Date.now() }));
+          if (!currentPrefill.query_hint && previousQueryHint) currentPrefill.query_hint = previousQueryHint;
+          const resolvedDepartment = sanitizeAddressText(
+            currentPrefill.department ||
+            previousDepartment ||
+            findDepartmentInHints([currentPrefill.query_hint, currentPrefill.full_text, currentPrefill.barrio, previousQueryHint]) ||
+            inferDepartmentFromPostalAndHints(currentPrefill.postal_code, [currentPrefill.barrio, currentPrefill.full_text, previousQueryHint]) ||
+            '',
+            80
+          );
+          const resolvedPostal = selectPostalForDepartment(currentPrefill.postal_code, resolvedDepartment, [
+            currentPrefill.query_hint,
+            currentPrefill.full_text,
+            currentPrefill.barrio,
+            previousQueryHint
+          ]);
+          const previousPostalSafe = selectPostalForDepartment(previousPostal, resolvedDepartment || previousDepartment, [
+            previousQueryHint,
+            currentPrefill.full_text,
+            currentPrefill.barrio
+          ]);
+          currentPrefill.department = resolvedDepartment;
+          currentPrefill.postal_code = resolvedPostal || previousPostalSafe || '';
           if (!currentPrefill.numeracion) currentPrefill.numeracion = 'S/N';
+          currentPrefill.requires_pin_adjustment = false;
+          currentPrefill.precision_level = 'exact';
           currentIsMendoza = isMendozaPrefill(currentPrefill);
           setAddressLabel(currentPrefill);
+          setPrecisionHint(currentPrefill);
         }catch(_){ }
       };
 
@@ -5958,8 +7615,11 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' 
         }
         const point = getAuthLocationLatLon(loc);
         currentPrefill = loc;
+        currentPrefill.requires_pin_adjustment = false;
+        currentPrefill.precision_level = 'exact';
         currentIsMendoza = isMendozaPrefill(currentPrefill);
         setAddressLabel(currentPrefill);
+        setPrecisionHint(currentPrefill);
         if (point && addressPickerMapMarker && addressPickerMapInstance){
           addressPickerMapMarker.setLatLng([point.lat, point.lon]);
           addressPickerMapInstance.setView([point.lat, point.lon], 17, { animate: true });
@@ -5971,6 +7631,10 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' 
       overlay.querySelector('[data-action="confirm"]')?.addEventListener('click', () => {
         if (!currentIsMendoza){
           try{ showAlert('Solo se permiten direcciones de Mendoza.', 'warning'); }catch(_){ }
+          return;
+        }
+        if (currentPrefill && currentPrefill.requires_pin_adjustment){
+          try{ showAlert('La ubicación es aproximada. Ajusta el pin sobre la puerta exacta para continuar.', 'warning'); }catch(_){ }
           return;
         }
         if (!currentPrefill.numeracion) currentPrefill.numeracion = 'S/N';
@@ -6003,7 +7667,10 @@ async function pickAddressWithSearchAndMap({
   const picked = await showAddressSearchModal({ title, subtitle, initialQuery });
   if (!picked) return null;
   const wantsManualMap = !!(picked && picked.__manual_map);
-  const mapSeed = wantsManualMap ? getManualMapSeedPrefill(picked.query || initialQuery || '') : picked;
+  let mapSeed = wantsManualMap ? getManualMapSeedPrefill(picked.query || initialQuery || '') : picked;
+  if (!wantsManualMap){
+    mapSeed = await resolveAddressSeedForMap(mapSeed, picked.query_hint || initialQuery || '');
+  }
   const confirmed = await showAddressMapConfirmModal(mapSeed, { title: 'Confirma tu dirección' });
   if (!confirmed) return null;
   const payload = locationPrefillToAddress(confirmed, { label: '' });
@@ -6152,6 +7819,8 @@ function showDeliveryAddressModal(prefill = {}){
         barrio: prefill?.barrio || defaultAddress.barrio || cached.barrio || '',
         calle: prefill?.calle || defaultAddress.calle || cached.calle || '',
         numeracion: prefill?.numeracion || prefill?.numero || defaultAddress.numeracion || cached.numeracion || '',
+        postal_code: prefill?.postal_code || defaultAddress.postal_code || cached.postal_code || '',
+        department: prefill?.department || defaultAddress.department || cached.department || '',
         label: prefill?.label || defaultAddress.label || '',
         full_text: prefill?.full_text || cached.full_text || '',
         lat: prefill?.lat || cached.lat || null,
@@ -6286,6 +7955,9 @@ function showDeliveryAddressModal(prefill = {}){
             barrio: out.barrio,
             calle: out.calle,
             numeracion: out.numeracion,
+            postal_code: out.postal_code,
+            department: out.department,
+            query_hint: out.query_hint,
             full_text: out.full_text,
             lat: out.lat,
             lon: out.lon
@@ -6482,6 +8154,9 @@ function openAccountModal(){
           barrio: picked.barrio,
           calle: picked.calle,
           numeracion: picked.numeracion,
+          postal_code: picked.postal_code,
+          department: picked.department,
+          query_hint: picked.query_hint || addr.query_hint || '',
           full_text: picked.full_text,
           lat: picked.lat,
           lon: picked.lon
@@ -6512,6 +8187,9 @@ function openAccountModal(){
           barrio: addr.barrio,
           calle: addr.calle,
           numeracion: addr.numeracion,
+          postal_code: addr.postal_code,
+          department: addr.department,
+          query_hint: addr.query_hint || '',
           full_text: addr.full_text,
           lat: addr.lat,
           lon: addr.lon
@@ -6563,6 +8241,9 @@ function openAccountModal(){
           barrio: picked.barrio,
           calle: picked.calle,
           numeracion: picked.numeracion,
+          postal_code: picked.postal_code,
+          department: picked.department,
+          query_hint: picked.query_hint || '',
           full_text: picked.full_text,
           lat: picked.lat,
           lon: picked.lon
@@ -6716,7 +8397,8 @@ function showGuestModal(){
             label: o.name ? ('Contacto ' + o.name) : 'Invitado',
             barrio: clean.barrio,
             calle: clean.calle,
-            numeracion: clean.numeracion
+            numeracion: clean.numeracion,
+            query_hint: `${clean.calle} ${clean.numeracion}, ${clean.barrio}`
           }, { accountId: getCurrentAccountStorageId(), setDefault: true });
           if (persisted && persisted.id) setLastUsedAddressId(persisted.id, getCurrentAccountStorageId());
         }catch(_){ }
