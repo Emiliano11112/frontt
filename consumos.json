@@ -1,0 +1,10 @@
+[
+  {
+    "id": "consumo-1",
+    "name": "Consumo inmediato ejemplo",
+    "productId": 1,
+    "type": "percent",
+    "value": 30,
+    "description": "Oferta de consumo inmediato: 30% off"
+  }
+]
