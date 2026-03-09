@@ -4,6 +4,7 @@ const API_ORIGIN = new URL(API_URL).origin;
 // Auth endpoints
 const AUTH_REGISTER = `${API_ORIGIN}/auth/register`;
 const AUTH_TOKEN = `${API_ORIGIN}/auth/token`;
+const AUTH_ADDRESSES = `${API_ORIGIN}/auth/addresses`;
 const CUSTOMER_TYPE_STORAGE_KEY = 'catalog:customer_type_v1';
 const CUSTOMER_TYPE_DEFAULT = 'mayorista';
 
@@ -169,6 +170,10 @@ const LOCATION_PREFILL_CACHE_KEY = 'catalog:location_prefill_v1';
 const LOCATION_PROMPT_SESSION_KEY = 'catalog:location_prompt_attempted_v1';
 const ADDRESS_BOOK_STORAGE_PREFIX = 'catalog:address_book_v1:';
 const LAST_USED_ADDRESS_STORAGE_PREFIX = 'catalog:last_used_address_v1:';
+const ADDRESS_BOOK_SYNC_DEBOUNCE_MS = 500;
+let addressBookSyncTimer = null;
+let addressBookSyncPromise = null;
+let addressBookHydratePromise = null;
 const ALLOWED_ADDRESS_REGION = 'mendoza';
 const MENDOZA_BOUNDS = Object.freeze({
   minLat: -37.7,
@@ -5554,13 +5559,107 @@ function loadAddressBook(accountId = null){
     return { defaultId, addresses: normalized };
   }catch(_){ return { defaultId: null, addresses: [] }; }
 }
-function saveAddressBook(book, accountId = null){
+function normalizeAddressBookForSync(book){
+  const addresses = Array.isArray(book?.addresses) ? book.addresses.map(normalizeAddressEntry).filter(Boolean) : [];
+  let defaultId = book && book.defaultId ? String(book.defaultId) : null;
+  if (!defaultId && addresses.length) defaultId = addresses[0].id;
+  if (defaultId && !addresses.find(a => a.id === defaultId)) defaultId = addresses.length ? addresses[0].id : null;
+  return { defaultId, addresses };
+}
+async function pushAddressBookToServer(accountId = null, bookOverride = null){
+  const token = getToken();
+  if (!token) return false;
+  const payload = normalizeAddressBookForSync(bookOverride || loadAddressBook(accountId));
   try{
-    const addresses = Array.isArray(book?.addresses) ? book.addresses.map(normalizeAddressEntry).filter(Boolean) : [];
-    let defaultId = book && book.defaultId ? String(book.defaultId) : null;
-    if (!defaultId && addresses.length) defaultId = addresses[0].id;
-    if (defaultId && !addresses.find(a => a.id === defaultId)) defaultId = addresses.length ? addresses[0].id : null;
+    const res = await fetchWithTimeout(AUTH_ADDRESSES, {
+      method: 'PUT',
+      mode: 'cors',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        default_id: payload.defaultId || null,
+        addresses: payload.addresses || []
+      })
+    }, 10000);
+    return !!(res && res.ok);
+  }catch(_){ return false; }
+}
+function scheduleAddressBookSync(accountId = null){
+  if (!getToken()) return;
+  if (addressBookSyncTimer) clearTimeout(addressBookSyncTimer);
+  addressBookSyncTimer = setTimeout(() => {
+    const targetAccount = accountId || getCurrentAccountStorageId();
+    addressBookSyncPromise = pushAddressBookToServer(targetAccount).catch(() => false).finally(() => {
+      addressBookSyncPromise = null;
+    });
+  }, ADDRESS_BOOK_SYNC_DEBOUNCE_MS);
+}
+function mergeAddressBooks(localBook, remoteBook){
+  const local = normalizeAddressBookForSync(localBook || {});
+  const remote = normalizeAddressBookForSync(remoteBook || {});
+  const merged = {
+    defaultId: remote.defaultId || local.defaultId || null,
+    addresses: []
+  };
+  const seen = new Set();
+  const push = (entry) => {
+    const normalized = normalizeAddressEntry(entry);
+    if (!normalized) return;
+    const key = String(normalized.id || '').trim() ||
+      `${normalizeRegionToken(normalized.barrio)}|${normalizeRegionToken(normalized.calle)}|${normalizeRegionToken(normalized.numeracion)}`;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    merged.addresses.push(normalized);
+  };
+  (remote.addresses || []).forEach(push);
+  (local.addresses || []).forEach(push);
+  if (!merged.defaultId && merged.addresses.length) merged.defaultId = merged.addresses[0].id;
+  if (merged.defaultId && !merged.addresses.find(a => String(a.id) === String(merged.defaultId))){
+    merged.defaultId = merged.addresses.length ? merged.addresses[0].id : null;
+  }
+  return merged;
+}
+async function hydrateAddressBookFromServer(accountId = null){
+  if (!getToken()) return false;
+  if (addressBookHydratePromise) return addressBookHydratePromise;
+  const targetAccount = accountId || getCurrentAccountStorageId();
+  addressBookHydratePromise = (async () => {
+    try{
+      const res = await fetchWithTimeout(AUTH_ADDRESSES, {
+        mode: 'cors',
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      }, 10000);
+      if (!res || !res.ok) return false;
+      const data = await res.json().catch(() => null);
+      if (!data || typeof data !== 'object') return false;
+      const remoteBook = {
+        defaultId: String(data.default_id || data.defaultId || '').trim() || null,
+        addresses: Array.isArray(data.addresses) ? data.addresses : []
+      };
+      const localBook = loadAddressBook(targetAccount);
+      const merged = mergeAddressBooks(localBook, remoteBook);
+      saveAddressBook(merged, targetAccount, { skipRemoteSync: true });
+      // Ensure server side gets any local address not previously synced.
+      scheduleAddressBookSync(targetAccount);
+      return true;
+    }catch(_){ return false; }
+    finally{
+      addressBookHydratePromise = null;
+    }
+  })();
+  return addressBookHydratePromise;
+}
+function saveAddressBook(book, accountId = null, options = {}){
+  try{
+    const normalized = normalizeAddressBookForSync(book);
+    const addresses = normalized.addresses;
+    const defaultId = normalized.defaultId;
     localStorage.setItem(getAddressBookStorageKey(accountId), JSON.stringify({ defaultId, addresses }));
+    if (!options || options.skipRemoteSync !== true){
+      scheduleAddressBookSync(accountId);
+    }
   }catch(_){ }
 }
 function upsertAddressInBook(entry, { accountId = null, setDefault = false } = {}){
@@ -7031,14 +7130,15 @@ async function fetchAddressSuggestions(query, { limit = 6 } = {}){
     let preferredDepartments = Array.from(new Set(
       explicitDepartments.length ? explicitDepartments : collectAddressSearchPreferredDepartments(clean)
     )).filter(Boolean);
-    if (!preferredDepartments.length && !explicitDepartments.length && hasStreetAndNumber){
-      preferredDepartments = ['Las Heras'];
-    }
     const requiredDepartments = Array.from(new Set(
       explicitDepartments.length ? explicitDepartments : getDepartmentsForPostalToken(queryPostalCode)
     )).filter(Boolean);
+    if (!preferredDepartments.length && requiredDepartments.length){
+      preferredDepartments = requiredDepartments.slice(0, 3);
+    }
     const enforcePostalStrictly = !explicitDepartments.length;
-    const shouldForceDepartmentDiversity = !explicitDepartments.length && hasStreetAndNumber;
+    // Avoid hardcoded department bias (e.g. Las Heras) to prevent wrong locations.
+    const shouldForceDepartmentDiversity = false;
     const poolLimit = Math.min(
       20,
       Math.max(maxLimit, shouldForceDepartmentDiversity ? (maxLimit + 6) : maxLimit)
@@ -7122,14 +7222,6 @@ async function fetchAddressSuggestions(query, { limit = 6 } = {}){
     pushArcQuery(clean);
     const titleCase = toAddressTitleCase(clean);
     if (titleCase && titleCase !== clean) pushArcQuery(titleCase);
-    if (shouldForceDepartmentDiversity){
-      pushArcQuery(`${clean}, Las Heras, Mendoza, Argentina`);
-      const streetTitleForLh = toAddressTitleCase(queryStreetInfo.calle || '');
-      if (streetTitleForLh){
-        const streetWithNumberForLh = [streetTitleForLh, queryNumberHint].filter(Boolean).join(' ').trim();
-        if (streetWithNumberForLh) pushArcQuery(`${streetWithNumberForLh}, Las Heras, Mendoza, Argentina`);
-      }
-    }
     preferredDepartments.forEach((dep) => {
       const depLabel = sanitizeAddressText(dep || '', 80);
       if (!depLabel) return;
@@ -7159,14 +7251,6 @@ async function fetchAddressSuggestions(query, { limit = 6 } = {}){
         if (!normalized) return;
         if (!nominatimQueries.includes(normalized)) nominatimQueries.push(normalized);
       };
-      if (shouldForceDepartmentDiversity){
-        pushNominatimQuery(`${clean}, Las Heras, Mendoza, Argentina`);
-        const streetTitleForLh = toAddressTitleCase(queryStreetInfo.calle || '');
-        if (streetTitleForLh){
-          const streetWithNumberForLh = [streetTitleForLh, queryNumberHint].filter(Boolean).join(' ').trim();
-          if (streetWithNumberForLh) pushNominatimQuery(`${streetWithNumberForLh}, Las Heras, Mendoza, Argentina`);
-        }
-      }
       preferredDepartments.forEach((dep) => {
         const depLabel = sanitizeAddressText(dep || '', 80);
         if (!depLabel) return;
@@ -7212,32 +7296,6 @@ async function fetchAddressSuggestions(query, { limit = 6 } = {}){
       return 0;
     };
     out.sort(compareByScore);
-    if (shouldForceDepartmentDiversity){
-      const preferredDepartment = preferredDepartments.find((dep) => normalizeDepartmentToken(dep) === 'las heras') ||
-        preferredDepartments[0] ||
-        '';
-      const topResults = out.slice(0, maxLimit);
-      const preferredStreetMatch = out.find((item) =>
-        suggestionMatchesDepartmentToken(item, preferredDepartment) &&
-        suggestionMatchesStreetToken(item, queryStreetHintToken)
-      ) || null;
-      if (preferredStreetMatch){
-        const withoutPreferredFirst = topResults.filter((item) => item !== preferredStreetMatch);
-        const reordered = [preferredStreetMatch].concat(withoutPreferredFirst);
-        return reordered.slice(0, maxLimit);
-      }
-      const hasPreferredInTop = topResults.some((item) => suggestionMatchesDepartmentToken(item, preferredDepartment));
-      if (!hasPreferredInTop){
-        const fallbackMatch = out.slice(maxLimit).find((item) => suggestionMatchesDepartmentToken(item, preferredDepartment));
-        if (fallbackMatch){
-          if (topResults.length >= maxLimit) topResults[topResults.length - 1] = fallbackMatch;
-          else topResults.push(fallbackMatch);
-          topResults.sort(compareByScore);
-          return topResults.slice(0, maxLimit);
-        }
-      }
-      return topResults;
-    }
     return out.slice(0, maxLimit);
   }catch(_){
     return [];
@@ -7736,6 +7794,45 @@ async function requestAuthLocation(options = {}){
 function initAuthLocationCard(){
   const card = document.getElementById('authLocationCard');
   if (!card) return;
+  const registerPanel = document.getElementById('registerForm');
+  if (registerPanel && !card.dataset.registerMounted){
+    const actions = registerPanel.querySelector('.auth-actions');
+    if (actions && actions.parentNode) actions.parentNode.insertBefore(card, actions);
+    else registerPanel.appendChild(card);
+    card.dataset.registerMounted = '1';
+    card.classList.add('register-location-step');
+  }
+  const isRegisterDataReady = () => {
+    const name = String(document.getElementById('regName')?.value || '').trim();
+    const email = String(document.getElementById('regEmail')?.value || '').trim();
+    const password = String(document.getElementById('regPassword')?.value || '').trim();
+    return !!(name && email && password);
+  };
+  const updateRegisterLocationStep = () => {
+    const cardEl = document.getElementById('authLocationCard');
+    const registerForm = document.getElementById('registerForm');
+    const tabRegister = document.getElementById('tabRegister');
+    if (!cardEl || !registerForm) return;
+    const registerActive = (
+      registerForm.style.display !== 'none' &&
+      (!!tabRegister && tabRegister.classList.contains('active'))
+    );
+    const ready = isRegisterDataReady();
+    cardEl.hidden = !(registerActive && ready);
+    if (registerActive && !ready){
+      setAuthLocationStatus('Completá nombre, correo y contraseña para confirmar tu ubicación.');
+    } else if (registerActive && ready){
+      setAuthLocationStatus(authLocationPrefill ? 'Ubicación guardada lista para usar.' : 'Ahora confirmá tu ubicación en el mapa.');
+    }
+  };
+  if (!card.dataset.stepBound){
+    card.dataset.stepBound = '1';
+    ['regName', 'regEmail', 'regPassword'].forEach((id) => {
+      const input = document.getElementById(id);
+      input?.addEventListener('input', updateRegisterLocationStep);
+      input?.addEventListener('change', updateRegisterLocationStep);
+    });
+  }
   const useBtn = document.getElementById('authUseLocationBtn');
   const applyBtn = document.getElementById('authApplyLocationBtn');
   if (useBtn && !useBtn.dataset.bound){
@@ -7757,6 +7854,7 @@ function initAuthLocationCard(){
   }
   authLocationPrefill = authLocationPrefill || loadLocationPrefillCache();
   updateAuthLocationCard(authLocationPrefill, authLocationPrefill ? 'Ubicación guardada lista para usar.' : '');
+  updateRegisterLocationStep();
 }
 
 function showDeliveryAddressModal(prefill = {}){
@@ -7766,6 +7864,9 @@ function showDeliveryAddressModal(prefill = {}){
       const token = getToken();
       const accountId = getCurrentAccountStorageId();
       seedAddressBookFromKnownLocations(accountId);
+      if (token){
+        hydrateAddressBookFromServer(accountId).catch(()=>{});
+      }
       const cached = loadDeliveryAddressCache() || {};
       const defaultAddress = getDefaultAddressFromBook(accountId) || {};
       const addressBook = loadAddressBook(accountId);
@@ -8042,7 +8143,7 @@ function openAccountModal(){
                 <div class="__account_email" id="__acc_email">${escapeHtml(fallbackEmail || '')}</div>
               </div>
             </div>
-            <div class="__account_subtle">Las direcciones se guardan en este navegador.</div>
+            <div class="__account_subtle">Las direcciones se sincronizan con tu cuenta y este navegador.</div>
           </div>
           <div class="__account_layout">
             <section class="__account_panel">
@@ -8282,6 +8383,9 @@ function openAccountModal(){
     });
 
     renderList();
+    hydrateAddressBookFromServer(accountId).then((changed) => {
+      if (changed) renderList();
+    }).catch(()=>{});
     setTimeout(()=>{ try{ addAddressBtn?.focus(); }catch(_){ } }, 60);
 
     fetchCurrentProfileSafe().then((profile) => {
@@ -8564,16 +8668,41 @@ function updateAuthUI(){
 async function doRegister(){
   const name = document.getElementById('regName').value.trim();
   const email = document.getElementById('regEmail').value.trim();
-  const geoPrefill = authLocationPrefill || loadLocationPrefillCache() || {};
-  const barrio = (document.getElementById('regBarrio').value || '').trim() || String(geoPrefill.barrio || '').trim();
-  const calle = (document.getElementById('regCalle').value || '').trim() || String(geoPrefill.calle || '').trim();
-  const numero = (document.getElementById('regNumero').value || '').trim() || String(geoPrefill.numeracion || '').trim();
+  let geoPrefill = authLocationPrefill || loadLocationPrefillCache() || {};
+  let barrio = (document.getElementById('regBarrio').value || '').trim() || String(geoPrefill.barrio || '').trim();
+  let calle = (document.getElementById('regCalle').value || '').trim() || String(geoPrefill.calle || '').trim();
+  let numero = (document.getElementById('regNumero').value || '').trim() || String(geoPrefill.numeracion || '').trim();
   const password = document.getElementById('regPassword').value;
   const err = document.getElementById('regError');
   err.textContent = '';
   if(!name || !email || !password){
     err.textContent = 'Nombre, email y contraseña son obligatorios';
     return;
+  }
+  const hasConfirmedLocation = (
+    Number.isFinite(Number(geoPrefill && geoPrefill.lat)) &&
+    Number.isFinite(Number(geoPrefill && geoPrefill.lon)) &&
+    isMendozaPrefill(geoPrefill)
+  );
+  if (!hasConfirmedLocation){
+    const initialAddress = [calle, numero, barrio].filter(Boolean).join(' ').trim();
+    const picked = await pickAddressWithSearchAndMap({
+      title: 'Confirma tu dirección',
+      subtitle: 'Antes de crear la cuenta, confirma tu ubicación exacta en el mapa.',
+      initialQuery: initialAddress || ''
+    });
+    if (!picked){
+      err.textContent = 'Necesitamos confirmar tu ubicación en el mapa para crear la cuenta.';
+      return;
+    }
+    geoPrefill = normalizeLocationPrefill(picked);
+    authLocationPrefill = geoPrefill;
+    saveLocationPrefillCache(geoPrefill);
+    saveDeliveryAddressCache(geoPrefill);
+    applyLocationToRegisterFields(geoPrefill, { onlyEmpty: false });
+    barrio = String(geoPrefill.barrio || '').trim() || barrio;
+    calle = String(geoPrefill.calle || '').trim() || calle;
+    numero = String(geoPrefill.numeracion || '').trim() || numero;
   }
   try{
     const res = await fetchWithTimeout(AUTH_REGISTER, {
@@ -8630,6 +8759,7 @@ async function doLogin(emailArg,passwordArg){
       try{
         const accountId = getCurrentAccountStorageId();
         seedAddressBookFromKnownLocations(accountId);
+        hydrateAddressBookFromServer(accountId).catch(()=>{});
       }catch(_){ }
       // perform quick token check against the server so we can surface any mismatch early
       try{ debugWhoami().then(d => { try{ console.debug('[debugWhoami] result', d); if (d && d.ok && d.payload) { showToast(`Bienvenido, ${d.payload.full_name || d.payload.sub || email}`); } else { showToast('Bienvenido — pero el token no fue validado en el servidor', 'warning'); } }catch(_){}}).catch(e=>{ console.warn('debugWhoami failed', e); }); }catch(_){ }
@@ -8668,7 +8798,6 @@ function openAuthModal(){
   m.classList.add('open');
   m.setAttribute('aria-hidden','false');
   document.body.classList.add('modal-open');
-  initAuthLocationCard();
   // ensure login tab shown by default
   const loginPanel = document.getElementById('loginForm');
   const registerPanel = document.getElementById('registerForm');
@@ -8676,6 +8805,7 @@ function openAuthModal(){
   const tabRegister = document.getElementById('tabRegister');
   if (tabLogin && tabRegister){ tabLogin.classList.add('active'); tabRegister.classList.remove('active'); }
   if (loginPanel && registerPanel){ loginPanel.style.display = 'block'; registerPanel.style.display = 'none'; }
+  initAuthLocationCard();
   const cachedLocation = authLocationPrefill || loadLocationPrefillCache();
   authLocationPrefill = cachedLocation || null;
   updateAuthLocationCard(authLocationPrefill, authLocationPrefill ? 'Ubicación guardada lista para usar.' : 'Permití ubicación para cargar tu dirección más rápido.');
@@ -8769,6 +8899,11 @@ document.addEventListener('DOMContentLoaded', ()=>{
   initCatalogHeaderLogo();
   updateAuthUI();
   try{ initAuthLocationCard(); }catch(e){ console.warn('initAuthLocationCard failed', e); }
+  try{
+    if (getToken()){
+      hydrateAddressBookFromServer(getCurrentAccountStorageId()).catch(()=>{});
+    }
+  }catch(_){ }
   const authBtn = document.getElementById('authButton');
   const repeatBtn = document.getElementById('repeatLastOrderBtn');
   if (authBtn) authBtn.addEventListener('click', async ()=>{
@@ -8783,8 +8918,8 @@ document.addEventListener('DOMContentLoaded', ()=>{
   const authClose = document.getElementById('authClose'); if (authClose) authClose.addEventListener('click', closeAuthModal);
   const tabLogin = document.getElementById('tabLogin'); const tabRegister = document.getElementById('tabRegister');
   if (tabLogin && tabRegister){
-    tabLogin.addEventListener('click', ()=>{ tabLogin.classList.add('active'); tabRegister.classList.remove('active'); document.getElementById('loginForm').style.display='block'; document.getElementById('registerForm').style.display='none'; setTimeout(()=>document.getElementById('loginEmail')?.focus(),80); });
-    tabRegister.addEventListener('click', ()=>{ tabRegister.classList.add('active'); tabLogin.classList.remove('active'); document.getElementById('loginForm').style.display='none'; document.getElementById('registerForm').style.display='block'; setTimeout(()=>document.getElementById('regName')?.focus(),80); });
+    tabLogin.addEventListener('click', ()=>{ tabLogin.classList.add('active'); tabRegister.classList.remove('active'); document.getElementById('loginForm').style.display='block'; document.getElementById('registerForm').style.display='none'; initAuthLocationCard(); setTimeout(()=>document.getElementById('loginEmail')?.focus(),80); });
+    tabRegister.addEventListener('click', ()=>{ tabRegister.classList.add('active'); tabLogin.classList.remove('active'); document.getElementById('loginForm').style.display='none'; document.getElementById('registerForm').style.display='block'; initAuthLocationCard(); setTimeout(()=>document.getElementById('regName')?.focus(),80); });
   }
   const doLoginBtn = document.getElementById('doLogin'); if (doLoginBtn) doLoginBtn.addEventListener('click', ()=>doLogin());
   const doRegisterBtn = document.getElementById('doRegister'); if (doRegisterBtn) doRegisterBtn.addEventListener('click', ()=>doRegister());

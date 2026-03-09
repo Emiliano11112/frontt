@@ -1150,5 +1150,91 @@ body.modal-open{overflow:hidden}
   }
 }
 
+/* Registro: mostrar ubicación como último paso (después de datos principales). */
+.modal .register-location-step{
+  margin-top:6px;
+}
+.modal .register-location-step-hint{
+  font-size:12px;
+  font-weight:700;
+  color:rgba(6,26,43,0.62);
+  margin-top:-2px;
+}
+
+/* Ajustes móviles globales del catálogo para evitar desbordes y mejorar legibilidad. */
+@media (max-width:768px){
+  body{
+    overflow-x:hidden;
+  }
+  .controls{
+    margin:10px auto 12px !important;
+    padding:10px 12px !important;
+    gap:10px !important;
+    align-items:stretch !important;
+  }
+  .controls .search{
+    width:100%;
+    min-width:0;
+  }
+  .controls .search input{
+    min-width:0 !important;
+    font-size:16px !important;
+  }
+  .controls .filters{
+    width:100%;
+    overflow-x:auto;
+    white-space:nowrap;
+    padding-bottom:4px;
+    -webkit-overflow-scrolling:touch;
+  }
+  .controls .filters button{
+    flex:0 0 auto;
+  }
+  #catalogGrid{
+    grid-template-columns:1fr !important;
+    gap:14px !important;
+    padding:0 10px 30px !important;
+  }
+  .product-card{
+    padding:12px !important;
+    border-radius:14px !important;
+  }
+  .product-image{
+    height:170px !important;
+  }
+  .cart-fab{
+    right:14px !important;
+    bottom:14px !important;
+  }
+  .cart-drawer{
+    left:8px !important;
+    right:8px !important;
+    bottom:8px !important;
+    width:auto !important;
+    max-width:none !important;
+    border-radius:14px !important;
+  }
+  .modal{
+    padding:14px !important;
+  }
+  .modal .modal-content{
+    max-height:calc(100dvh - 28px);
+    overflow:auto;
+  }
+}
+
+@media (max-width:520px){
+  .product-image{
+    height:156px !important;
+  }
+  .card-actions .btn-add,
+  .product-actions .btn-add,
+  .product-actions .btn-primary{
+    min-height:44px !important;
+    font-size:15px !important;
+    padding:10px 12px !important;
+  }
+}
+
 
 
