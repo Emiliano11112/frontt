@@ -7,11 +7,13 @@ const AUTH_TOKEN = `${API_ORIGIN}/auth/token`;
 const AUTH_ADDRESSES = `${API_ORIGIN}/auth/addresses`;
 const CUSTOMER_TYPE_STORAGE_KEY = 'catalog:customer_type_v1';
 const CUSTOMER_TYPE_DEFAULT = 'mayorista';
+const IN_STOCK_ONLY_STORAGE_KEY = 'catalog:in_stock_only_v1';
 
 // DOM references will be initialized in `init()` to avoid race conditions
 let grid = null;
 let searchInput = null;
 let filterButtons = null;
+let inStockOnlyToggle = null;
 
 // auto-refresh configuration (seconds)
 const AUTO_REFRESH_SECONDS = 30;
@@ -24,8 +26,45 @@ let currentCustomerType = CUSTOMER_TYPE_DEFAULT;
 let autoTimer = null;
 let countdownTimer = null;
 let countdown = AUTO_REFRESH_SECONDS;
+let inStockOnly = false;
 
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Formatting helpers (es-AR) for professional-looking numbers (10.400 vs 10400)
+const moneyNumFmt0 = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+const moneyNumFmt2 = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const numFmt0 = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+const numFmt3 = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+
+function formatMoneyNumber(value){
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  const isInt = Math.abs(n - Math.round(n)) < 1e-9;
+  return isInt ? moneyNumFmt0.format(n) : moneyNumFmt2.format(n);
+}
+
+function formatMoney(value){
+  const s = formatMoneyNumber(value);
+  return s === '—' ? '—' : ('$' + s);
+}
+
+function formatNumber(value, { digits = 0 } = {}){
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  return digits >= 3 ? numFmt3.format(n) : numFmt0.format(n);
+}
+
+function getStoredInStockOnly(){
+  try{
+    const v = localStorage.getItem(IN_STOCK_ONLY_STORAGE_KEY);
+    if (v == null) return null;
+    return String(v) === 'true';
+  }catch(_){ return null; }
+}
+
+function setStoredInStockOnly(val){
+  try{ localStorage.setItem(IN_STOCK_ONLY_STORAGE_KEY, val ? 'true' : 'false'); }catch(_){ }
+}
 
 // Units / kg options
 const KG_OPTIONS = [
@@ -847,8 +886,8 @@ async function openPromotionDetail(promoId){
   const itemsHtml = included.map((item) => {
     const hasDiscount = Number(item.finalPrice) < Number(item.basePrice);
     const priceHtml = hasDiscount
-      ? ('<span style="font-weight:900;color:var(--accent)">$' + Number(item.finalPrice).toFixed(2) + '</span> <span style="text-decoration:line-through;color:var(--muted);font-size:12px;margin-left:6px">$' + Number(item.basePrice).toFixed(2) + '</span>')
-      : ('<span style="font-weight:900;color:var(--deep)">$' + Number(item.finalPrice).toFixed(2) + '</span>');
+      ? ('<span style="font-weight:900;color:var(--accent)">' + formatMoney(item.finalPrice) + '</span> <span style="text-decoration:line-through;color:var(--muted);font-size:12px;margin-left:6px">' + formatMoney(item.basePrice) + '</span>')
+      : ('<span style="font-weight:900;color:var(--deep)">' + formatMoney(item.finalPrice) + '</span>');
     const descText = String(item.description || '').trim();
     const safeDesc = descText ? ('<div style="font-size:12px;color:var(--muted);margin-top:2px">' + escapeHtml(descText) + '</div>') : '';
     return '<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(10,34,64,0.06)">' +
@@ -870,8 +909,8 @@ async function openPromotionDetail(promoId){
       '</div>' +
       '<div style="border:1px solid rgba(10,34,64,0.08);border-radius:12px;padding:10px 12px;max-height:42vh;overflow:auto;background:#fff">' + itemsHtml + '</div>' +
       '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:14px">' +
-        '<strong style="color:var(--deep)">Total promo: $' + Number(totalFinal).toFixed(2) + '</strong>' +
-        (savings > 0 ? ('<span style="color:var(--accent);font-weight:800">Ahorro: $' + Number(savings).toFixed(2) + '</span>') : '') +
+        '<strong style="color:var(--deep)">Total promo: ' + formatMoney(totalFinal) + '</strong>' +
+        (savings > 0 ? ('<span style="color:var(--accent);font-weight:800">Ahorro: ' + formatMoney(savings) + '</span>') : '') +
       '</div>' +
     '</div>';
 
@@ -1176,6 +1215,14 @@ function render({ animate = false } = {}) {
     const filtersToMatch = focusedFilter ? [focusedFilter] : activeFilters;
     // If no selected filters, show all. If one chip is focused, filter only by that chip.
     const matchesFilter = (!filtersToMatch || filtersToMatch.length === 0) || filtersToMatch.some(fv => ((assigned && assigned.includes(fv)) || prodCats.includes(fv)));
+
+    // optional: show only products with stock
+    if (inStockOnly) {
+      const u = getSaleUnitFromObj(p);
+      const stockVal = (u === 'kg') ? getStockKgFromObj(p) : Number(p.stock ?? p.cantidad ?? 0);
+      if (!(Number(stockVal) > 0)) return false;
+    }
+
     return matchesSearch && matchesFilter;
   });
 
@@ -1269,7 +1316,7 @@ function render({ animate = false } = {}) {
           card.className = 'consumo-card reveal';
           const imgSrc = match.imagen || match.image || DEFAULT_FALLBACK_IMAGE;
           const cType = getConsumoType(c);
-          const rawLabel = (c.discount || c.value) ? (cType === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : `$${Number(c.value || 0).toFixed(2)}`) : 'Consumo';
+          const rawLabel = (c.discount || c.value) ? (cType === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : formatMoney(c.value || 0)) : 'Consumo';
           const basePrice = Number(match.precio ?? match.price ?? 0) || 0;
           const unitSuffix = '';
           let discountedPrice = basePrice;
@@ -1283,8 +1330,8 @@ function render({ animate = false } = {}) {
           const qtyHtml = (avail != null) ? ('<div class="consumo-qty">Disponibles: ' + String(avail) + '</div>') : '';
           // show new/old price and explicit saving when discounted
           const saved = Math.max(0, +(Number(basePrice) - Number(discountedPrice)).toFixed(2));
-          const savingHtml = (saved > 0) ? ('<div class="consumo-saving">Ahorra: <strong>$' + Number(saved).toFixed(2) + '</strong>' + (cType === 'percent' && (c.discount || c.value) ? ' (' + String(Math.round(Number(c.discount || c.value))) + '%)' : '') + '</div>') : '';
-          const priceHtml = '<div class="consumo-price"><span class="price-new">$' + Number(discountedPrice).toFixed(2) + unitSuffix + '</span>' + (discountedPrice !== basePrice ? ' <span class="price-old">$' + Number(basePrice).toFixed(2) + unitSuffix + '</span>' : '') + savingHtml + ' ' + qtyHtml + '</div>';
+          const savingHtml = (saved > 0) ? ('<div class="consumo-saving">Ahorra: <strong>' + formatMoney(saved) + '</strong>' + (cType === 'percent' && (c.discount || c.value) ? ' (' + String(Math.round(Number(c.discount || c.value))) + '%)' : '') + '</div>') : '';
+          const priceHtml = '<div class="consumo-price"><span class="price-new">' + formatMoney(discountedPrice) + unitSuffix + '</span>' + (discountedPrice !== basePrice ? ' <span class="price-old">' + formatMoney(basePrice) + unitSuffix + '</span>' : '') + savingHtml + ' ' + qtyHtml + '</div>';
           const btnHtml = (avail == null || avail > 0) ? `<button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id) || match.name || ''))}">Agregar</button>` : `<button class="btn btn-disabled" disabled>Agotado</button>`;
           card.innerHTML = `
             <div class="consumo-badge">${escapeHtml(rawLabel)}</div>
@@ -1319,9 +1366,10 @@ function render({ animate = false } = {}) {
               if (ids && ids.includes(pidStr)) return true;
               return false;
             }) : null;
+            let prod = null;
             let discountedPrice = null;
             try {
-              const prod = products.find(p => String(p.id ?? p._id) === String(pid));
+              try{ prod = products.find(p => String(p.id ?? p._id) === String(pid)); }catch(_){ prod = null; }
               const base = prod ? Number(prod.precio ?? prod.price ?? 0) : 0;
               if (cobj) {
                 const cType = getConsumoType(cobj);
@@ -1338,7 +1386,7 @@ function render({ animate = false } = {}) {
                 showQuantitySelector(String(pid), img || null);
               } else {
                 const cType = getConsumoType(cobj);
-                const discountLabel = (cobj && (cobj.discount != null || cobj.value != null)) ? (cType === 'percent' ? '-' + String(Math.round(Number(cobj.discount || cobj.value || 0))) + '%' : '$' + Number(cobj.value || 0).toFixed(2)) : '';
+                const discountLabel = (cobj && (cobj.discount != null || cobj.value != null)) ? (cType === 'percent' ? '-' + String(Math.round(Number(cobj.discount || cobj.value || 0))) + '%' : formatMoney(cobj.value || 0)) : '';
                 const savings = (typeof discountedPrice === 'number' && prod) ? Math.max(0, +(Number(prod.precio ?? prod.price ?? 0) - Number(discountedPrice)).toFixed(2)) : 0;
                 const meta = { price: discountedPrice, consumo: !!cobj, consumo_id: cobj ? cobj.id : null, discount_label: discountLabel, discount_savings: savings, discount_type: cType, discount_value: cobj ? (cobj.discount || cobj.value) : null };
                 addToCart(String(pid), 1, img || null, { meta }); openCart(); 
@@ -1415,7 +1463,7 @@ function render({ animate = false } = {}) {
             const pct = (raw > 0 && raw <= 1) ? Math.round(raw * 100) : Math.round(raw);
             promoLabel = `-${pct}%`;
           } else if (pr.value) {
-            promoLabel = `$${Number(pr.value).toFixed(2)}`;
+            promoLabel = formatMoney(pr.value);
           }
         } catch (e) { promoLabel = 'Oferta'; }
         card.innerHTML = `
@@ -1463,9 +1511,19 @@ function render({ animate = false } = {}) {
     const imgSrc = p.imagen || 'images/placeholder.png';
     const pid = String(p.id ?? p._id ?? p.nombre ?? i);
     const saleUnit = getSaleUnitFromObj(p);
-    const unitSuffix = '';
+    const unitSuffix = (saleUnit === 'kg') ? ' / unidad' : '';
     const stockUnitLabel = (saleUnit === 'kg') ? ' kg' : '';
     card.dataset.pid = pid;
+    const brand = String(p.brand || p.marca || '').trim();
+    const sku = getProductCodeFromObj(p);
+    const kgPerUnitLabel = (saleUnit === 'kg') ? formatNumber(getKgPerUnitFromObj(p), { digits: 3 }) : '';
+    const kickerParts = [];
+    if (brand) kickerParts.push('<span class="pk-item pk-brand">' + escapeHtml(brand) + '</span>');
+    if (sku) kickerParts.push('<span class="pk-item pk-sku"><span class="pk-label">SKU</span><span class="pk-code">' + escapeHtml(sku) + '</span></span>');
+    if (kgPerUnitLabel) kickerParts.push('<span class="pk-item pk-unit"><span class="pk-label">Unidad</span><span>1 = ' + escapeHtml(kgPerUnitLabel) + ' kg</span></span>');
+    const kickerHtml = kickerParts.length
+      ? ('<div class="product-kicker">' + kickerParts.join('<span class="pk-sep" aria-hidden="true">·</span>') + '</div>')
+      : '';
     const stockVal = (saleUnit === 'kg')
       ? getStockKgFromObj(p)
       : Number(p.stock ?? p.cantidad ?? 0);
@@ -1554,7 +1612,7 @@ function render({ animate = false } = {}) {
     try{
       if (validConsumo){
         if (validConsumo.discount != null) consumoRibbon = `-${Math.round(Number(validConsumo.discount))}%`;
-        else if (validConsumo.value != null) consumoRibbon = `$${Number(validConsumo.value).toFixed(2)}`;
+        else if (validConsumo.value != null) consumoRibbon = formatMoney(validConsumo.value);
       }
     }catch(_){ consumoRibbon = ''; }
 
@@ -1562,18 +1620,19 @@ function render({ animate = false } = {}) {
     let html = '';
     html += '<div class="product-image">';
     html += validConsumo ? ('<div class="consumo-ribbon">' + escapeHtml(consumoRibbon) + '</div>') : '';
-    html += '<div class="price-badge">' + (discounted ? ('<span class="price-new">$' + Number(discounted).toFixed(2) + unitSuffix + '</span><span class="price-old">$' + Number(p.precio).toFixed(2) + unitSuffix + '</span>') : ('$' + Number(p.precio).toFixed(2) + unitSuffix)) + '</div>'; 
+    html += '<div class="price-badge">' + (discounted ? ('<span class="price-new">' + formatMoney(discounted) + unitSuffix + '</span><span class="price-old">' + formatMoney(p.precio) + unitSuffix + '</span>') : (formatMoney(p.precio) + unitSuffix)) + '</div>'; 
     html += '<img src="' + (imgSrc) + '" alt="' + escapeHtml(p.nombre) + '" loading="lazy" fetchpriority="low">';
     html += '</div>';
     html += '<div class="product-info">';
     html += catsHtml || '';
     html += '<h3>' + escapeHtml(p.nombre) + (isNew ? ' <span class="new-badge">Nuevo</span>' : '') + '</h3>';
+    html += kickerHtml || '';
     html += '<p>' + escapeHtml(p.descripcion) + '</p>';
-    html += '<div class="price">' + (discounted ? ('<span class="price-new">$' + Number(discounted).toFixed(2) + unitSuffix + '</span> <span class="price-old">$' + Number(p.precio).toFixed(2) + unitSuffix + '</span>') : ('$' + Number(p.precio).toFixed(2) + unitSuffix)) + '</div>';
+    html += '<div class="price">' + (discounted ? ('<span class="price-new">' + formatMoney(discounted) + unitSuffix + '</span> <span class="price-old">' + formatMoney(p.precio) + unitSuffix + '</span>') : (formatMoney(p.precio) + unitSuffix)) + '</div>';
     // show stock info (reflect admin panel stock)
     if (!Number.isNaN(stockVal)) {
       if (stockVal > 0) {
-        const stockShown = (saleUnit === 'kg') ? String(parseFloat(Number(displayStock).toFixed(3))) : String(displayStock);
+        const stockShown = (saleUnit === 'kg') ? formatNumber(displayStock, { digits: 3 }) : formatNumber(displayStock);
         html += '<div class="stock-info" style="color:#666;margin-top:6px">Stock: ' + stockShown + stockUnitLabel + '</div>';
       } else {
         html += '<div class="stock-info" style="color:#b86a00;margin-top:6px;font-weight:700">Sin stock</div>';
@@ -1824,7 +1883,7 @@ function getItemLineFactor(item, prod){
 
 function updateCartBadge(){
   const count = readCart().reduce((s,i)=>s+Number(i.qty || 0),0);
-  const display = Number.isInteger(count) ? String(count) : String(Number(count).toFixed(2));
+  const display = Number.isInteger(count) ? formatNumber(count) : formatNumber(count, { digits: 3 });
   const el = document.getElementById('cartCount');
   if(el) el.textContent = display;
   if(count>0){ el.classList.add('has-items'); el.animate?.([{ transform: 'scale(1)' },{ transform: 'scale(1.12)' },{ transform: 'scale(1)' }], { duration: 320 }); }
@@ -1912,9 +1971,9 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
         <div class="qb-top"><img class="qb-img" src="${imgSrc}" alt="${escapeHtml(String(title))}"></div>
         <div class="qb-head"><strong>${escapeHtml(String(title))}</strong></div>
         ${controlsHtml}
-        <div class="qb-price">${isKg ? 'Precio unidad completa' : 'Precio unitario'}: $${Number(unitPrice).toFixed(2)}${consumoObj ? ' <small style="color:var(--muted);margin-left:8px">Consumo inmediato</small>' : ''}</div>
-        ${isKg ? `<div class="qb-unit-weight">1 unidad = ${String(parseFloat(Number(kgPerUnit).toFixed(3)))} kg</div>` : ''}
-        <div class="qb-total">Total: $${Number(unitPrice * qty).toFixed(2)}</div>
+        <div class="qb-price">${isKg ? 'Precio unidad completa' : 'Precio unitario'}: ${formatMoney(unitPrice)}${consumoObj ? ' <small style="color:var(--muted);margin-left:8px">Consumo inmediato</small>' : ''}</div>
+        ${isKg ? `<div class="qb-unit-weight">1 unidad = ${escapeHtml(formatNumber(kgPerUnit, { digits: 3 }))} kg</div>` : ''}
+        <div class="qb-total">Total: ${formatMoney(unitPrice * qty)}</div>
         <div class="qb-actions"><button class="btn btn-ghost qb-cancel">Cancelar</button><button class="btn btn-primary qb-confirm">Agregar</button></div>
       </div>`;
     document.body.appendChild(overlay);
@@ -1952,7 +2011,7 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
       if (kgValEl && isKg) kgValEl.textContent = String(qtyLabel);
       try{
         const factor = qty;
-        totalEl.textContent = `Total: $${Number(unitPrice * factor).toFixed(2)}`;
+        totalEl.textContent = `Total: ${formatMoney(unitPrice * factor)}`;
         totalEl.classList.add('pulse');
         setTimeout(()=> totalEl.classList.remove('pulse'), 220);
       }catch(_){}
@@ -2345,12 +2404,12 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
         const saved = item.meta && (typeof item.meta.discount_savings === 'number') ? Number(item.meta.discount_savings) : Math.max(0, Number(productBase) - Number(unitPrice));
         const label = (item.meta && item.meta.discount_label) ? String(item.meta.discount_label) : null;
         if (saved > 0) {
-          nameHtml += `<div class="ci-sub"><small style="color:#b86a00">Ahorra $${Number(saved).toFixed(2)}${label ? ' (' + escapeHtml(label) + ')' : ''}</small></div>`;
+          nameHtml += `<div class="ci-sub"><small style="color:#b86a00">Ahorra ${formatMoney(saved)}${label ? ' (' + escapeHtml(label) + ')' : ''}</small></div>`;
         }
       }catch(_){ }
     }
     if (Array.isArray(item.meta?.products) && item.meta.products.length) {
-      const lines = item.meta.products.map(x => `${escapeHtml(x.name || x.id)} — $${Number(x.price || 0).toFixed(2)}`);
+      const lines = item.meta.products.map(x => `${escapeHtml(x.name || x.id)} — ${formatMoney(x.price || 0)}`);
       nameHtml += `<div class="ci-sub">${lines.join('<br>')}</div>`;
     }
 
@@ -2358,14 +2417,14 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     const unitSuffix = (unitType === 'kg') ? ' / unidad' : '';
     let priceHtml = '';
     if (item.meta && item.meta.consumo) {
-      priceHtml = `<span class="price-new">$${Number(unitPrice).toFixed(2)}${unitSuffix}</span> <span class="price-old">$${Number(productBase).toFixed(2)}${unitSuffix}</span>`;
+      priceHtml = `<span class="price-new">${formatMoney(unitPrice)}${unitSuffix}</span> <span class="price-old">${formatMoney(productBase)}${unitSuffix}</span>`;
     } else {
-      priceHtml = `<span class="price-new">$${Number(unitPrice).toFixed(2)}${unitSuffix}</span>`;
+      priceHtml = `<span class="price-new">${formatMoney(unitPrice)}${unitSuffix}</span>`;
     }
     const qtyLabel = formatQtyLabel(item.qty, unitType, item.meta);
     if (unitType === 'kg') {
       const orderedWeight = getItemOrderedWeightKg(item, prod);
-      const weightLabel = String(parseFloat(Number(orderedWeight || 0).toFixed(3)));
+      const weightLabel = formatNumber(orderedWeight || 0, { digits: 3 });
       nameHtml += `<div class="ci-sub">Peso: ${weightLabel} kg</div>`;
     }
     info.innerHTML = `${nameHtml}<div class="ci-price">${priceHtml}</div>`;
@@ -2413,20 +2472,20 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
 
   // animate subtotal change
   try{
-    const newVal = Number(subtotal).toFixed(2);
-    const prev = parseFloat(subtotalEl.dataset.prev || '0');
-    subtotalEl.dataset.prev = String(newVal);
-    subtotalEl.innerHTML = `Total: <span class="amount">$${newVal}</span>`;
+    const nextVal = Number(subtotal || 0);
+    const prev = Number(subtotalEl.dataset.prev || '0');
+    subtotalEl.dataset.prev = String(nextVal);
+    subtotalEl.innerHTML = `Total: <span class="amount">${formatMoney(nextVal)}</span>`;
     const amt = subtotalEl.querySelector('.amount');
     if (amt){
       // pulse when value changes
-      if (Number(newVal) !== Number(prev)) { amt.classList.add('pulse'); setTimeout(()=>amt.classList.remove('pulse'), 280); }
+      if (Number(nextVal) !== Number(prev)) { amt.classList.add('pulse'); setTimeout(()=>amt.classList.remove('pulse'), 280); }
     }
-  }catch(e){ subtotalEl.textContent = `$${Number(subtotal).toFixed(2)}`; }
+  }catch(e){ subtotalEl.textContent = formatMoney(subtotal); }
 
   // move actions into footer area if present
   try{
-    const footer = document.getElementById('cartFooter'); if(footer){ footer.innerHTML = `<div class="cart-footer"><div id="cartSubtotal">Subtotal</div><div class="cart-actions"><button id="clearCart" class="btn">Vaciar</button><button id="checkoutBtn" class="btn btn-primary">Hacer pedido</button></div></div>`; document.getElementById('cartSubtotal').innerHTML = `Subtotal: <strong>$${Number(subtotal).toFixed(2)}</strong>`; }
+    const footer = document.getElementById('cartFooter'); if(footer){ footer.innerHTML = `<div class="cart-footer"><div id="cartSubtotal">Subtotal</div><div class="cart-actions"><button id="clearCart" class="btn">Vaciar</button><button id="checkoutBtn" class="btn btn-primary">Hacer pedido</button></div></div>`; document.getElementById('cartSubtotal').innerHTML = `Subtotal: <strong>${formatMoney(subtotal)}</strong>`; }
   }catch(e){ }
 
   updateCartBadge(); }
@@ -3094,7 +3153,7 @@ async function submitOrderPayload(payload, baseHeaders){
       const itemsHtml = (payload.items || []).map(i=>{
         const unitType = normalizeSaleUnit(i?.meta?.unit_type || i?.meta?.sale_unit || i?.meta?.unit);
         const qtyLabel = formatQtyLabel(i?.qty, unitType, i?.meta || {});
-        return `<li style="margin:8px 0"><strong>${escapeHtml(String(i.meta?.name||i.id))}</strong> — ${escapeHtml(qtyLabel)} × $${Number(i.meta?.price||0).toFixed(2)}</li>`;
+        return `<li style="margin:8px 0"><strong>${escapeHtml(String(i.meta?.name||i.id))}</strong> — ${escapeHtml(qtyLabel)} × ${formatMoney(i.meta?.price||0)}</li>`;
       }).join('');
       const errors = Array.isArray(attemptErrors) ? attemptErrors.slice(0, 3) : [];
       const errorsHtml = errors.map((err) => {
@@ -3112,7 +3171,7 @@ async function submitOrderPayload(payload, baseHeaders){
           </header>
           <div style="max-height:52vh;overflow:auto;padding:6px 2px;margin-bottom:12px;color:var(--deep);">
             <ul style="list-style:none;padding:0;margin:0 0 8px">${itemsHtml || '<li style="color:var(--muted)">(sin ítems)</li>'}</ul>
-            <div style="font-weight:800;margin-top:8px">Total: <span>$${Number(payload.total||0).toFixed(2)}</span></div>
+            <div style="font-weight:800;margin-top:8px">Total: <span>${formatMoney(payload.total||0)}</span></div>
             <p style="color:var(--muted);margin-top:8px">No se pudo enviar la orden al servidor — puedes <strong>reintentar</strong>, <strong>copiar</strong> o <strong>descargar</strong> el pedido.</p>
             ${errorsHtml ? `<div class="om-errors"><strong>Errores:</strong><ul>${errorsHtml}</ul></div>` : ''}
           </div>
@@ -3163,9 +3222,9 @@ async function submitOrderPayload(payload, baseHeaders){
       const lines = (payload.items||[]).map(i=>{
         const unitType = normalizeSaleUnit(i?.meta?.unit_type || i?.meta?.sale_unit || i?.meta?.unit);
         const qtyLabel = formatQtyLabel(i?.qty, unitType, i?.meta || {});
-        return `${qtyLabel} × ${i.meta?.name || i.id} — $${Number(i.meta?.price||0).toFixed(2)}`;
+        return `${qtyLabel} × ${i.meta?.name || i.id} — ${formatMoney(i.meta?.price||0)}`;
       });
-      const txt = `Pedido:\n${lines.join('\n')}\n\nTotal: $${Number(payload.total||0).toFixed(2)}`;
+      const txt = `Pedido:\n${lines.join('\n')}\n\nTotal: ${formatMoney(payload.total||0)}`;
       navigator.clipboard?.writeText ? navigator.clipboard.writeText(txt) : (function(){ const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); })();
       showToast('Resumen del pedido copiado al portapapeles.');
     }catch(e){ console.error('copyOrder', e); showAlert('No se pudo copiar el pedido automáticamente.'); }
@@ -3883,14 +3942,14 @@ async function showCheckoutConfirmModal(payload, selectedPaymentMethod){
       const lineFactor = getItemLineFactor(it, prod);
       const lineTotal = Number(it?.meta?.price || 0) * Number(lineFactor || 0);
       const name = resolveOrderItemName(it);
-      return `<li class="__checkout_item"><span>${escapeHtml(name)}<small>x${escapeHtml(String(qtyLabel))}</small></span><strong>$${escapeHtml(lineTotal.toFixed(2))}</strong></li>`;
+      return `<li class="__checkout_item"><span>${escapeHtml(name)}<small>x${escapeHtml(String(qtyLabel))}</small></span><strong>${escapeHtml(formatMoney(lineTotal))}</strong></li>`;
     }).join('');
     const remaining = Math.max(0, items.length - previewItems.length);
     const paymentPreviewLabel = selectedPaymentMethod
       ? formatOrderPaymentLabel(selectedPaymentMethod, payload?.payment_status || '')
       : 'Se elige en el siguiente paso';
     const paymentLabel = escapeHtml(paymentPreviewLabel);
-    const totalLabel = '$' + escapeHtml(Number(payload?.total || 0).toFixed(2));
+    const totalLabel = escapeHtml(formatMoney(payload?.total || 0));
     const addressLabel = escapeHtml(buildCheckoutAddressLabel(payload));
     const notesValue = sanitizeDeliveryNotes(payload?.user_delivery_notes || payload?.delivery_notes || payload?._token_preview?.delivery_notes || '');
     const notesLabel = escapeHtml(notesValue || 'Sin indicaciones');
@@ -3909,7 +3968,7 @@ async function showCheckoutConfirmModal(payload, selectedPaymentMethod){
       'Email: ' + String(payload?.user_email || ''),
       'Direccion: ' + buildCheckoutAddressLabel(payload),
       'Instrucciones: ' + (notesValue || 'Sin indicaciones'),
-      'Total aproximado: ' + Number(payload?.total || 0).toFixed(2),
+      'Total aproximado: ' + formatMoney(payload?.total || 0),
       '',
       'Gracias.'
     ].join('\n');
@@ -4012,7 +4071,7 @@ function buildOrderCardHtml(order){
   const dateLabel = escapeHtml(formatOrderDateLabel(order?.created_at));
   const statusLabel = escapeHtml(formatOrderStatusLabel(order?.status || 'nuevo'));
   const totalRaw = Number(order?.total || 0);
-  const totalLabel = '$' + escapeHtml(totalRaw.toFixed(2));
+  const totalLabel = escapeHtml(formatMoney(totalRaw));
   const paymentLabel = escapeHtml(formatOrderPaymentLabel(order?.payment_method || '-', order?.payment_status || '-'));
   const addressLabel = escapeHtml(getOrderAddressLabel(order));
   const deliveryScheduleMeta = getOrderDeliveryScheduleMeta(order);
@@ -9619,6 +9678,21 @@ function init(){
     searchInput = document.getElementById("searchInput") || (function(){ const i = document.createElement('input'); i.id='searchInput'; i.type='search'; document.body.insertBefore(i, grid); return i;} )();
     // Render dynamic filter buttons (admin-managed) or fallback to default inline ones
     try{ renderFilterButtons(); }catch(e){ console.warn('initial renderFilterButtons failed', e); }
+
+    // in-stock toggle (persisted)
+    try{
+      inStockOnlyToggle = document.getElementById('inStockOnlyToggle');
+      const stored = getStoredInStockOnly();
+      inStockOnly = (stored == null) ? false : !!stored;
+      if (inStockOnlyToggle) {
+        inStockOnlyToggle.checked = !!inStockOnly;
+        inStockOnlyToggle.addEventListener('change', () => {
+          inStockOnly = !!inStockOnlyToggle.checked;
+          setStoredInStockOnly(inStockOnly);
+          render({ animate: true });
+        });
+      }
+    }catch(e){ console.warn('inStockOnly init failed', e); }
 
     // initial load
     try{ fetchProducts(); }catch(e){ console.error('fetchProducts init failed', e); showMessage('No se pudieron cargar productos', 'error'); }
