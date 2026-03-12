@@ -313,6 +313,32 @@ let addressPickerMapMarker = null;
 let addressSearchTimer = null;
 let addressSearchActiveRequestId = 0;
 let addressSearchAbortController = null;
+const ADDRESS_SEARCH_MEMORY_CACHE_TTL_MS = 6 * 60 * 1000;
+const addressSearchMemoryCache = new Map();
+
+function getAddressSearchCacheKey(query){
+  try{
+    const clean = sanitizeAddressLongText(query || '', 120);
+    return normalizeRegionToken(clean);
+  }catch(_){ return ''; }
+}
+function getAddressSearchMemoryCache(query){
+  const key = getAddressSearchCacheKey(query);
+  if (!key) return null;
+  const entry = addressSearchMemoryCache.get(key);
+  if (!entry) return null;
+  if ((Date.now() - Number(entry.ts || 0)) > ADDRESS_SEARCH_MEMORY_CACHE_TTL_MS){
+    addressSearchMemoryCache.delete(key);
+    return null;
+  }
+  return Array.isArray(entry.items) ? entry.items : null;
+}
+function setAddressSearchMemoryCache(query, items){
+  const key = getAddressSearchCacheKey(query);
+  if (!key) return;
+  const arr = Array.isArray(items) ? items.slice(0, 18) : [];
+  addressSearchMemoryCache.set(key, { ts: Date.now(), items: arr });
+}
 
 function loadPromotionsCache(){
   try{
@@ -4512,24 +4538,41 @@ body.__lock_scroll{overflow:hidden}
 .__delivery_alias_label{font-size:12px;font-weight:800;letter-spacing:.01em;color:#334155;margin-top:2px}
 .__delivery_alias_input{height:42px;border:1px solid rgba(10,34,64,0.12);border-radius:10px;padding:0 12px;font-size:14px;background:linear-gradient(180deg,#fff,#fcfdff)}
 .__delivery_add_btn{width:100%;justify-content:center}
-.__addr_search_overlay{backdrop-filter:blur(5px)}
-.__addr_search_dialog{width:700px;max-width:calc(100% - 26px);padding:16px}
-.__addr_search_head{display:flex;align-items:flex-start;gap:10px;margin-bottom:12px}
-.__addr_search_head h3{margin:0 0 3px;font-size:32px;line-height:1.05;font-weight:900;letter-spacing:-0.03em;color:#041124}
-.__addr_search_head p{margin:0;font-size:13px;color:#5f7088;font-weight:600}
-.__addr_search_back{min-width:38px;height:38px;padding:0;border-radius:10px}
-.__addr_search_box{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
-.__addr_search_input{height:46px;border:1px solid rgba(10,34,64,0.14);border-radius:12px;padding:0 14px;font-size:16px;background:#fff}
-.__addr_search_geo{height:46px;padding:0 14px;border-radius:12px;white-space:nowrap}
-.__addr_search_status{margin:8px 0 10px;color:#50637a;font-size:12px;font-weight:700}
-.__addr_search_manual_wrap{display:flex;justify-content:flex-start;margin:-2px 0 10px}
-.__addr_search_manual{min-height:34px;padding:6px 10px;border-radius:10px;font-size:12px;font-weight:800}
-.__addr_search_list{display:flex;flex-direction:column;gap:6px;max-height:45vh;overflow:auto;padding-right:3px}
-.__addr_search_item{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;padding:11px;border:1px solid rgba(10,34,64,0.08);border-radius:12px;background:#fff;color:#0f2237;font-weight:700;cursor:pointer}
-.__addr_search_item:hover{background:linear-gradient(180deg,#f7faff,#fefefe);border-color:rgba(14,94,184,0.26)}
-.__addr_search_pin{font-size:15px;line-height:1.2}
-.__addr_search_text{line-height:1.3}
-.__addr_map_overlay{backdrop-filter:blur(5px)}
+.__addr_search_overlay{backdrop-filter:none}
+.__addr_search_dialog{width:720px;max-width:calc(100% - 26px);padding:18px;display:flex;flex-direction:column;max-height:calc(100dvh - 24px)}
+.__addr_search_head{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.__addr_search_head h3{margin:0;font-size:24px;line-height:1.1;font-weight:900;letter-spacing:-0.02em;color:#041124}
+.__addr_search_head p{margin:6px 0 0;font-size:13px;color:#5f7088;font-weight:600}
+.__addr_search_back{min-width:40px;height:40px;padding:0;border-radius:12px;display:inline-flex;align-items:center;justify-content:center}
+.__addr_search_input_wrap{position:relative;margin:0 0 10px}
+.__addr_search_input{width:100%;height:48px;border:1px solid rgba(10,34,64,0.10);border-radius:14px;padding:0 46px 0 14px;font-size:15px;background:linear-gradient(180deg,#f8fafc,#f3f4f6);color:#0f2237}
+.__addr_search_input:focus{outline:none;border-color:rgba(242,107,56,0.42);box-shadow:0 0 0 6px rgba(242,107,56,0.12);background:#fff}
+.__addr_search_submit{position:absolute;right:10px;top:50%;transform:translateY(-50%);width:34px;height:34px;border-radius:999px;border:1px solid rgba(10,34,64,0.10);background:#fff;color:#0f2237;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.__addr_search_submit:active{transform:translateY(-50%) scale(.985)}
+.__addr_search_quick{display:flex;flex-direction:column;gap:8px;margin-bottom:8px}
+.__addr_search_quick_item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:12px 12px;border:1px solid rgba(10,34,64,0.08);border-radius:14px;background:#fff;color:#0f2237;font-weight:800;cursor:pointer}
+.__addr_search_quick_item:hover{background:linear-gradient(180deg,#f7faff,#ffffff)}
+.__addr_search_quick_icon{width:22px;height:22px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:rgba(242,107,56,0.10);color:rgba(242,107,56,0.9);font-weight:900}
+.__addr_search_quick_icon svg{width:16px;height:16px;display:block}
+.__addr_search_status{margin:10px 2px 10px;color:#50637a;font-size:12px;font-weight:700}
+.__addr_search_list{display:flex;flex-direction:column;gap:0;flex:1;min-height:0;max-height:45vh;overflow:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;border:1px solid rgba(10,34,64,0.08);border-radius:14px;background:#fff}
+.__addr_search_item{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;padding:12px 12px;border:0;border-bottom:1px solid rgba(10,34,64,0.08);background:#fff;color:#0f2237;font-weight:700;cursor:pointer}
+.__addr_search_item:hover{background:linear-gradient(180deg,#f7faff,#fefefe)}
+.__addr_search_item:last-child{border-bottom:0}
+.__addr_search_pin{width:22px;height:22px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:rgba(10,34,64,0.06);color:rgba(6,26,43,0.72);flex:0 0 auto;margin-top:1px}
+.__addr_search_pin svg{width:16px;height:16px;display:block}
+.__addr_search_text{display:flex;flex-direction:column;gap:2px;min-width:0;line-height:1.25}
+.__addr_search_text strong{font-size:14px;font-weight:900;letter-spacing:-0.01em;color:#0f2237;line-height:1.2}
+.__addr_search_text small{font-size:12px;font-weight:700;color:#5f7088;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.__addr_search_skel{display:flex;align-items:center;gap:10px;padding:12px 12px;border-bottom:1px solid rgba(10,34,64,0.08);background:#fff}
+.__addr_search_skel:last-child{border-bottom:0}
+.__addr_search_skel_icon{width:22px;height:22px;border-radius:999px;background:linear-gradient(90deg,rgba(10,34,64,0.08),rgba(10,34,64,0.04))}
+.__addr_search_skel_lines{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0}
+.__addr_search_skel_lines span{height:10px;border-radius:999px;background:linear-gradient(90deg,rgba(10,34,64,0.08),rgba(10,34,64,0.04))}
+.__addr_search_skel_lines span:last-child{width:72%}
+.__addr_search_manual_wrap{display:flex;justify-content:flex-start;margin:10px 0 0}
+.__addr_search_manual{min-height:34px;padding:6px 10px;border-radius:12px;font-size:12px;font-weight:800}
+.__addr_map_overlay{backdrop-filter:none}
 .__addr_map_dialog{width:760px;max-width:calc(100% - 22px);padding:14px}
 .__addr_map_head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
 .__addr_map_head h3{margin:0;font-size:26px;font-weight:900;letter-spacing:-0.02em;color:#03142a}
@@ -4689,12 +4732,13 @@ body.__lock_scroll{overflow:hidden}
 .__order_stepper.__compact{max-width:320px}
 .__order_stepper.__compact .__order_step{font-size:0;gap:0}
 .__order_stepper.__compact .__order_step_label{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
-.__order_step{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:0.55px;color:rgba(6,26,43,0.62)}
-.__order_step::after{content:'';position:absolute;top:6px;left:50%;right:-50%;height:2px;background:rgba(10,34,64,0.12);z-index:0}
+.__order_step{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;font-size:11px;font-weight:900;text-transform:none;letter-spacing:0.15px;color:rgba(6,26,43,0.62)}
+.__order_step::after{content:'';position:absolute;top:7px;left:50%;right:-50%;height:2px;background:rgba(10,34,64,0.12);z-index:0}
 .__order_step:last-child::after{display:none}
-.__order_dot{width:12px;height:12px;border-radius:999px;background:rgba(10,34,64,0.10);border:2px solid rgba(10,34,64,0.18);box-shadow:0 10px 22px rgba(2,6,23,0.06);position:relative;z-index:1}
+.__order_dot{width:14px;height:14px;border-radius:999px;background:rgba(10,34,64,0.10);border:2px solid rgba(10,34,64,0.18);box-shadow:0 10px 22px rgba(2,6,23,0.06);position:relative;z-index:1}
 .__order_step.__done{color:rgba(6,26,43,0.9)}
 .__order_step.__done .__order_dot{background:linear-gradient(90deg,var(--accent),var(--accent-2));border-color:rgba(242,107,56,0.55)}
+.__order_step.__done .__order_dot::after{content:'✓';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;color:#fff;transform:translateY(-0.5px)}
 .__order_step.__done::after{background:linear-gradient(90deg,var(--accent),var(--accent-2));opacity:0.5}
 .__order_step.__current{color:var(--deep)}
 .__order_step.__current .__order_dot{background:#fff;border-color:rgba(242,107,56,0.92);box-shadow:0 0 0 6px rgba(242,107,56,0.12), 0 14px 26px rgba(2,6,23,0.10)}
@@ -4746,15 +4790,18 @@ body.__lock_scroll{overflow:hidden}
   .__orders_more_btn{width:auto;min-width:180px}
   .__checkout_help_actions{display:grid;grid-template-columns:1fr;gap:8px}
   .__checkout_help_link{width:100%}
-  .__addr_search_head h3{font-size:26px}
-  .__addr_search_box{grid-template-columns:1fr}
-  .__addr_search_geo{width:100%}
+  .__addr_search_dialog{width:calc(100% - 16px)}
+  .__addr_search_head h3{font-size:24px}
   .__addr_map_dialog{width:calc(100% - 14px)}
   .__addr_map_canvas{height:320px}
 }
 @media(max-width:640px){
   .__dialog{width:calc(100% - 32px)}
-  .__addr_search_head h3{font-size:23px}
+  .__addr_search_overlay{align-items:flex-end}
+  .__addr_search_dialog{width:100%;max-width:100%;border-radius:18px 18px 0 0;padding:16px 16px 14px;max-height:calc(100dvh - 8px)}
+  .__addr_search_head{margin-bottom:12px}
+  .__addr_search_head h3{font-size:22px}
+  .__addr_search_list{max-height:none}
   .__addr_map_head{flex-direction:column;align-items:stretch}
   .__addr_map_head .btn{width:100%}
   .__addr_map_canvas{height:280px}
@@ -7753,9 +7800,16 @@ function getCurrentLocationPrefill(){
   });
 }
 
-async function fetchAddressSuggestions(query, { limit = 6 } = {}){
+async function fetchAddressSuggestions(query, { limit = 6, strategy = 'full', useCache = true } = {}){
   const clean = sanitizeAddressLongText(query || '', 120);
   if (clean.length < 3) return [];
+  const maxLimit = Math.min(12, Math.max(3, Number(limit) || 6));
+  try{
+    if (useCache){
+      const cached = getAddressSearchMemoryCache(clean);
+      if (cached && cached.length) return cached.slice(0, maxLimit);
+    }
+  }catch(_){ }
   const requestId = ++addressSearchActiveRequestId;
   try{
     if (addressSearchAbortController) addressSearchAbortController.abort();
@@ -7765,7 +7819,6 @@ async function fetchAddressSuggestions(query, { limit = 6 } = {}){
     const queries = buildAddressSearchQueryVariants(clean);
     const out = [];
     const seen = new Set();
-    const maxLimit = Math.min(12, Math.max(3, Number(limit) || 6));
     const queryToken = normalizeRegionToken(clean);
     const queryStreetInfo = parseStreetAndNumber(clean);
     const queryNumberHint = sanitizeAddressNumber(queryStreetInfo.numeracion || '');
@@ -7875,6 +7928,103 @@ async function fetchAddressSuggestions(query, { limit = 6 } = {}){
       seen.add(key);
       out.push(preparedItem);
     };
+
+    const strategyKey = String(strategy || 'full').trim().toLowerCase();
+    if (strategyKey === 'fast'){
+      // Fast path: keep UI responsive by hitting fewer providers and avoiding long query loops.
+      if (hasStreetAndNumber){
+        const [georefItems, structured] = await Promise.all([
+          fetchGeorefAddressSuggestions(clean, {
+            limit: poolLimit,
+            department: preferredDepartmentHint,
+            signal: addressSearchAbortController ? addressSearchAbortController.signal : undefined
+          }).catch(() => []),
+          fetchArcGisStructuredAddressSuggestions({
+            street: queryStreetInfo.calle || '',
+            number: queryStreetInfo.numeracion || '',
+            department: preferredDepartmentHint,
+            barrio: preferredDepartmentHint,
+            postalCode: queryPostalCode,
+            limit: poolLimit,
+            signal: addressSearchAbortController ? addressSearchAbortController.signal : undefined
+          }).catch(() => []),
+        ]);
+        if (requestId !== addressSearchActiveRequestId) return [];
+        (Array.isArray(georefItems) ? georefItems : []).forEach(pushUnique);
+        (Array.isArray(structured) ? structured : []).forEach(pushUnique);
+      }
+
+      const arcPrimaryQueries = [];
+      const pushArcQuery = (value) => {
+        const normalized = sanitizeAddressLongText(value || '', 120);
+        if (!normalized) return;
+        if (!arcPrimaryQueries.includes(normalized)) arcPrimaryQueries.push(normalized);
+      };
+      pushArcQuery(clean);
+      const titleCase = toAddressTitleCase(clean);
+      if (titleCase && titleCase !== clean) pushArcQuery(titleCase);
+      if (preferredDepartmentHint){
+        pushArcQuery(`${clean}, ${preferredDepartmentHint}, Mendoza, Argentina`);
+      }
+      for (let idx = 0; idx < arcPrimaryQueries.length && idx < 2; idx += 1){
+        if (requestId !== addressSearchActiveRequestId) return [];
+        const q = arcPrimaryQueries[idx];
+        const arcItems = await fetchArcGisAddressSuggestions(q, {
+          limit: poolLimit,
+          signal: addressSearchAbortController ? addressSearchAbortController.signal : undefined
+        }).catch(() => []);
+        if (requestId !== addressSearchActiveRequestId) return [];
+        (Array.isArray(arcItems) ? arcItems : []).forEach(pushUnique);
+        if (out.length >= maxLimit) break;
+      }
+
+      // Fallback to Nominatim only when we still have very few matches.
+      if (out.length < Math.min(4, maxLimit)){
+        const q = sanitizeAddressLongText(
+          [clean, preferredDepartmentHint, 'Mendoza', 'Argentina'].filter(Boolean).join(', '),
+          120
+        );
+        const params = new URLSearchParams({
+          format: 'jsonv2',
+          addressdetails: '1',
+          limit: String(poolLimit),
+          countrycodes: 'ar',
+          bounded: '1',
+          viewbox: `${MENDOZA_BOUNDS.minLon},${MENDOZA_BOUNDS.maxLat},${MENDOZA_BOUNDS.maxLon},${MENDOZA_BOUNDS.minLat}`,
+          'accept-language': 'es',
+          q
+        });
+        const url = `https://nominatim.openstreetmap.org/search?${params.toString()}`;
+        try{
+          const res = await fetch(url, {
+            mode: 'cors',
+            signal: addressSearchAbortController.signal,
+            headers: { 'Accept': 'application/json' }
+          });
+          if (requestId !== addressSearchActiveRequestId) return [];
+          if (res && res.ok){
+            const data = await res.json().catch(() => []);
+            (Array.isArray(data) ? data : []).forEach((item) => {
+              const normalized = normalizeAddressSuggestion(item);
+              if (!normalized) return;
+              if (!isMendozaSuggestion(item, normalized)) return;
+              pushUnique(normalized);
+            });
+          }
+        }catch(_){ }
+      }
+
+      const compareByScore = (a, b) => {
+        const scoreA = buildSuggestionRankingScore(clean, a);
+        const scoreB = buildSuggestionRankingScore(clean, b);
+        if (scoreA !== scoreB) return scoreB - scoreA;
+        return 0;
+      };
+      out.sort(compareByScore);
+      const finalList = out.slice(0, maxLimit);
+      try{ if (useCache) setAddressSearchMemoryCache(clean, finalList); }catch(_){ }
+      return finalList;
+    }
     if (hasStreetAndNumber){
       const georefItems = await fetchGeorefAddressSuggestions(clean, {
         limit: poolLimit,
@@ -8043,7 +8193,9 @@ async function fetchAddressSuggestions(query, { limit = 6 } = {}){
       return 0;
     };
     out.sort(compareByScore);
-    return out.slice(0, maxLimit);
+    const finalList = out.slice(0, maxLimit);
+    try{ if (useCache) setAddressSearchMemoryCache(clean, finalList); }catch(_){ }
+    return finalList;
   }catch(_){
     return [];
   }
@@ -8064,20 +8216,37 @@ function showAddressSearchModal({
         <div class="__dialog __dialog--info __addr_search_dialog" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
           <div class="__addr_search_head">
             <button type="button" class="btn btn-ghost __addr_search_back" data-action="cancel" aria-label="Volver">←</button>
-            <div>
+            <div class="__addr_search_titles">
               <h3>${escapeHtml(title)}</h3>
-              <p>${escapeHtml(subtitle)}</p>
+              ${subtitle ? `<p>${escapeHtml(subtitle)}</p>` : ''}
             </div>
           </div>
-          <div class="__addr_search_box">
+          <div class="__addr_search_input_wrap">
             <input id="__addr_search_input" class="__addr_search_input" type="text" placeholder="Dirección o punto de referencia" />
-            <button type="button" class="btn btn-ghost __addr_search_geo" data-action="use_current">Mi ubicación actual</button>
+            <button type="button" class="__addr_search_submit" data-action="submit" aria-label="Buscar">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+                <path d="M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </button>
+          </div>
+          <div class="__addr_search_quick">
+            <button type="button" class="__addr_search_quick_item" data-action="use_current">
+              <span class="__addr_search_quick_icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" stroke="currentColor" stroke-width="2"/>
+                  <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" stroke="currentColor" stroke-width="2"/>
+                  <path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+              </span>
+              <span class="__addr_search_quick_text">Mi ubicación actual</span>
+            </button>
           </div>
           <div id="__addr_search_status" class="__addr_search_status">Escribí al menos 3 caracteres para buscar en Mendoza.</div>
+          <div id="__addr_search_list" class="__addr_search_list"></div>
           <div class="__addr_search_manual_wrap">
             <button type="button" class="btn btn-ghost __addr_search_manual" data-action="manual_map">No aparece mi dirección, ubicar en mapa</button>
           </div>
-          <div id="__addr_search_list" class="__addr_search_list"></div>
         </div>
       `;
       document.body.appendChild(overlay);
@@ -8085,10 +8254,13 @@ function showAddressSearchModal({
       const input = overlay.querySelector('#__addr_search_input');
       const listEl = overlay.querySelector('#__addr_search_list');
       const statusEl = overlay.querySelector('#__addr_search_status');
+      const submitBtn = overlay.querySelector('[data-action="submit"]');
       const currentBtn = overlay.querySelector('[data-action="use_current"]');
       const manualMapBtn = overlay.querySelector('[data-action="manual_map"]');
       let closed = false;
       let optionsCache = [];
+      let searchSeq = 0;
+      let lastQueryToken = '';
 
       const cleanup = () => {
         if (closed) return;
@@ -8122,6 +8294,13 @@ function showAddressSearchModal({
       });
 
       overlay.querySelector('[data-action="cancel"]')?.addEventListener('click', () => closeWith(null));
+      submitBtn?.addEventListener('click', () => {
+        try{
+          const q = String(input && input.value ? input.value : '');
+          if (q && q.length >= 3) executeSearch(q);
+          else input?.focus();
+        }catch(_){ }
+      });
       manualMapBtn?.addEventListener('click', () => {
         const typed = sanitizeAddressLongText(input && input.value ? input.value : '', 120);
         closeWith({ __manual_map: true, query: typed });
@@ -8143,6 +8322,18 @@ function showAddressSearchModal({
         closeWith(current);
       });
 
+      const splitSuggestionLabel = (option) => {
+        const raw = String(buildLocationDisplayLabel(option) || '').trim();
+        if (!raw) return { primary: 'Ubicación', secondary: '' };
+        const parts = raw.split(',').map(p => String(p || '').trim()).filter(Boolean);
+        const primary = parts.slice(0, 2).join(', ') || raw;
+        const secondary = parts.slice(2).join(', ');
+        return {
+          primary: sanitizeAddressLongText(primary, 140) || primary,
+          secondary: sanitizeAddressLongText(secondary, 160) || '',
+        };
+      };
+
       const renderList = (items) => {
         optionsCache = Array.isArray(items) ? items : [];
         if (!listEl) return;
@@ -8150,11 +8341,35 @@ function showAddressSearchModal({
           listEl.innerHTML = '';
           return;
         }
-        listEl.innerHTML = optionsCache.map((option, idx) => `
-          <button type="button" class="__addr_search_item" data-index="${idx}">
-            <span class="__addr_search_pin" aria-hidden="true">📍</span>
-            <span class="__addr_search_text">${escapeHtml(buildCompactLocationLabel(option, 4) || 'Ubicación')}</span>
-          </button>
+        listEl.innerHTML = optionsCache.map((option, idx) => {
+          const lines = splitSuggestionLabel(option);
+          const secondary = lines.secondary ? `<small>${escapeHtml(lines.secondary)}</small>` : '';
+          return `
+            <button type="button" class="__addr_search_item" data-index="${idx}">
+              <span class="__addr_search_pin" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                  <path d="M12 10.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z" stroke="currentColor" stroke-width="2"/>
+                </svg>
+              </span>
+              <span class="__addr_search_text">
+                <strong>${escapeHtml(lines.primary || 'Ubicación')}</strong>
+                ${secondary}
+              </span>
+            </button>
+          `;
+        }).join('');
+      };
+      const renderSkeleton = (count = 5) => {
+        if (!listEl) return;
+        const n = Math.max(3, Math.min(8, Number(count) || 5));
+        listEl.innerHTML = Array.from({ length: n }).map(() => `
+          <div class="__addr_search_skel">
+            <span class="__addr_search_skel_icon" aria-hidden="true"></span>
+            <span class="__addr_search_skel_lines" aria-hidden="true">
+              <span></span><span></span>
+            </span>
+          </div>
         `).join('');
       };
 
@@ -8169,21 +8384,32 @@ function showAddressSearchModal({
 
       const executeSearch = async (query) => {
         const q = sanitizeAddressLongText(query || '', 120);
+        const token = normalizeRegionToken(q);
+        if (token && token === lastQueryToken) return;
+        lastQueryToken = token;
+        const mySeq = ++searchSeq;
         if (q.length < 3){
           renderList([]);
           if (statusEl) statusEl.textContent = 'Escribí al menos 3 caracteres para buscar en Mendoza.';
           return;
         }
+        const accountId = getCurrentAccountStorageId();
+        const localMatches = getSavedAddressSuggestionMatches(q, { limit: 4, accountId });
+        if (localMatches && localMatches.length){
+          renderList(localMatches.slice(0, 7));
+        } else {
+          renderSkeleton(5);
+        }
         if (statusEl) statusEl.textContent = 'Buscando direcciones en Mendoza...';
-        let result = await fetchAddressSuggestions(q, { limit: 7 });
+        let result = await fetchAddressSuggestions(q, { limit: 7, strategy: 'fast' });
+        if (mySeq !== searchSeq) return;
         if (!result.length){
           const titleCase = toAddressTitleCase(q);
           if (titleCase && titleCase !== q){
-            result = await fetchAddressSuggestions(titleCase, { limit: 7 });
+            result = await fetchAddressSuggestions(titleCase, { limit: 7, strategy: 'fast' });
           }
         }
-        const accountId = getCurrentAccountStorageId();
-        const localMatches = getSavedAddressSuggestionMatches(q, { limit: 4, accountId });
+        if (mySeq !== searchSeq) return;
         const merged = [];
         const seen = new Set();
         const pushUnique = (item) => {
@@ -8198,7 +8424,7 @@ function showAddressSearchModal({
         const finalResult = merged.slice(0, 7);
         if (finalResult.length){
           renderList(finalResult);
-          if (statusEl) statusEl.textContent = 'Selecciona una dirección para continuar.';
+          if (statusEl) statusEl.textContent = 'Seleccioná una dirección para continuar.';
         } else {
           renderList([]);
           if (statusEl) statusEl.textContent = 'No encontramos coincidencias en Mendoza. Probá con más detalle.';
@@ -8208,7 +8434,7 @@ function showAddressSearchModal({
       input?.addEventListener('input', () => {
         const q = String(input.value || '');
         if (addressSearchTimer) clearTimeout(addressSearchTimer);
-        addressSearchTimer = setTimeout(() => { executeSearch(q); }, 220);
+        addressSearchTimer = setTimeout(() => { executeSearch(q); }, 320);
       });
 
       requestAnimationFrame(() => {
@@ -8742,11 +8968,11 @@ function initAuthLocationCard(){
 	      try{
 	        const seed = authLocationPrefill || loadLocationPrefillCache() || loadDeliveryAddressCache() || null;
 	        const initialQuery = seed ? buildLocationDisplayLabel(seed) : '';
-	        const picked = await pickAddressWithSearchAndMap({
-	          title: 'Buscá tu dirección',
-	          subtitle: 'Escribí tu calle y número, y confirmá el pin en el mapa.',
-	          initialQuery: initialQuery || ''
-	        });
+		        const picked = await pickAddressWithSearchAndMap({
+		          title: 'Ingresá tu dirección',
+		          subtitle: '',
+		          initialQuery: initialQuery || ''
+		        });
 	        if (!picked) return;
 	        const normalized = normalizeLocationPrefill(picked);
 	        authLocationPrefill = normalized;
