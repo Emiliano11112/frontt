@@ -592,6 +592,19 @@ body.customer-type-locked{
 .cart-actions{ display:flex; gap:8px; margin-top:8px; }
 .btn{ background:linear-gradient(180deg,#ffffff,#fbfdff); color:var(--deep); border:0; padding:10px 14px; border-radius:12px; cursor:pointer; box-shadow: var(--shadow-sm); transition: transform .18s cubic-bezier(.2,.9,.2,1), box-shadow .18s ease; }
 .btn:hover{ transform: translateY(-3px); box-shadow: var(--shadow-md); }
+.btn:disabled,
+.btn[disabled]{
+  opacity:0.58;
+  cursor:not-allowed;
+  filter:saturate(0.72);
+  transform:none !important;
+  box-shadow: var(--shadow-sm) !important;
+}
+.btn:disabled:hover,
+.btn[disabled]:hover{
+  transform:none !important;
+  box-shadow: var(--shadow-sm) !important;
+}
 
 .btn-primary{ background: linear-gradient(90deg,var(--accent),var(--accent-2)); color: #fff; box-shadow: var(--shadow-md); padding:12px 18px; border-radius:12px; font-weight:800; }
 .btn-primary:active{ transform: translateY(1px) scale(.995); }
@@ -735,7 +748,7 @@ body.customer-type-locked{
 .toast { background: linear-gradient(90deg,var(--accent),var(--accent-2)); color:#fff; padding:10px 14px; border-radius:10px; box-shadow:0 12px 36px rgba(2,6,23,0.18); font-weight:800 }
 
 /* Auth modal: polished, centered, and responsive */
-.modal{display:none;position:fixed;inset:0;align-items:center;justify-content:center;padding:28px;background:rgba(2,6,23,0.45);backdrop-filter:blur(6px);z-index:2000}
+.modal{display:none;position:fixed;inset:0;align-items:center;justify-content:center;padding:28px;background:rgba(2,6,23,0.45);backdrop-filter:blur(6px);z-index:2000;overflow:auto;-webkit-overflow-scrolling:touch}
 .modal.open{display:flex}
 .modal .modal-content{width:100%;max-width:820px;background:linear-gradient(180deg,#ffffff,#fffaf6);border-radius:14px;padding:20px;box-shadow:0 30px 90px rgba(2,6,23,0.16);display:flex;gap:18px;align-items:stretch}
 .modal .auth-wrapper{display:flex;flex-direction:column;gap:12px;flex:1;min-width:0}
@@ -754,6 +767,16 @@ body.customer-type-locked{
   align-items:flex-start;
   justify-content:space-between;
   gap:12px;
+}
+.modal .auth-location-cta{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  align-items:stretch;
+  flex:0 0 auto;
+}
+.modal .auth-location-cta .btn{
+  justify-content:center;
 }
 .modal .auth-location-copy h3{
   margin:0;
@@ -917,10 +940,12 @@ body.customer-type-locked{
 .modal .brand-hero p{color:var(--muted);max-width:220px;text-align:center;font-size:14px}
 
 @media (max-width:860px){
+  .modal{align-items:flex-start}
   .modal .modal-content{flex-direction:column;padding:16px}
   .modal .auth-tabs{flex-direction:row;border-right:0;border-bottom:1px solid rgba(6,26,43,0.04);padding-bottom:8px;margin-bottom:6px;min-width:0}
   .modal .auth-tabs .tab{flex:1;text-align:center}
   .modal .auth-location-head{flex-direction:column}
+  .modal .auth-location-cta{width:100%}
   .modal .auth-location-head .btn{width:100%}
   .modal .auth-location-map iframe,
   .modal .auth-location-map .auth-location-map-canvas{height:200px}
@@ -1218,7 +1243,7 @@ body.modal-open{overflow:hidden}
   }
 }
 
-/* Registro: mostrar ubicación como último paso (después de datos principales). */
+/* Registro: flujo en 2 pasos (datos principales -> dirección con mapa). */
 .modal .register-location-step{
   margin-top:6px;
 }
@@ -1227,6 +1252,39 @@ body.modal-open{overflow:hidden}
   font-weight:700;
   color:rgba(6,26,43,0.62);
   margin-top:-2px;
+}
+.modal .register-step{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.modal .register-step[hidden]{
+  display:none;
+}
+.modal .register-step-nav{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:2px 2px 6px;
+  border-bottom:1px solid rgba(6,26,43,0.06);
+}
+.modal .register-step-title{
+  font-size:13px;
+  font-weight:900;
+  letter-spacing:0.6px;
+  text-transform:uppercase;
+  color:rgba(6,26,43,0.78);
+}
+.modal .register-address-fields{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr) 120px;
+  gap:10px;
+}
+@media (max-width:860px){
+  .modal .register-address-fields{
+    grid-template-columns:1fr;
+  }
 }
 
 /* Ajustes móviles globales del catálogo para evitar desbordes y mejorar legibilidad. */

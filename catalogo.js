@@ -6433,8 +6433,27 @@ function updateAuthLocationCard(prefill, statusMessage = ''){
     const normalized = prefill ? normalizeLocationPrefill(prefill) : null;
     const addressEl = document.getElementById('authLocationAddress');
     const applyBtn = document.getElementById('authApplyLocationBtn');
+    const prefillKey = normalized && normalized.lat != null && normalized.lon != null
+      ? (Number(normalized.lat).toFixed(6) + ',' + Number(normalized.lon).toFixed(6))
+      : '';
+    try{
+      if (addressEl){
+        const prevKey = String(addressEl.dataset.prefillKey || '');
+        if (prefillKey && prefillKey !== prevKey){
+          addressEl.dataset.prefillKey = prefillKey;
+          addressEl.dataset.userEdited = '';
+        }
+      }
+    }catch(_){ }
     const label = buildLocationDisplayLabel(normalized);
-    if (addressEl) addressEl.value = label || 'Ubicación no confirmada todavía';
+    if (addressEl){
+      const isActive = (typeof document !== 'undefined' && document.activeElement === addressEl);
+      const userEdited = String(addressEl.dataset.userEdited || '') === '1';
+      addressEl.placeholder = 'Ubicación no confirmada todavía';
+      if (!isActive && !userEdited){
+        addressEl.value = label || '';
+      }
+    }
     if (applyBtn) applyBtn.disabled = !normalized;
     syncAuthLocationMapPreview(normalized);
   }catch(_){ }
@@ -8606,66 +8625,207 @@ function initAuthLocationCard(){
   const card = document.getElementById('authLocationCard');
   if (!card) return;
   const registerPanel = document.getElementById('registerForm');
-  if (registerPanel && !card.dataset.registerMounted){
-    const actions = registerPanel.querySelector('.auth-actions');
-    if (actions && actions.parentNode) actions.parentNode.insertBefore(card, actions);
-    else registerPanel.appendChild(card);
-    card.dataset.registerMounted = '1';
-    card.classList.add('register-location-step');
-  }
+  const step1 = document.getElementById('registerStep1');
+  const step2 = document.getElementById('registerStep2');
+  const mount = document.getElementById('registerLocationMount');
+  const err = document.getElementById('regError');
+
+  // Mount the location card into the step-2 placeholder.
+  try{
+    if (mount && card.parentNode !== mount){
+      mount.appendChild(card);
+    }
+    if (!card.dataset.registerMounted){
+      card.dataset.registerMounted = '1';
+      card.classList.add('register-location-step');
+    }
+  }catch(_){ }
+
   const isRegisterDataReady = () => {
     const name = String(document.getElementById('regName')?.value || '').trim();
     const email = String(document.getElementById('regEmail')?.value || '').trim();
     const password = String(document.getElementById('regPassword')?.value || '').trim();
     return !!(name && email && password);
   };
-  const updateRegisterLocationStep = () => {
-    const cardEl = document.getElementById('authLocationCard');
-    const registerForm = document.getElementById('registerForm');
-    const tabRegister = document.getElementById('tabRegister');
-    if (!cardEl || !registerForm) return;
-    const registerActive = (
-      registerForm.style.display !== 'none' &&
-      (!!tabRegister && tabRegister.classList.contains('active'))
-    );
-    const ready = isRegisterDataReady();
-    cardEl.hidden = !(registerActive && ready);
-    if (registerActive && !ready){
-      setAuthLocationStatus('Completá nombre, correo y contraseña para confirmar tu ubicación.');
-    } else if (registerActive && ready){
-      setAuthLocationStatus(authLocationPrefill ? 'Ubicación guardada lista para usar.' : 'Ahora confirmá tu ubicación en el mapa.');
-    }
+
+  const setRegisterStep = (step, { focus = true } = {}) => {
+    const st = String(step || '1') === '2' ? '2' : '1';
+    try{ if (registerPanel) registerPanel.dataset.step = st; }catch(_){ }
+    try{
+      if (step1) step1.hidden = st !== '1';
+      if (step2) step2.hidden = st !== '2';
+    }catch(_){ }
+    try{ if (err) err.textContent = ''; }catch(_){ }
+    try{
+      if (st === '2'){
+        setAuthLocationStatus(authLocationPrefill ? 'Ubicación guardada lista para usar.' : 'Ahora confirmá tu ubicación en el mapa.');
+        updateAuthLocationCard(authLocationPrefill, '');
+      }
+    }catch(_){ }
+    if (!focus) return;
+    try{
+      if (st === '1') document.getElementById('regName')?.focus();
+      else document.getElementById('authUseLocationBtn')?.focus();
+    }catch(_){ }
   };
-  if (!card.dataset.stepBound){
-    card.dataset.stepBound = '1';
-    ['regName', 'regEmail', 'regPassword'].forEach((id) => {
-      const input = document.getElementById(id);
-      input?.addEventListener('input', updateRegisterLocationStep);
-      input?.addEventListener('change', updateRegisterLocationStep);
+
+  const nextBtn = document.getElementById('registerNextBtn');
+  const backBtn = document.getElementById('registerBackBtn');
+  const updateNextBtnState = () => {
+    try{
+      if (!nextBtn) return;
+      nextBtn.disabled = !isRegisterDataReady();
+    }catch(_){ }
+  };
+  updateNextBtnState();
+
+  if (nextBtn && !nextBtn.dataset.bound){
+    nextBtn.dataset.bound = '1';
+    nextBtn.addEventListener('click', () => {
+      const ready = isRegisterDataReady();
+      if (!ready){
+        try{ if (err) err.textContent = 'Nombre, email y contraseña son obligatorios'; }catch(_){ }
+        return;
+      }
+      setRegisterStep(2);
+      // Best-effort: encourage the address step to start immediately.
+      try{
+        if (!authLocationPrefill){
+          requestAuthLocation({ auto: true });
+        }
+      }catch(_){ }
     });
   }
-  const useBtn = document.getElementById('authUseLocationBtn');
-  const applyBtn = document.getElementById('authApplyLocationBtn');
-  if (useBtn && !useBtn.dataset.bound){
-    useBtn.dataset.bound = '1';
-    useBtn.addEventListener('click', () => { requestAuthLocation({ auto: false }); });
+  if (backBtn && !backBtn.dataset.bound){
+    backBtn.dataset.bound = '1';
+    backBtn.addEventListener('click', () => setRegisterStep(1));
+  }
+
+  if (registerPanel && !registerPanel.dataset.stepBound){
+    registerPanel.dataset.stepBound = '1';
+    ['regName', 'regEmail', 'regPassword'].forEach((id) => {
+      const input = document.getElementById(id);
+      input?.addEventListener('input', updateNextBtnState);
+      input?.addEventListener('change', updateNextBtnState);
+      input?.addEventListener('keydown', (ev) => {
+        if (ev && ev.key === 'Enter'){
+          try{ if (nextBtn && !nextBtn.disabled) nextBtn.click(); }catch(_){ }
+        }
+      });
+    });
+  }
+
+  // Ensure we start on step 1 unless the caller set a different step.
+  try{
+    const initialStep = (registerPanel && registerPanel.dataset && registerPanel.dataset.step) ? registerPanel.dataset.step : '1';
+    setRegisterStep(initialStep, { focus: false });
+  }catch(_){
+    setRegisterStep(1, { focus: false });
+  }
+
+	  const useBtn = document.getElementById('authUseLocationBtn');
+	  const searchBtn = document.getElementById('authSearchLocationBtn');
+	  const applyBtn = document.getElementById('authApplyLocationBtn');
+	  const addressInput = document.getElementById('authLocationAddress');
+	  if (useBtn && !useBtn.dataset.bound){
+	    useBtn.dataset.bound = '1';
+	    useBtn.addEventListener('click', () => { requestAuthLocation({ auto: false }); });
+	  }
+	  if (searchBtn && !searchBtn.dataset.bound){
+	    searchBtn.dataset.bound = '1';
+	    searchBtn.addEventListener('click', async () => {
+	      const prev = searchBtn.textContent;
+	      try{
+	        searchBtn.disabled = true;
+	        searchBtn.textContent = 'Buscando...';
+	      }catch(_){ }
+	      try{
+	        const seed = authLocationPrefill || loadLocationPrefillCache() || loadDeliveryAddressCache() || null;
+	        const initialQuery = seed ? buildLocationDisplayLabel(seed) : '';
+	        const picked = await pickAddressWithSearchAndMap({
+	          title: 'Buscá tu dirección',
+	          subtitle: 'Escribí tu calle y número, y confirmá el pin en el mapa.',
+	          initialQuery: initialQuery || ''
+	        });
+	        if (!picked) return;
+	        const normalized = normalizeLocationPrefill(picked);
+	        authLocationPrefill = normalized;
+	        saveLocationPrefillCache(normalized);
+	        saveDeliveryAddressCache(normalized);
+	        applyLocationToRegisterFields(normalized, { onlyEmpty: false });
+	        updateAuthLocationCard(normalized, 'Ubicación confirmada.');
+	        try{ showToast('Ubicación guardada', 2400); }catch(_){ }
+	      }catch(e){
+	        console.warn('authSearchLocationBtn failed', e);
+	        updateAuthLocationCard(authLocationPrefill, 'No pudimos buscar esa dirección. Probá de nuevo.');
+	      }finally{
+	        try{
+	          searchBtn.disabled = false;
+	          searchBtn.textContent = prev;
+	        }catch(_){ }
+	      }
+	    });
+	  }
+	  if (addressInput && !addressInput.dataset.bound){
+	    addressInput.dataset.bound = '1';
+	    addressInput.addEventListener('input', () => {
+	      try{
+	        addressInput.dataset.userEdited = '1';
+      }catch(_){ }
+    });
+    addressInput.addEventListener('keydown', (ev) => {
+      if (ev && ev.key === 'Enter'){
+        try{ ev.preventDefault(); }catch(_){ }
+        try{
+          const btn = document.getElementById('authApplyLocationBtn');
+          if (btn && !btn.disabled) btn.click();
+        }catch(_){ }
+      }
+    });
+    addressInput.addEventListener('blur', () => {
+      try{
+        const typed = sanitizeAddressLongText(addressInput.value || '', 200);
+        const current = authLocationPrefill || loadLocationPrefillCache();
+        if (!current) return;
+        const normalized = normalizeLocationPrefill(current);
+        if (normalized.lat === null || normalized.lon === null) return;
+        if (typed && typed !== buildLocationDisplayLabel(normalized)){
+          normalized.full_text = typed;
+          authLocationPrefill = normalized;
+          saveLocationPrefillCache(normalized);
+          // Keep delivery cache in sync so checkout shows the same label.
+          saveDeliveryAddressCache(normalized);
+        }
+        try{ addressInput.dataset.userEdited = ''; }catch(_){ }
+      }catch(_){ }
+    });
   }
   if (applyBtn && !applyBtn.dataset.bound){
     applyBtn.dataset.bound = '1';
     applyBtn.addEventListener('click', () => {
-      const current = authLocationPrefill || loadLocationPrefillCache();
+      let current = authLocationPrefill || loadLocationPrefillCache();
       if (!current) return;
+      try{
+        const inputEl = document.getElementById('authLocationAddress');
+        const typed = sanitizeAddressLongText(inputEl && inputEl.value ? inputEl.value : '', 200);
+        const normalized = normalizeLocationPrefill(current);
+        if (typed && typed !== buildLocationDisplayLabel(normalized)){
+          normalized.full_text = typed;
+          current = normalized;
+          authLocationPrefill = normalized;
+          saveLocationPrefillCache(normalized);
+          saveDeliveryAddressCache(normalized);
+        }
+        try{ if (inputEl) inputEl.dataset.userEdited = ''; }catch(_){ }
+      }catch(_){ }
       applyLocationToRegisterFields(current, { onlyEmpty: false });
       saveDeliveryAddressCache(current);
-      const tabRegister = document.getElementById('tabRegister');
-      if (tabRegister) tabRegister.click();
       updateAuthLocationCard(current, 'Ubicación aplicada al registro.');
       try{ showToast('Ubicación aplicada al registro', 2600); }catch(_){ }
     });
   }
   authLocationPrefill = authLocationPrefill || loadLocationPrefillCache();
   updateAuthLocationCard(authLocationPrefill, authLocationPrefill ? 'Ubicación guardada lista para usar.' : '');
-  updateRegisterLocationStep();
 }
 
 function showDeliveryAddressModal(prefill = {}){
@@ -9616,19 +9776,11 @@ function openAuthModal(){
   const tabRegister = document.getElementById('tabRegister');
   if (tabLogin && tabRegister){ tabLogin.classList.add('active'); tabRegister.classList.remove('active'); }
   if (loginPanel && registerPanel){ loginPanel.style.display = 'block'; registerPanel.style.display = 'none'; }
+  try{ if (registerPanel) registerPanel.dataset.step = '1'; }catch(_){ }
   initAuthLocationCard();
   const cachedLocation = authLocationPrefill || loadLocationPrefillCache();
   authLocationPrefill = cachedLocation || null;
   updateAuthLocationCard(authLocationPrefill, authLocationPrefill ? 'Ubicación guardada lista para usar.' : 'Permití ubicación para cargar tu dirección más rápido.');
-  try{
-    if (!authLocationPrefill){
-      const prompted = sessionStorage.getItem(LOCATION_PROMPT_SESSION_KEY) === '1';
-      if (!prompted){
-        sessionStorage.setItem(LOCATION_PROMPT_SESSION_KEY, '1');
-        setTimeout(()=>{ requestAuthLocation({ auto: true }); }, 280);
-      }
-    }
-  }catch(_){ }
   // focus first field
   setTimeout(()=>{ try{ document.getElementById('loginEmail')?.focus(); }catch(e){} }, 120);
   // close when clicking outside content
@@ -9729,8 +9881,27 @@ document.addEventListener('DOMContentLoaded', ()=>{
   const authClose = document.getElementById('authClose'); if (authClose) authClose.addEventListener('click', closeAuthModal);
   const tabLogin = document.getElementById('tabLogin'); const tabRegister = document.getElementById('tabRegister');
   if (tabLogin && tabRegister){
-    tabLogin.addEventListener('click', ()=>{ tabLogin.classList.add('active'); tabRegister.classList.remove('active'); document.getElementById('loginForm').style.display='block'; document.getElementById('registerForm').style.display='none'; initAuthLocationCard(); setTimeout(()=>document.getElementById('loginEmail')?.focus(),80); });
-    tabRegister.addEventListener('click', ()=>{ tabRegister.classList.add('active'); tabLogin.classList.remove('active'); document.getElementById('loginForm').style.display='none'; document.getElementById('registerForm').style.display='block'; initAuthLocationCard(); setTimeout(()=>document.getElementById('regName')?.focus(),80); });
+    tabLogin.addEventListener('click', ()=>{
+      tabLogin.classList.add('active');
+      tabRegister.classList.remove('active');
+      document.getElementById('loginForm').style.display='block';
+      document.getElementById('registerForm').style.display='none';
+      try{ document.getElementById('registerForm').dataset.step = '1'; }catch(_){ }
+      initAuthLocationCard();
+      setTimeout(()=>document.getElementById('loginEmail')?.focus(),80);
+    });
+    tabRegister.addEventListener('click', ()=>{
+      const wasActive = tabRegister.classList.contains('active');
+      tabRegister.classList.add('active');
+      tabLogin.classList.remove('active');
+      document.getElementById('loginForm').style.display='none';
+      document.getElementById('registerForm').style.display='block';
+      if (!wasActive){
+        try{ document.getElementById('registerForm').dataset.step = '1'; }catch(_){ }
+      }
+      initAuthLocationCard();
+      setTimeout(()=>document.getElementById('regName')?.focus(),80);
+    });
   }
   const doLoginBtn = document.getElementById('doLogin'); if (doLoginBtn) doLoginBtn.addEventListener('click', ()=>doLogin());
   const doRegisterBtn = document.getElementById('doRegister'); if (doRegisterBtn) doRegisterBtn.addEventListener('click', ()=>doRegister());

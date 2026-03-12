@@ -7,7 +7,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
   <link rel="stylesheet" href="styles.css?v=7">
-  <link rel="stylesheet" href="catalogo.css?v=115">
+  <link rel="stylesheet" href="catalogo.css?v=120">
   <link rel="icon" href="images/icon.png" />
 </head>
 <body>
@@ -114,7 +114,10 @@
             <h3>Confirmá tu ubicación</h3>
             <p id="authLocationStatus">Permití ubicación para cargar tu dirección más rápido.</p>
           </div>
-          <button id="authUseLocationBtn" class="btn btn-primary" type="button">Usar mi ubicación</button>
+          <div class="auth-location-cta">
+            <button id="authUseLocationBtn" class="btn btn-primary" type="button">Usar mi ubicación</button>
+            <button id="authSearchLocationBtn" class="btn btn-ghost" type="button">Buscar dirección</button>
+          </div>
         </div>
         <div id="authLocationMapWrap" class="auth-location-map" hidden>
           <div id="authLocationMapCanvas" class="auth-location-map-canvas" aria-label="Mapa interactivo de ubicación"></div>
@@ -122,7 +125,7 @@
         </div>
         <small class="auth-location-map-help">Podés mover el pin arrastrándolo o tocando el mapa.</small>
         <div class="auth-location-actions">
-          <input id="authLocationAddress" type="text" placeholder="Ubicación no confirmada todavía" readonly />
+          <input id="authLocationAddress" type="text" placeholder="Ubicación no confirmada todavía" />
           <button id="authApplyLocationBtn" class="btn btn-ghost" type="button" disabled>Usar en registro</button>
         </div>
       </div>
@@ -139,16 +142,32 @@
         <div id="loginError" class="form-error" aria-live="polite"></div>
       </div>
       <div id="registerForm" class="auth-panel" style="display:none;">
-        <input id="regName" type="text" required placeholder="Nombre completo" aria-label="Nombre completo" />
-        <input id="regEmail" type="email" required placeholder="Correo electrónico" aria-label="Correo electrónico" />
-        <input id="regBarrio" type="text" placeholder="Barrio" aria-label="Barrio" />
-        <input id="regCalle" type="text" placeholder="Calle" aria-label="Calle" />
-        <input id="regNumero" type="text" placeholder="Número" aria-label="Número" />
-        <input id="regPassword" type="password" required placeholder="Contraseña" aria-label="Contraseña" />
-        <small class="register-location-step-hint">Después de completar nombre, correo y contraseña, confirmá la ubicación en el mapa.</small>
-        <div class="auth-actions">
-          <button id="doRegister" class="btn btn-primary">Crear cuenta</button>
+        <div id="registerStep1" class="register-step">
+          <input id="regName" type="text" required placeholder="Nombre completo" aria-label="Nombre completo" />
+          <input id="regEmail" type="email" required placeholder="Correo electrónico" aria-label="Correo electrónico" />
+          <input id="regPassword" type="password" required placeholder="Contraseña" aria-label="Contraseña" />
+          <small class="register-location-step-hint">Siguiente: confirmá tu ubicación para completar el registro.</small>
+          <div class="auth-actions">
+            <button id="registerNextBtn" class="btn btn-primary" type="button">Siguiente</button>
+          </div>
         </div>
+
+        <div id="registerStep2" class="register-step" hidden>
+          <div class="register-step-nav">
+            <button id="registerBackBtn" class="btn btn-ghost" type="button">Volver</button>
+            <div class="register-step-title">Dirección</div>
+          </div>
+          <div id="registerLocationMount"></div>
+          <div class="register-address-fields">
+            <input id="regBarrio" type="text" placeholder="Barrio" aria-label="Barrio" />
+            <input id="regCalle" type="text" placeholder="Calle" aria-label="Calle" />
+            <input id="regNumero" type="text" placeholder="Número" aria-label="Número" />
+          </div>
+          <div class="auth-actions">
+            <button id="doRegister" class="btn btn-primary" type="button">Crear cuenta</button>
+          </div>
+        </div>
+
         <div id="regError" class="form-error" aria-live="polite"></div>
       </div>
     </div>
@@ -212,7 +231,7 @@
 
 <script src="main.js?v=3"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="catalogo.js?v=65"></script>
+<script src="catalogo.js?v=70"></script>
 </body>
 </html>
 
