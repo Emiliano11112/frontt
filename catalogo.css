@@ -1,4 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
 /* Minimal, fresh catalog stylesheet — single-file replacement
    - Keeps selectors used by `catalogo.js` (product-card, product-image, price-bubble, promo-ribbon, cart-drawer, etc.)
    - Uses brand colors, accessible spacing, responsive grid
@@ -25,7 +24,7 @@
 html,body{height:100%}
 body{
   margin:0;
-  font-family: "Space Grotesk", "Manrope", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  font-family: "Space Grotesk", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   -webkit-font-smoothing:antialiased;
   background:
     radial-gradient(800px 400px at 5% 0%, rgba(255,184,77,0.18), transparent 60%),
@@ -784,7 +783,7 @@ body.customer-type-locked{
   display:block;
 }
 .modal .auth-location-map .leaflet-container{
-  font-family:'Poppins',sans-serif;
+  font-family:"Space Grotesk",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
   background:linear-gradient(180deg,#edf4ff,#dce8f6);
 }
 .modal .auth-location-map .leaflet-control-zoom a{
