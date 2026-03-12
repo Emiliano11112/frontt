@@ -182,9 +182,10 @@
   --container: 1180px;
   --shadow: 0 18px 55px rgba(10,34,64,0.08);
   --radius: 14px;
+  --font-brand: "Space Grotesk", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
 }
 *{box-sizing:border-box}
-html,body{height:100%;margin:0;font-family:'Poppins', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; color:var(--deep); -webkit-font-smoothing:antialiased}
+html,body{height:100%;margin:0;font-family:var(--font-brand); color:var(--deep); -webkit-font-smoothing:antialiased}
 img{max-width:100%;height:auto;display:block}
 
 .container{max-width:var(--container);margin:0 auto;padding:0 18px}
@@ -203,7 +204,7 @@ img{max-width:100%;height:auto;display:block}
 .hero{padding:64px 0;background:linear-gradient(135deg, rgba(255,243,236,0.6) 0%, rgba(255,255,255,0.95) 36%);border-bottom-left-radius:48px;border-bottom-right-radius:48px}
 .hero-grid{display:grid;grid-template-columns:1fr 480px;gap:36px;align-items:center}
 .hero-text .hero-tag{display:inline-block;padding:6px 14px;border-radius:999px;background:linear-gradient(90deg,#fff,#fffef9);font-weight:800;color:var(--deep);margin-bottom:12px;font-size:13px}
-.hero-text h1{font-family:'Merriweather', serif;font-size:56px;margin:0;line-height:1.02;color:var(--deep)}
+.hero-text h1{font-family:var(--font-brand);font-size:56px;margin:0;line-height:1.02;color:var(--deep);letter-spacing:-1.2px}
 .hero-text p.lead{color:rgba(10,34,64,0.7);font-size:18px;margin-top:12px;max-width:58ch}
 .hero-cta{display:flex;gap:12px;margin-top:18px}
 .btn{display:inline-flex;align-items:center;gap:10px;padding:10px 16px;border-radius:12px;border:0;cursor:pointer}

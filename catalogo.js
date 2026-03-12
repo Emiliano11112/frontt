@@ -3748,14 +3748,19 @@ function formatOrderStatusLabel(value){
   const key = normalizeOrderStatusKey(value);
   if (!key) return '-';
   const map = {
-    nuevo: 'Nuevo',
-    new: 'Nuevo',
+    recibido: 'Recibido',
+    nuevo: 'Recibido',
+    new: 'Recibido',
     visto: 'Visto',
     seen: 'Visto',
-    preparando: 'Preparando',
-    preparing: 'Preparando',
-    en_camino: 'En camino',
-    delivering: 'En camino',
+    preparado: 'Preparado',
+    preparando: 'Preparado',
+    preparing: 'Preparado',
+    prepared: 'Preparado',
+    enviado: 'Enviado',
+    en_camino: 'Enviado',
+    delivering: 'Enviado',
+    shipped: 'Enviado',
     entregado: 'Entregado',
     delivered: 'Entregado',
     cancelado: 'Cancelado',
@@ -3763,6 +3768,81 @@ function formatOrderStatusLabel(value){
     canceled: 'Cancelado'
   };
   return map[key] || humanizeTokenLabel(key);
+}
+
+function normalizeOrderLifecycleStatus(value){
+  const key = normalizeOrderStatusKey(value);
+  if (!key) return 'recibido';
+  const aliases = {
+    nuevo: 'recibido',
+    new: 'recibido',
+    pendiente: 'recibido',
+    pending: 'recibido',
+    seen: 'visto',
+    viewed: 'visto',
+    preparando: 'preparado',
+    preparing: 'preparado',
+    prepared: 'preparado',
+    en_camino: 'enviado',
+    encamino: 'enviado',
+    delivering: 'enviado',
+    shipped: 'enviado',
+    delivered: 'entregado',
+    canceled: 'cancelado',
+    cancelled: 'cancelado'
+  };
+  const norm = aliases[key] || key;
+  const allowed = new Set(['recibido','visto','preparado','enviado','entregado','cancelado']);
+  return allowed.has(norm) ? norm : 'recibido';
+}
+
+function orderLifecycleRank(value){
+  const st = normalizeOrderLifecycleStatus(value);
+  const rank = { recibido: 1, visto: 2, preparado: 3, enviado: 4, entregado: 5, cancelado: 99 };
+  return rank[st] || 0;
+}
+
+function buildOrderLifecycleStepperHtml(statusValue){
+  const st = normalizeOrderLifecycleStatus(statusValue);
+  const cur = orderLifecycleRank(st);
+  const steps = [
+    { key: 'recibido', label: 'Recibido' },
+    { key: 'visto', label: 'Visto' },
+    { key: 'preparado', label: 'Preparado' },
+    { key: 'enviado', label: 'Enviado' },
+    { key: 'entregado', label: 'Entregado' }
+  ];
+  return `
+    <ol class="__order_stepper" aria-label="Estado del pedido">
+      ${steps.map((s) => {
+        const r = orderLifecycleRank(s.key);
+        const cls = r < cur ? '__done' : (r === cur ? '__current' : '');
+        return `<li class="__order_step ${cls}"><span class="__order_dot" aria-hidden="true"></span><span class="__order_step_label">${escapeHtml(s.label)}</span></li>`;
+      }).join('')}
+    </ol>
+  `;
+}
+
+function buildOrderLifecycleBarHtml(statusValue){
+  const st = normalizeOrderLifecycleStatus(statusValue);
+  const cur = orderLifecycleRank(st);
+  const steps = [
+    { key: 'recibido', label: 'Recibido' },
+    { key: 'visto', label: 'Visto' },
+    { key: 'preparado', label: 'Preparado' },
+    { key: 'enviado', label: 'Enviado' },
+    { key: 'entregado', label: 'Entregado' }
+  ];
+  return `
+    <ol class="__order_stepper __compact" aria-label="Progreso del pedido">
+      ${steps.map((s) => {
+        const r = orderLifecycleRank(s.key);
+        const cls = r < cur ? '__done' : (r === cur ? '__current' : '');
+        const aria = r === cur ? ' aria-current="step"' : '';
+        return `<li class="__order_step ${cls}" title="${escapeHtml(s.label)}"${aria}><span class="__order_dot" aria-hidden="true"></span><span class="__order_step_label">${escapeHtml(s.label)}</span></li>`;
+      }).join('')}
+    </ol>
+  `;
 }
 function normalizePaymentMethodKey(value){
   return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -4069,7 +4149,8 @@ function buildOrderCardHtml(order){
   const rawId = String(order?.id ?? '').trim();
   const idLabel = escapeHtml(rawId || '-');
   const dateLabel = escapeHtml(formatOrderDateLabel(order?.created_at));
-  const statusLabel = escapeHtml(formatOrderStatusLabel(order?.status || 'nuevo'));
+  const statusKey = normalizeOrderLifecycleStatus(order?.status || 'recibido');
+  const statusLabel = escapeHtml(formatOrderStatusLabel(statusKey));
   const totalRaw = Number(order?.total || 0);
   const totalLabel = escapeHtml(formatMoney(totalRaw));
   const paymentLabel = escapeHtml(formatOrderPaymentLabel(order?.payment_method || '-', order?.payment_status || '-'));
@@ -4084,9 +4165,12 @@ function buildOrderCardHtml(order){
         <div class="__order_date">${dateLabel}</div>
       </header>
       <div class="__order_meta">
-        <span class="__order_chip">Estado: ${statusLabel}</span>
+        <span class="__order_chip __order_chip_status" data-status="${escapeHtml(statusKey)}">${statusLabel}</span>
         <span class="__order_chip">Pago: ${paymentLabel}</span>
         <span class="__order_chip __order_total">Total: ${totalLabel}</span>
+      </div>
+      <div class="__order_progress">
+        ${buildOrderLifecycleStepperHtml(statusKey)}
       </div>
       <div class="__order_address"><strong>Entrega:</strong> ${addressLabel}</div>
       ${deliveryScheduleLabel ? `<div class="__order_address"><strong>Entrega programada:</strong> ${deliveryScheduleLabel}</div>` : ''}
@@ -4593,6 +4677,28 @@ body.__lock_scroll{overflow:hidden}
 .__order_meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
 .__order_chip{font-size:12px;font-weight:700;color:#0b223f;background:#f4f7fb;border:1px solid rgba(10,34,64,0.1);padding:4px 8px;border-radius:999px}
 .__order_chip.__order_total{background:#fff7ed;border-color:rgba(242,107,56,0.32);color:#b45309}
+.__order_chip_status{font-weight:900;letter-spacing:0.25px}
+.__order_chip_status[data-status="recibido"]{background:linear-gradient(180deg,#ffffff,#f4f7fb);border-color:rgba(10,34,64,0.12)}
+.__order_chip_status[data-status="visto"]{background:linear-gradient(180deg,#eaf6ff,#dbefff);border-color:rgba(14,94,184,0.22);color:#0b3a66}
+.__order_chip_status[data-status="preparado"]{background:linear-gradient(180deg,#fff7ed,#ffedd5);border-color:rgba(242,107,56,0.28);color:#9a3412}
+.__order_chip_status[data-status="enviado"]{background:linear-gradient(180deg,#eef2ff,#e0e7ff);border-color:rgba(79,70,229,0.22);color:#3730a3}
+.__order_chip_status[data-status="entregado"]{background:linear-gradient(180deg,#dff7ec,#bff0d9);border-color:rgba(16,185,129,0.26);color:#065f46}
+.__order_chip_status[data-status="cancelado"]{background:linear-gradient(180deg,#ffecec,#ffd6d6);border-color:rgba(239,68,68,0.24);color:#9b1e1e}
+.__order_progress{margin:2px 0 10px}
+.__order_stepper{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0}
+.__order_stepper.__compact{max-width:320px}
+.__order_stepper.__compact .__order_step{font-size:0;gap:0}
+.__order_stepper.__compact .__order_step_label{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+.__order_step{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:0.55px;color:rgba(6,26,43,0.62)}
+.__order_step::after{content:'';position:absolute;top:6px;left:50%;right:-50%;height:2px;background:rgba(10,34,64,0.12);z-index:0}
+.__order_step:last-child::after{display:none}
+.__order_dot{width:12px;height:12px;border-radius:999px;background:rgba(10,34,64,0.10);border:2px solid rgba(10,34,64,0.18);box-shadow:0 10px 22px rgba(2,6,23,0.06);position:relative;z-index:1}
+.__order_step.__done{color:rgba(6,26,43,0.9)}
+.__order_step.__done .__order_dot{background:linear-gradient(90deg,var(--accent),var(--accent-2));border-color:rgba(242,107,56,0.55)}
+.__order_step.__done::after{background:linear-gradient(90deg,var(--accent),var(--accent-2));opacity:0.5}
+.__order_step.__current{color:var(--deep)}
+.__order_step.__current .__order_dot{background:#fff;border-color:rgba(242,107,56,0.92);box-shadow:0 0 0 6px rgba(242,107,56,0.12), 0 14px 26px rgba(2,6,23,0.10)}
+.__order_step_label{line-height:1.1}
 .__order_address{font-size:13px;color:rgba(6,26,43,0.8);margin-bottom:8px}
 .__order_items{margin:0;padding-left:18px;display:grid;gap:4px}
 .__order_items li{font-size:13px;color:rgba(6,26,43,0.86)}
