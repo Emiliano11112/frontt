@@ -27,8 +27,60 @@ let autoTimer = null;
 let countdownTimer = null;
 let countdown = AUTO_REFRESH_SECONDS;
 let inStockOnly = false;
+let backendStatus = { ok: null, fails: 0, lastOk: 0, lastWarn: 0 };
+
+const BACKEND_WARN_FAILS = 2;
+const BACKEND_WARN_COOLDOWN_MS = 30000;
+const BACKEND_WARN_OK_GRACE_MS = 90000;
 
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function hideBackendWarningBanner(){
+  try{
+    const el = document.getElementById('__backend_status');
+    if (el) el.remove();
+  }catch(_){ }
+}
+
+function showBackendWarningBanner(){
+  try{
+    if (document.getElementById('__backend_status')) return;
+    const b = document.createElement('div');
+    b.id='__backend_status';
+    b.style.position='fixed';
+    b.style.top='72px';
+    b.style.left='50%';
+    b.style.transform='translateX(-50%)';
+    b.style.zIndex='3500';
+    b.style.background='linear-gradient(90deg,#fff7ed,#fff)';
+    b.style.border='1px solid rgba(242,107,56,0.12)';
+    b.style.padding='8px 12px';
+    b.style.borderRadius='8px';
+    b.style.boxShadow='0 10px 30px rgba(2,6,23,0.06)';
+    b.textContent='Advertencia: no se pudo conectar al backend — algunas funciones (filtros, promos) pueden no funcionar.';
+    document.body.appendChild(b);
+  }catch(_){ }
+}
+
+function markBackendOk(){
+  backendStatus.ok = true;
+  backendStatus.fails = 0;
+  backendStatus.lastOk = Date.now();
+  hideBackendWarningBanner();
+}
+
+function markBackendFail(){
+  backendStatus.ok = false;
+  backendStatus.fails = (backendStatus.fails || 0) + 1;
+}
+
+function shouldShowBackendWarning(){
+  const now = Date.now();
+  if (backendStatus.lastOk && (now - backendStatus.lastOk) < BACKEND_WARN_OK_GRACE_MS) return false;
+  if ((backendStatus.fails || 0) < BACKEND_WARN_FAILS) return false;
+  if (backendStatus.lastWarn && (now - backendStatus.lastWarn) < BACKEND_WARN_COOLDOWN_MS) return false;
+  return true;
+}
 
 // Formatting helpers (es-AR) for professional-looking numbers (10.400 vs 10400)
 const moneyNumFmt0 = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -456,9 +508,17 @@ async function fetchConsumos(){
       const res = await fetch(url, { cache: 'no-store' });
       if(!res.ok) continue;
       const data = await res.json();
-      if (Array.isArray(data)) { consumos = data; return consumos; }
+      if (Array.isArray(data)) {
+        consumos = data;
+        if (!String(url).includes('consumos.json')) markBackendOk();
+        return consumos;
+      }
       // tolerate wrapped responses
-      if (data && Array.isArray(data.consumos)) { consumos = data.consumos; return consumos; }
+      if (data && Array.isArray(data.consumos)) {
+        consumos = data.consumos;
+        if (!String(url).includes('consumos.json')) markBackendOk();
+        return consumos;
+      }
     }catch(e){ /* try next */ }
   }
   consumos = [];
@@ -496,6 +556,7 @@ async function fetchPromotions(){
       const normalized = normalizePromotionsList(list);
       promotions = normalized;
       savePromotionsCache(normalized);
+      markBackendOk();
       return promotions;
     } catch (err) { /* ignore and try next */ }
   }
@@ -1042,7 +1103,7 @@ async function openPromotionDetail(promoId){
     const descText = String(item.description || '').trim();
     const safeDesc = descText ? ('<div style="font-size:12px;color:var(--muted);margin-top:2px">' + escapeHtml(descText) + '</div>') : '';
     return '<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(10,34,64,0.06)">' +
-      '<img src="' + escapeHtml(item.image) + '" alt="' + escapeHtml(item.name) + '" style="width:54px;height:54px;border-radius:10px;object-fit:cover;border:1px solid rgba(10,34,64,0.08)">' +
+      '<img src="' + escapeHtml(item.image) + '" alt="' + escapeHtml(item.name) + '" loading="lazy" decoding="async" fetchpriority="low" style="width:54px;height:54px;border-radius:10px;object-fit:cover;border:1px solid rgba(10,34,64,0.08)">' +
       '<div style="flex:1;min-width:0">' +
       '<div style="font-weight:800;color:var(--deep);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(item.name) + '</div>' +
       safeDesc +
@@ -1177,6 +1238,9 @@ function renderSkeleton(count = 6) {
         img.style.visibility = 'visible';
         img.style.display = 'block';
         img.style.transform = 'none';
+        if (!img.getAttribute('loading')) img.setAttribute('loading', 'lazy');
+        if (!img.getAttribute('decoding')) img.setAttribute('decoding', 'async');
+        if (!img.getAttribute('fetchpriority')) img.setAttribute('fetchpriority', 'low');
       }catch(e){}
     });
   }catch(e){/* ignore */}
@@ -1263,6 +1327,7 @@ async function fetchProducts({ showSkeleton = true } = {}) {
     } catch (cacheErr) { console.warn('cache read failed', cacheErr); }
 
     showMessage('No se pudieron cargar productos desde el backend. Usando catálogo local si está disponible. ⚠️', 'warning');
+    markBackendFail();
     try {
       const local = await (await fetch('products.json')).json();
       productsSource = 'local';
@@ -1282,6 +1347,8 @@ async function fetchProducts({ showSkeleton = true } = {}) {
 
   // success
   productsSource = (used === 'products.json') ? 'local' : 'api';
+  if (productsSource === 'api') markBackendOk();
+  else markBackendFail();
   productsRaw = Array.isArray(data) ? data : [];
   products = productsRaw.map(normalize);
   try { localStorage.setItem('catalog:products_cache_v1', JSON.stringify(data)); localStorage.setItem('catalog:products_cache_ts', String(Date.now())); } catch (e) { /* ignore */ }
@@ -1493,7 +1560,7 @@ function render({ animate = false } = {}) {
           const btnHtml = (avail == null || avail > 0) ? `<button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id) || match.name || ''))}">Agregar</button>` : `<button class="btn btn-disabled" disabled>Agotado</button>`;
           card.innerHTML = `
             <div class="consumo-badge">${escapeHtml(rawLabel)}</div>
-            <div class="consumo-thumb"><img src="${imgSrc}" alt="${escapeHtml(match.nombre || match.name || '')}"></div>
+            <div class="consumo-thumb"><img src="${imgSrc}" alt="${escapeHtml(match.nombre || match.name || '')}" loading="lazy" decoding="async" fetchpriority="low"></div>
             <div class="consumo-info">
               <h4>${escapeHtml(c.name || match.nombre || match.name || 'Consumo inmediato')}</h4>
               <p>${escapeHtml(c.description || match.descripcion || '')}</p>
@@ -1634,7 +1701,7 @@ function render({ animate = false } = {}) {
           ? '<div class="stock-info" style="color:#b86a00;margin-top:4px;font-weight:700">Sin stock</div>'
           : '<div class="stock-info" style="color:#666;margin-top:4px">Stock: ' + String(promoAvailable) + ' promo' + (promoAvailable === 1 ? '' : 's') + '</div>';
         card.innerHTML = `
-          <div class="product-thumb"><img src="${imgSrc}" alt="${escapeHtml(pr.name || 'Promocion')}"></div>
+          <div class="product-thumb"><img src="${imgSrc}" alt="${escapeHtml(pr.name || 'Promocion')}" loading="lazy" decoding="async" fetchpriority="low"></div>
             <div class="product-info">
             <div class="promo-head">
               <h3 class="product-title">${escapeHtml(pr.name || 'Promoción')}</h3>
@@ -1787,7 +1854,7 @@ function render({ animate = false } = {}) {
     let html = '';
     html += '<div class="product-image">';
     html += validConsumo ? ('<div class="consumo-ribbon">' + escapeHtml(consumoRibbon) + '</div>') : '';
-    html += '<img src="' + (imgSrc) + '" alt="' + escapeHtml(p.nombre) + '" loading="lazy" fetchpriority="low">';
+    html += '<img src="' + (imgSrc) + '" alt="' + escapeHtml(p.nombre) + '" loading="lazy" decoding="async" fetchpriority="low">';
     html += '</div>';
     html += '<div class="product-info">';
     html += '<h3>' + escapeHtml(p.nombre) + (isNew ? ' <span class="new-badge">Nuevo</span>' : '') + '</h3>';
@@ -3700,39 +3767,54 @@ function updateLastUpdated(local = false) {
 })();
 
 // --- Backend connectivity check ---
-async function checkBackendConnectivity(){
+async function checkBackendConnectivity({ showToast = false } = {}){
+  const now = Date.now();
+  if (productsSource === 'api' && backendStatus.lastOk && (now - backendStatus.lastOk) < BACKEND_WARN_OK_GRACE_MS) {
+    hideBackendWarningBanner();
+    return true;
+  }
+  if (navigator && navigator.onLine === false){
+    markBackendFail();
+    if (shouldShowBackendWarning()){
+      backendStatus.lastWarn = Date.now();
+      showBackendWarningBanner();
+      if (showToast) { try{ showToast('No se puede conectar con el servidor. Algunas funciones pueden no funcionar.', 6000); }catch(_){ } }
+    }
+    return false;
+  }
   const probeUrls = [
-    `${API_ORIGIN}/api/uploads`,
-    `${API_ORIGIN}/api/promos`,
+    `${API_ORIGIN}/health`,
     `${API_ORIGIN}/api/consumos`,
   ];
   let ok = false;
-  for(const u of probeUrls){
-    try{
-      const controller = new AbortController();
-      const id = setTimeout(()=>controller.abort(), 3000);
-      const res = await fetch(u, { method: 'GET', mode: 'cors', signal: controller.signal });
-      clearTimeout(id);
-      if (res && res.ok){ ok = true; break; }
-    }catch(e){}
+  for (let attempt = 0; attempt < 2 && !ok; attempt++){
+    for(const u of probeUrls){
+      try{
+        const res = await fetchWithTimeout(u, { method: 'GET', mode: 'cors', cache: 'no-store' }, 2500);
+        if (res && res.ok){ ok = true; break; }
+      }catch(e){}
+    }
+    if (!ok && attempt === 0) {
+      await new Promise(r => setTimeout(r, 350));
+    }
   }
   if (!ok){
     console.warn('[catalogo] backend appears unreachable at', API_ORIGIN);
-    // show a non-intrusive banner so the user knows filters/promotions may not load
-    try{
-      if (!document.getElementById('__backend_status')){
-        const b = document.createElement('div'); b.id='__backend_status'; b.style.position='fixed'; b.style.top='72px'; b.style.left='50%'; b.style.transform='translateX(-50%)'; b.style.zIndex='3500'; b.style.background='linear-gradient(90deg,#fff7ed,#fff)'; b.style.border='1px solid rgba(242,107,56,0.12)'; b.style.padding='8px 12px'; b.style.borderRadius='8px'; b.style.boxShadow='0 10px 30px rgba(2,6,23,0.06)'; b.textContent='Advertencia: no se pudo conectar al backend — algunas funciones (filtros, promos) pueden no funcionar.'; document.body.appendChild(b);
-      }
-    }catch(e){/* ignore DOM errors */}
+    markBackendFail();
+    if (shouldShowBackendWarning()){
+      backendStatus.lastWarn = Date.now();
+      showBackendWarningBanner();
+      if (showToast) { try{ showToast('No se puede conectar con el servidor. Algunas funciones pueden no funcionar.', 6000); }catch(_){ } }
+    }
   } else {
     console.debug('[catalogo] backend connectivity OK:', API_ORIGIN);
-    const el = document.getElementById('__backend_status'); if (el) el.remove();
+    markBackendOk();
   }
   return ok;
 }
 
 // run a connectivity check after init
-document.addEventListener('DOMContentLoaded', ()=>{ try{ setTimeout(()=> checkBackendConnectivity(), 800); }catch(e){} });
+document.addEventListener('DOMContentLoaded', ()=>{ try{ setTimeout(()=> checkBackendConnectivity({ showToast: true }), 2500); }catch(e){} });
 
 // wire clear button (if present)
 // small helper to avoid XSS when inserting strings into innerHTML
@@ -10392,16 +10474,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
     }
   }catch(e){}
 
-  // Check backend health on load and notify user if unreachable
-  (async ()=>{
-    try{
-      const h = await fetchWithTimeout(API_ORIGIN + '/health', {}, 5000);
-      if (!h || !h.ok) throw new Error('unhealthy');
-    }catch(err){
-      console.warn('backend health check failed', err);
-      try{ showToast('No se puede conectar con el servidor. Algunas funciones pueden no funcionar.', 6000); }catch(e){}
-    }
-  })();
 });
 
 // Ensure fetchProducts includes Authorization header when token present
