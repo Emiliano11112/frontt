@@ -893,6 +893,129 @@ function getPromotionProducts(promo){
   }
 }
 
+function getPromotionProductObjects(promo){
+  try{
+    const promoIds = Array.isArray(promo && promo.productIds) ? promo.productIds : [];
+    if (!promoIds.length) return [];
+    const out = [];
+    const seen = new Set();
+    for (const rawId of promoIds){
+      const idStr = String(rawId == null ? '' : rawId).trim();
+      if (!idStr) continue;
+      const found = (products || []).find((p) => {
+        const pid = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '').trim();
+        if (!pid) return false;
+        if (pid === idStr) return true;
+        if (!Number.isNaN(Number(pid)) && !Number.isNaN(Number(idStr)) && Number(pid) === Number(idStr)) return true;
+        const pname = String(p.nombre || p.name || '').trim().toLowerCase();
+        return !!pname && pname === idStr.toLowerCase();
+      });
+      if (!found) continue;
+      const productKey = String(found.id ?? found._id ?? found.nombre ?? found.name ?? idStr);
+      if (seen.has(productKey)) continue;
+      seen.add(productKey);
+      out.push(found);
+    }
+    return out;
+  }catch(_){
+    return [];
+  }
+}
+
+function getReservedConsumoForProduct(prod){
+  try{
+    if (!Array.isArray(consumos) || consumos.length === 0) return 0;
+    const pidStr = String(prod?.id ?? prod?._id ?? prod?.nombre ?? prod?.name ?? '');
+    const pname = String(prod?.nombre || prod?.name || '').trim().toLowerCase();
+    const found = consumos.find(c => {
+      const ids = Array.isArray(c.productIds)
+        ? c.productIds.map(String)
+        : (c.productId ? [String(c.productId)] : (c.id ? [String(c.id)] : []));
+      if (pidStr && ids.includes(pidStr)) return true;
+      if (pname && ids && ids.some(id => id.toLowerCase() === pname)) return true;
+      return false;
+    });
+    return found ? Number(found.qty || 0) : 0;
+  }catch(_){
+    return 0;
+  }
+}
+
+function getCartReservedUnitsForProduct(prod, cart, ignoreKey){
+  const list = Array.isArray(cart) ? cart : readCart();
+  const pid = String(prod?.id ?? prod?._id ?? '');
+  const pname = String(prod?.nombre || prod?.name || '').trim().toLowerCase();
+  const unitType = getSaleUnitFromObj(prod);
+  const kgPerUnit = getKgPerUnitFromObj(prod);
+  let reserved = 0;
+  for (const item of list){
+    if (!item) continue;
+    const itemKey = String(item.key || getCartKey(item));
+    if (ignoreKey && itemKey === String(ignoreKey)) continue;
+    const itemId = String(item.id ?? '');
+    if (itemId.startsWith('promo:')) {
+      const promoProducts = Array.isArray(item.meta?.products) ? item.meta.products : [];
+      const includes = promoProducts.some(p => {
+        const pidItem = String(p?.id ?? p?.product_id ?? '');
+        if (pid && pidItem === pid) return true;
+        if (pname && pidItem && pidItem.toLowerCase() === pname) return true;
+        return false;
+      });
+      if (includes) reserved += Number(item.qty || 0);
+      continue;
+    }
+    if (pid && itemId === pid) {
+      if (unitType === 'kg') {
+        const itemUnit = getItemUnitType(item, prod);
+        if (itemUnit === 'kg') {
+          const weight = getItemOrderedWeightKg(item, prod);
+          const denom = Number.isFinite(kgPerUnit) && kgPerUnit > 0 ? kgPerUnit : 1;
+          reserved += Number(weight || 0) / denom;
+        } else {
+          reserved += Number(item.qty || 0);
+        }
+      } else {
+        reserved += Number(item.qty || 0);
+      }
+    }
+  }
+  return reserved;
+}
+
+function getPromoAvailableUnits(promo, opts = {}){
+  try{
+    const promoProducts = getPromotionProductObjects(promo);
+    if (!promoProducts.length) return 0;
+    const cart = Array.isArray(opts.cart) ? opts.cart : readCart();
+    const ignoreKey = opts.ignoreKey ? String(opts.ignoreKey) : '';
+    let minAvail = Infinity;
+    for (const prod of promoProducts){
+      const saleUnit = getSaleUnitFromObj(prod);
+      let availableUnits = 0;
+      if (saleUnit === 'kg') {
+        const stockKg = getStockKgFromObj(prod);
+        const kgPerUnit = getKgPerUnitFromObj(prod);
+        const reservedUnits = getCartReservedUnitsForProduct(prod, cart, ignoreKey);
+        const availableKg = Math.max(0, Number(stockKg || 0) - (reservedUnits * (Number.isFinite(kgPerUnit) && kgPerUnit > 0 ? kgPerUnit : 1)));
+        const denom = Number.isFinite(kgPerUnit) && kgPerUnit > 0 ? kgPerUnit : 1;
+        availableUnits = Math.floor(availableKg / denom);
+      } else {
+        let stock = Number(prod?.stock ?? prod?.cantidad ?? 0);
+        if (!Number.isFinite(stock)) stock = 0;
+        const reservedConsumo = getReservedConsumoForProduct(prod);
+        const reservedUnits = getCartReservedUnitsForProduct(prod, cart, ignoreKey);
+        availableUnits = Math.floor(Math.max(0, stock - Number(reservedConsumo || 0) - Number(reservedUnits || 0)));
+      }
+      if (!Number.isFinite(availableUnits)) availableUnits = 0;
+      minAvail = Math.min(minAvail, availableUnits);
+    }
+    if (minAvail === Infinity) return 0;
+    return Math.max(0, Math.floor(minAvail));
+  }catch(_){
+    return 0;
+  }
+}
+
 async function openPromotionDetail(promoId){
   const promo = (promotions || []).find((p) => String(p.id) === String(promoId) && isPromotionActive(p));
   if (!promo){
@@ -904,6 +1027,8 @@ async function openPromotionDetail(promoId){
     await showAlert('No encontramos productos disponibles para esta promocion', 'warning');
     return;
   }
+  const promoAvailable = getPromoAvailableUnits(promo, { cart: readCart() });
+  const promoOutOfStock = promoAvailable <= 0;
 
   const validityInfo = getPromotionValidityInfo(promo);
   const totalBase = included.reduce((sum, item) => sum + Number(item.basePrice || 0), 0);
@@ -932,6 +1057,7 @@ async function openPromotionDetail(promoId){
       '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
         '<span style="background:rgba(10,34,64,0.06);padding:4px 8px;border-radius:999px;font-size:12px;font-weight:700;color:var(--deep)">Incluye ' + String(included.length) + ' producto' + (included.length === 1 ? '' : 's') + '</span>' +
         (validityInfo.text ? ('<span style="background:rgba(10,34,64,0.06);padding:4px 8px;border-radius:999px;font-size:12px;font-weight:700;color:var(--deep)">' + escapeHtml(validityInfo.text) + '</span>') : '') +
+        '<span style="background:rgba(10,34,64,0.06);padding:4px 8px;border-radius:999px;font-size:12px;font-weight:700;color:' + (promoOutOfStock ? '#b86a00' : 'var(--deep)') + '">' + (promoOutOfStock ? 'Sin stock' : ('Stock: ' + String(promoAvailable))) + '</span>' +
       '</div>' +
       '<div style="border:1px solid rgba(10,34,64,0.08);border-radius:12px;padding:10px 12px;max-height:42vh;overflow:auto;background:#fff">' + itemsHtml + '</div>' +
       '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:14px">' +
@@ -945,11 +1071,15 @@ async function openPromotionDetail(promoId){
     html: detailHtml,
     type: 'info',
     buttons: [
-      { label: 'Cerrar', value: false, primary: false },
-      { label: 'Agregar promocion', value: true, primary: true }
+      { label: 'Cerrar', value: false, primary: promoOutOfStock },
+      ...(promoOutOfStock ? [] : [{ label: 'Agregar promocion', value: true, primary: true }])
     ]
   });
   if (!accepted) return;
+  if (promoOutOfStock || getPromoAvailableUnits(promo, { cart: readCart() }) <= 0) {
+    await showAlert('No hay stock disponible para esta promocion', 'warning');
+    return;
+  }
   const promoCartId = 'promo:' + String(promo.id);
   addToCart(promoCartId, 1, null);
   openCart();
@@ -1483,6 +1613,8 @@ function render({ animate = false } = {}) {
         const validityInfo = getPromotionValidityInfo(pr);
         const validityClass = validityInfo.className ? (' promo-validity ' + validityInfo.className) : ' promo-validity';
         const includedCount = Array.isArray(pr.productIds) ? pr.productIds.length : 0;
+        const promoAvailable = getPromoAvailableUnits(pr, { cart: readCart() });
+        const promoOutOfStock = promoAvailable <= 0;
         try {
           if (pr.type === 'percent') {
             const raw = Number(pr.value || 0);
@@ -1492,6 +1624,10 @@ function render({ animate = false } = {}) {
             promoLabel = formatMoney(pr.value);
           }
         } catch (e) { promoLabel = 'Oferta'; }
+        if (promoOutOfStock) card.classList.add('out-of-stock');
+        const promoStockHtml = promoOutOfStock
+          ? '<div class="stock-info" style="color:#b86a00;margin-top:4px;font-weight:700">Sin stock</div>'
+          : '<div class="stock-info" style="color:#666;margin-top:4px">Stock: ' + String(promoAvailable) + ' promo' + (promoAvailable === 1 ? '' : 's') + '</div>';
         card.innerHTML = `
           <div class="product-thumb"><img src="${imgSrc}" alt="${escapeHtml(pr.name || 'Promocion')}"></div>
             <div class="product-info">
@@ -1502,7 +1638,8 @@ function render({ animate = false } = {}) {
             <div class="product-sub">${escapeHtml(pr.description || (match ? (match.descripcion || '') : ''))}</div>
             <div class="promo-count">Incluye ${includedCount} producto${includedCount === 1 ? '' : 's'}</div>
             ${validityInfo.text ? ('<div class="' + validityClass + '">' + escapeHtml(validityInfo.text) + '</div>') : ''}
-            <div class="product-actions"><button class="btn btn-primary promo-view" data-pid="${escapeHtml(String(pr.id))}">Ver promo</button></div>
+            ${promoStockHtml}
+            <div class="product-actions"><button class="btn btn-primary promo-view" data-pid="${escapeHtml(String(pr.id))}" ${promoOutOfStock ? 'disabled' : ''}>${promoOutOfStock ? 'Sin stock' : 'Ver promo'}</button></div>
           </div>`;
         try{
           const promoImg = card.querySelector('img');
@@ -1545,7 +1682,6 @@ function render({ animate = false } = {}) {
     const kgPerUnitLabel = (saleUnit === 'kg') ? formatNumber(getKgPerUnitFromObj(p), { digits: 3 }) : '';
     const kickerParts = [];
     if (brand) kickerParts.push('<span class="pk-item pk-brand">' + escapeHtml(brand) + '</span>');
-    if (sku) kickerParts.push('<span class="pk-item pk-sku"><span class="pk-label">SKU</span><span class="pk-code">' + escapeHtml(sku) + '</span></span>');
     if (kgPerUnitLabel) kickerParts.push('<span class="pk-item pk-unit"><span class="pk-label">Unidad</span><span>1 = ' + escapeHtml(kgPerUnitLabel) + ' kg</span></span>');
     const kickerHtml = kickerParts.length
       ? ('<div class="product-kicker">' + kickerParts.join('<span class="pk-sep" aria-hidden="true">·</span>') + '</div>')
@@ -2097,6 +2233,21 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
   const isPromoSummary = String(productId).startsWith('promo:');
 
   if (isPromoSummary && idx >= 0) {
+    const promoId = String(productId).split(':')[1];
+    const promo = promotions.find(p => String(p.id) === String(promoId) && isPromotionActive(p));
+    if (promo) {
+      const itemKey = cart[idx].key || getCartKey(cart[idx]);
+      const available = getPromoAvailableUnits(promo, { cart, ignoreKey: itemKey });
+      const requestedQty = Math.min(99, Number(cart[idx].qty || 0) + Number(qty || 0));
+      if (available <= 0) {
+        showAlert('No hay suficiente stock disponible', 'error');
+        return;
+      }
+      if (requestedQty > available) {
+        showAlert('No hay suficiente stock disponible (solo ' + String(available) + ' promociones)', 'error');
+        return;
+      }
+    }
     cart[idx].qty = Math.min(99, Number(cart[idx].qty || 0) + Number(qty || 0));
     writeCart(cart);
     renderCart();
@@ -2159,6 +2310,16 @@ function addToCart(productId, qty = 1, sourceEl = null, opts = {}){
     const promoId = String(productId).split(':')[1];
     const promo = promotions.find(p => String(p.id) === String(promoId) && isPromotionActive(p));
     if (promo) {
+      const available = getPromoAvailableUnits(promo, { cart });
+      const requestedQty = Math.min(99, Number(qty || 0));
+      if (available <= 0) {
+        showAlert('No hay suficiente stock disponible', 'error');
+        return;
+      }
+      if (requestedQty > available) {
+        showAlert('No hay suficiente stock disponible (solo ' + String(available) + ' promociones)', 'error');
+        return;
+      }
       const included = (Array.isArray(promo.productIds) ? promo.productIds : []).map(pidItem => {
         const prod = products.find(p => String(p.id ?? p._id) === String(pidItem) || String(p.nombre || p.name || '') === String(pidItem));
         if (!prod) return null;
@@ -2254,6 +2415,25 @@ function setCartItemByKey(itemKey, qty, opts = {}){
   }
 
   const ci = cart[idx];
+  if (String(ci.id).startsWith('promo:')) {
+    const promoId = String(ci.id).split(':')[1];
+    const promo = promotions.find(p => String(p.id) === String(promoId) && isPromotionActive(p));
+    if (promo) {
+      const available = getPromoAvailableUnits(promo, { cart, ignoreKey: itemKey });
+      if (available <= 0) {
+        showAlert('No hay suficiente stock disponible', 'error');
+        return;
+      }
+      const nextQty = Math.min(99, Number(qty || 0));
+      const clamped = nextQty > available ? available : nextQty;
+      if (clamped !== nextQty) {
+        showAlert('Cantidad ajustada al stock disponible (' + String(available) + ' promociones)', 'info');
+      }
+      cart[idx].qty = clamped;
+      writeCart(cart); renderCart();
+      return;
+    }
+  }
   const prod = products.find(x => String(x.id ?? x._id) === String(ci.id));
   const mergedMeta = Object.assign({}, ci.meta || {}, (opts && opts.meta) ? opts.meta : {});
   const unitType = getItemUnitType({ qty, meta: mergedMeta }, prod);
@@ -4470,7 +4650,24 @@ try{
 function showToast(message, timeout = 3000){
   try{
     let container = document.getElementById('__toast_container');
-    if(!container){ container = document.createElement('div'); container.id='__toast_container'; container.style.position='fixed'; container.style.right='20px'; container.style.bottom='20px'; container.style.zIndex='5300'; container.style.display='flex'; container.style.flexDirection='column'; container.style.gap='8px'; document.body.appendChild(container); }
+    if(!container){
+      container = document.createElement('div');
+      container.id='__toast_container';
+      container.style.position='fixed';
+      container.style.zIndex='5300';
+      container.style.display='flex';
+      container.style.flexDirection='column';
+      container.style.gap='8px';
+      document.body.appendChild(container);
+    }
+    container.style.left='50%';
+    container.style.bottom='24px';
+    container.style.top='';
+    container.style.right='';
+    container.style.transform='translateX(-50%)';
+    container.style.alignItems='center';
+    container.style.textAlign='center';
+    container.style.pointerEvents='none';
     if (container.style.zIndex !== '5300') container.style.zIndex = '5300';
     const t = document.createElement('div');
     t.className = '__toast';
@@ -6442,6 +6639,12 @@ function syncAuthLocationMapPreview(prefill){
       setTimeout(() => {
         try{ authLocationMapInstance.invalidateSize(); }catch(_){ }
       }, 50);
+      setTimeout(() => {
+        try{ authLocationMapInstance.invalidateSize(); }catch(_){ }
+      }, 220);
+      setTimeout(() => {
+        try{ authLocationMapInstance.invalidateSize(); }catch(_){ }
+      }, 520);
       return;
     }
     // Fallback sin Leaflet: mapa embebido estático.
@@ -9866,9 +10069,12 @@ async function doRegister(){
   const name = document.getElementById('regName').value.trim();
   const email = document.getElementById('regEmail').value.trim();
   let geoPrefill = authLocationPrefill || loadLocationPrefillCache() || {};
-  let barrio = (document.getElementById('regBarrio').value || '').trim() || String(geoPrefill.barrio || '').trim();
-  let calle = (document.getElementById('regCalle').value || '').trim() || String(geoPrefill.calle || '').trim();
-  let numero = (document.getElementById('regNumero').value || '').trim() || String(geoPrefill.numeracion || '').trim();
+  const barrioEl = document.getElementById('regBarrio');
+  const calleEl = document.getElementById('regCalle');
+  const numeroEl = document.getElementById('regNumero');
+  let barrio = (barrioEl ? barrioEl.value : '').trim() || String(geoPrefill.barrio || '').trim();
+  let calle = (calleEl ? calleEl.value : '').trim() || String(geoPrefill.calle || '').trim();
+  let numero = (numeroEl ? numeroEl.value : '').trim() || String(geoPrefill.numeracion || '').trim();
   const password = document.getElementById('regPassword').value;
   const err = document.getElementById('regError');
   err.textContent = '';

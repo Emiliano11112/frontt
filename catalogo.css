@@ -744,7 +744,19 @@ body.customer-type-locked{
 
 /* toast container (used by catalogo.js) */
 #__toast_container, #__toast_container * { box-sizing: border-box; }
-#__toast_container{ position:fixed; right:20px; bottom:20px; z-index:3000; display:flex; flex-direction:column; gap:8px }
+#__toast_container{
+  position:fixed;
+  left:50%;
+  bottom:24px;
+  transform:translateX(-50%);
+  z-index:3000;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  align-items:center;
+  text-align:center;
+  pointer-events:none;
+}
 .toast { background: linear-gradient(90deg,var(--accent),var(--accent-2)); color:#fff; padding:10px 14px; border-radius:10px; box-shadow:0 12px 36px rgba(2,6,23,0.18); font-weight:800 }
 
 /* Auth modal: polished, centered, and responsive */
@@ -795,19 +807,25 @@ body.customer-type-locked{
   border-radius:12px;
   overflow:hidden;
   border:1px solid rgba(6,26,43,0.08);
-  background:linear-gradient(180deg,#edf4ff,#dce8f6);
+  background:#ffffff;
   box-shadow:inset 0 1px 0 rgba(255,255,255,0.65);
+  display:flex;
+  align-items:stretch;
+  min-height:260px;
 }
 .modal .auth-location-map iframe,
 .modal .auth-location-map .auth-location-map-canvas{
   width:100%;
-  height:220px;
+  flex:1 1 auto;
+  height:260px;
+  min-height:260px;
   border:0;
   display:block;
 }
 .modal .auth-location-map .leaflet-container{
   font-family:"Space Grotesk",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
-  background:linear-gradient(180deg,#edf4ff,#dce8f6);
+  background:#ffffff;
+  height:100%;
 }
 .modal .auth-location-map .leaflet-control-zoom a{
   border-radius:10px !important;
@@ -947,8 +965,9 @@ body.customer-type-locked{
   .modal .auth-location-head{flex-direction:column}
   .modal .auth-location-cta{width:100%}
   .modal .auth-location-head .btn{width:100%}
+  .modal .auth-location-map{min-height:200px}
   .modal .auth-location-map iframe,
-  .modal .auth-location-map .auth-location-map-canvas{height:200px}
+  .modal .auth-location-map .auth-location-map-canvas{height:200px;min-height:200px}
   .modal .auth-location-actions{flex-direction:column;align-items:stretch}
   .modal .auth-location-actions .btn{width:100%}
 }
