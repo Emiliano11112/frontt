@@ -8664,7 +8664,7 @@ function showAddressSearchModal({
   });
 }
 
-function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' } = {}){
+function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección', seedPromise = null } = {}){
   return new Promise((resolve) => {
     try{
       const initial = normalizeAddressSuggestion(prefill) || normalizeLocationPrefill(prefill || {});
@@ -8704,6 +8704,8 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' 
       let currentPrefill = normalizeLocationPrefill(initial);
       let currentIsMendoza = isMendozaPrefill(currentPrefill);
       let reverseRequestId = 0;
+      let closed = false;
+      let userAdjustedPin = false;
       const initialQueryInfo = parseStreetAndNumber(
         initial.query_hint ||
         initial.full_text ||
@@ -8755,6 +8757,7 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' 
         addressPickerMapMarker = null;
       };
       const cleanup = () => {
+        closed = true;
         try{ cleanupMap(); }catch(_){ }
         try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ }
       };
@@ -8772,6 +8775,7 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' 
 
       const applyFromMapPoint = async (lat, lon) => {
         try{
+          userAdjustedPin = true;
           const requestId = ++reverseRequestId;
           const previousStreet = sanitizeAddressText(
             currentPrefill?.calle ||
@@ -8887,6 +8891,7 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' 
           try{
             const point = ev && ev.latlng ? ev.latlng : null;
             if (!point) return;
+            userAdjustedPin = true;
             if (addressPickerMapMarker) addressPickerMapMarker.setLatLng(point);
             await applyFromMapPoint(point.lat, point.lng);
           }catch(_){ }
@@ -8914,6 +8919,7 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' 
           try{ showAlert('No pudimos obtener tu ubicación actual.', 'warning'); }catch(_){ }
           return;
         }
+        userAdjustedPin = true;
         const point = getAuthLocationLatLon(loc);
         currentPrefill = loc;
         currentPrefill.requires_pin_adjustment = false;
@@ -8969,6 +8975,33 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección' 
           if (dialog) dialog.classList.add('open');
         }catch(_){ }
       });
+
+      if (seedPromise && typeof seedPromise.then === 'function'){
+        seedPromise.then((resolvedSeed) => {
+          try{
+            if (closed || userAdjustedPin || !resolvedSeed) return;
+            const resolved = normalizeLocationPrefill(resolvedSeed);
+            const point = getAuthLocationLatLon(resolved);
+            if (!point) return;
+            currentPrefill = resolved;
+            currentIsMendoza = isMendozaPrefill(currentPrefill);
+            setAddressLabel(currentPrefill);
+            setPrecisionHint(currentPrefill);
+            if (addressPickerMapMarker && addressPickerMapInstance){
+              addressPickerMapMarker.setLatLng([point.lat, point.lon]);
+              addressPickerMapInstance.setView([point.lat, point.lon], 17, { animate: false });
+              setTimeout(() => {
+                try{ addressPickerMapInstance.invalidateSize(); }catch(_){ }
+              }, 40);
+            } else if (mapCanvas){
+              const frame = mapCanvas.querySelector('iframe');
+              if (frame){
+                frame.src = buildAuthLocationMapUrl(point.lat, point.lon);
+              }
+            }
+          }catch(_){ }
+        }).catch(() => {});
+      }
     }catch(e){
       console.error('showAddressMapConfirmModal failed', e);
       resolve(null);
@@ -8985,10 +9018,10 @@ async function pickAddressWithSearchAndMap({
   if (!picked) return null;
   const wantsManualMap = !!(picked && picked.__manual_map);
   let mapSeed = wantsManualMap ? getManualMapSeedPrefill(picked.query || initialQuery || '') : picked;
-  if (!wantsManualMap){
-    mapSeed = await resolveAddressSeedForMap(mapSeed, picked.query_hint || initialQuery || '');
-  }
-  const confirmed = await showAddressMapConfirmModal(mapSeed, { title: 'Confirma tu dirección' });
+  const seedPromise = (!wantsManualMap)
+    ? resolveAddressSeedForMap(mapSeed, picked.query_hint || initialQuery || '').catch(() => null)
+    : null;
+  const confirmed = await showAddressMapConfirmModal(mapSeed, { title: 'Confirma tu dirección', seedPromise });
   if (!confirmed) return null;
   const payload = locationPrefillToAddress(confirmed, { label: '' });
   if (!payload){
