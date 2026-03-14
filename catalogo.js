@@ -1081,8 +1081,10 @@ async function openPromotionDetail(promoId){
     return;
   }
   const promoCartId = 'promo:' + String(promo.id);
+  const beforeCount = getCartCountValue();
   addToCart(promoCartId, 1, null);
-  openCart();
+  const afterCount = getCartCountValue();
+  if (afterCount > beforeCount) showToast('Producto agregado', 2200);
 }
 
 function normalize(p) {
@@ -1545,7 +1547,10 @@ function render({ animate = false } = {}) {
                 const discountLabel = (cobj && (cobj.discount != null || cobj.value != null)) ? (cType === 'percent' ? '-' + String(Math.round(Number(cobj.discount || cobj.value || 0))) + '%' : formatMoney(cobj.value || 0)) : '';
                 const savings = (typeof discountedPrice === 'number' && prod) ? Math.max(0, +(Number(prod.precio ?? prod.price ?? 0) - Number(discountedPrice)).toFixed(2)) : 0;
                 const meta = { price: discountedPrice, consumo: !!cobj, consumo_id: cobj ? cobj.id : null, discount_label: discountLabel, discount_savings: savings, discount_type: cType, discount_value: cobj ? (cobj.discount || cobj.value) : null };
-                addToCart(String(pid), 1, img || null, { meta }); openCart(); 
+                const beforeCount = getCartCountValue();
+                addToCart(String(pid), 1, img || null, { meta });
+                const afterCount = getCartCountValue();
+                if (afterCount > beforeCount) showToast('Producto agregado', 2200);
               }
             }catch(e){ }
           });
@@ -1782,12 +1787,11 @@ function render({ animate = false } = {}) {
     let html = '';
     html += '<div class="product-image">';
     html += validConsumo ? ('<div class="consumo-ribbon">' + escapeHtml(consumoRibbon) + '</div>') : '';
-    html += '<div class="price-badge">' + (discounted ? ('<span class="price-new">' + formatMoney(discounted) + unitSuffix + '</span><span class="price-old">' + formatMoney(p.precio) + unitSuffix + '</span>') : (formatMoney(p.precio) + unitSuffix)) + '</div>'; 
     html += '<img src="' + (imgSrc) + '" alt="' + escapeHtml(p.nombre) + '" loading="lazy" fetchpriority="low">';
     html += '</div>';
     html += '<div class="product-info">';
-    html += catsHtml || '';
     html += '<h3>' + escapeHtml(p.nombre) + (isNew ? ' <span class="new-badge">Nuevo</span>' : '') + '</h3>';
+    html += catsHtml || '';
     html += kickerHtml || '';
     html += '<p>' + escapeHtml(p.descripcion) + '</p>';
     html += '<div class="price">' + (discounted ? ('<span class="price-new">' + formatMoney(discounted) + unitSuffix + '</span> <span class="price-old">' + formatMoney(p.precio) + unitSuffix + '</span>') : (formatMoney(p.precio) + unitSuffix)) + '</div>';
@@ -2043,8 +2047,12 @@ function getItemLineFactor(item, prod){
     : Number(item?.qty || 0);
 }
 
+function getCartCountValue(){
+  return readCart().reduce((s,i)=>s+Number(i.qty || 0),0);
+}
+
 function updateCartBadge(){
-  const count = readCart().reduce((s,i)=>s+Number(i.qty || 0),0);
+  const count = getCartCountValue();
   const display = Number.isInteger(count) ? formatNumber(count) : formatNumber(count, { digits: 3 });
   const el = document.getElementById('cartCount');
   if(el) el.textContent = display;
@@ -2214,8 +2222,10 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
           optsLocal.meta.ordered_weight_kg = orderedWeight;
           optsLocal.meta.price_mode = 'unit';
         }
+        const beforeCount = getCartCountValue();
         addToCart(String(productId), qty, sourceEl, optsLocal);
-        openCart(String(productId));
+        const afterCount = getCartCountValue();
+        if (afterCount > beforeCount) showToast('Producto agregado', 2200);
       }catch(e){console.error(e);}
       finally{ overlay.remove(); }
     });
