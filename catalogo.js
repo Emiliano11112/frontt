@@ -1,6 +1,7 @@
 ﻿// API: prefer the real endpoint but tolerate variations (English/Spanish)
 const API_URL = "https://backend-0lcs.onrender.com";
 const API_ORIGIN = new URL(API_URL).origin;
+const PRODUCT_FETCH_LIMIT = 5000;
 // Auth endpoints
 const AUTH_REGISTER = `${API_ORIGIN}/auth/register`;
 const AUTH_TOKEN = `${API_ORIGIN}/auth/token`;
@@ -1293,12 +1294,21 @@ async function fetchProducts({ showSkeleton = true } = {}) {
   try{ console.debug('[catalogo] fetchProducts tryUrls:', tryUrls); }catch(_){ }
   let data = null;
   let used = null;
+  const applyLimit = (url) => {
+    try{
+      if (!url) return url;
+      if (!/\/(products|productos)(\?|$)/i.test(url)) return url;
+      if (url.includes('limit=')) return url;
+      const joiner = url.includes('?') ? '&' : '?';
+      return url + joiner + `skip=0&limit=${PRODUCT_FETCH_LIMIT}`;
+    }catch(_){ return url; }
+  };
   for (const url of tryUrls) {
     try {
       const headers = {};
       const token = getToken();
       if (token) headers['Authorization'] = `Bearer ${token}`;
-      const res = await fetch(url, { mode: 'cors', cache: 'no-store', headers });
+      const res = await fetch(applyLimit(url), { mode: 'cors', cache: 'no-store', headers });
       if (!res.ok) continue;
       const json = await res.json();
       if (json && (Array.isArray(json) || Array.isArray(json.products) || Array.isArray(json.data))) {
