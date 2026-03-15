@@ -1249,6 +1249,83 @@ function renderSkeleton(count = 6) {
   // Promotion click handlers are wired in render() after cards are created.
 }
 
+// Center product images that have transparent margins (common in PNG cutouts)
+function autoCenterTransparentImage(img){
+  try{
+    if (!img || img.dataset.focused === '1') return;
+    if (!img.naturalWidth || !img.naturalHeight) return;
+    const src = String(img.currentSrc || img.src || '');
+    // Only attempt for PNGs (likely to have transparency) or data PNGs
+    if (!/\.png(\?|#|$)/i.test(src) && !/^data:image\/png/i.test(src)) return;
+
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return;
+
+    const maxArea = 260 * 260; // keep work small for mobile
+    const scale = Math.min(1, Math.sqrt(maxArea / (w * h)));
+    const cw = Math.max(1, Math.floor(w * scale));
+    const ch = Math.max(1, Math.floor(h * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = cw;
+    canvas.height = ch;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 0, cw, ch);
+
+    let data;
+    try{
+      data = ctx.getImageData(0, 0, cw, ch).data;
+    }catch(e){
+      return; // tainted canvas (cross-origin)
+    }
+
+    const alphaThreshold = 12;
+    let minX = cw, minY = ch, maxX = -1, maxY = -1;
+    for (let y = 0; y < ch; y++) {
+      let row = y * cw * 4;
+      for (let x = 0; x < cw; x++) {
+        const a = data[row + (x * 4) + 3];
+        if (a > alphaThreshold) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < 0 || maxY < 0) return;
+
+    const leftMargin = minX / cw;
+    const rightMargin = (cw - 1 - maxX) / cw;
+    const topMargin = minY / ch;
+    const bottomMargin = (ch - 1 - maxY) / ch;
+    const biasX = Math.abs(leftMargin - rightMargin);
+    const biasY = Math.abs(topMargin - bottomMargin);
+
+    if (biasX < 0.06 && biasY < 0.06) return;
+
+    const focusX = Math.round(((minX + maxX) / 2 / cw) * 100);
+    const focusY = Math.round(((minY + maxY) / 2 / ch) * 100);
+    img.style.setProperty('--img-focus', `${focusX}% ${focusY}%`);
+    img.dataset.focused = '1';
+  }catch(_){ }
+}
+
+function applyImageBackdrop(img){
+  try{
+    if (!img || !img.closest) return;
+    const parent = img.closest('.product-image');
+    if (!parent) return;
+    const src = String(img.currentSrc || img.src || '').trim();
+    if (!src) return;
+    const safe = src.replace(/"/g, '\\"');
+    parent.style.setProperty('--img-url', `url("${safe}")`);
+    parent.classList.add('has-image-bg');
+  }catch(_){ }
+}
+
 async function fetchProducts({ showSkeleton = true } = {}) {
   if (showSkeleton) renderSkeleton();
   // quick probe: avoid long waits trying remote API when backend is down
@@ -1725,7 +1802,10 @@ function render({ animate = false } = {}) {
           </div>`;
         try{
           const promoImg = card.querySelector('img');
-          if (promoImg) promoImg.addEventListener('error', () => { promoImg.src = DEFAULT_FALLBACK_IMAGE; });
+          if (promoImg) {
+            promoImg.addEventListener('load', () => { autoCenterTransparentImage(promoImg); });
+            promoImg.addEventListener('error', () => { promoImg.src = DEFAULT_FALLBACK_IMAGE; });
+          }
         }catch(_){ }
         promoFrag.appendChild(card);
       } catch (e) { /* ignore individual promo errors */ }
@@ -1902,6 +1982,8 @@ function render({ animate = false } = {}) {
         else if (ratio < 0.75) img.classList.add('img--tall');
         else img.classList.add('img--square');
       } catch (er) { /* ignore */ }
+      applyImageBackdrop(img);
+      autoCenterTransparentImage(img);
       img.classList.add('img-loaded');
     });
     img.addEventListener('error', () => {
