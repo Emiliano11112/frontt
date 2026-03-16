@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Marcas</title>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=8">
+  <link rel="stylesheet" href="catalogo.css?v=124">
+  <link rel="stylesheet" href="marcas.css?v=1">
+  <link rel="icon" href="images/icon.png" />
+</head>
+<body>
+  <a class="skip-link" href="#brandsMain">Saltar al contenido</a>
+
+  <header class="site-header">
+    <div class="container header-inner">
+      <a href="index.html" class="logo brand-logo" aria-label="Ir al inicio">
+        <img class="brand-logo-img" src="images/distriar.png" alt="DistriAr" loading="eager" decoding="async" fetchpriority="high" width="180" height="44" />
+        <span class="logo-fallback" aria-hidden="true">DistriAr</span>
+      </a>
+      <nav class="nav" role="navigation">
+        <ul>
+          <li><a href="index.html#inicio">Inicio</a></li>
+          <li><a href="catalogo.html">Catálogo</a></li>
+          <li><a href="marcas.html" aria-current="page">Marcas</a></li>
+          <li><a href="index.html#contacto" class="btn btn-primary contacto">Contacto</a></li>
+        </ul>
+      </nav>
+      <button class="menu-toggle" aria-label="Abrir menú" aria-expanded="false"><span aria-hidden="true">&#9776;</span></button>
+    </div>
+  </header>
+
+  <main id="brandsMain" class="brands-page">
+    <section class="brands-hero">
+      <div class="brands-hero-inner">
+        <h1>Marcas</h1>
+        <p>Explorá las marcas disponibles en el catálogo y accedé a sus productos.</p>
+        <div class="brands-tools">
+          <div class="brand-search">
+            <input id="brandSearch" type="search" placeholder="Buscar marca..." aria-label="Buscar marca" />
+            <button id="brandSearchClear" class="search-clear" aria-label="Limpiar búsqueda">✕</button>
+          </div>
+          <div id="brandLetters" class="brand-letters" aria-label="Filtrar por letra"></div>
+          <button id="clearBrandFilters" class="btn btn-ghost" type="button">Limpiar filtros</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="brands-results" aria-live="polite">
+      <div class="brands-meta">
+        <span id="brandCount" class="brands-count">—</span>
+        <span class="brands-hint">Seleccioná una marca para ver productos.</span>
+      </div>
+      <div id="brandGrid" class="brands-grid"></div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div class="footer-left">
+        <img src="images/distriar.png" alt="DistriAr" class="footer-logo" loading="lazy" decoding="async" width="200" height="60" />
+        <p>Distribuidora mayorista de lácteos y embutidos · Mendoza</p>
+      </div>
+      <div class="footer-right">
+        <nav>
+          <ul>
+            <li><a href="index.html#quienes">Quiénes somos</a></li>
+            <li><a href="catalogo.html">Catálogo</a></li>
+            <li><a href="index.html#contacto">Contacto</a></li>
+            <li><button class="cookie-settings-link" type="button">Preferencias de cookies</button></li>
+          </ul>
+        </nav>
+        <small class="footer-bottom">&copy; 2026 DistriAr · Todos los derechos reservados</small>
+      </div>
+    </div>
+  </footer>
+
+  <script src="main.js?v=3"></script>
+  <script src="consent.js?v=1"></script>
+  <script src="marcas.js?v=1"></script>
+</body>
+</html>

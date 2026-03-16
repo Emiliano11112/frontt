@@ -15,6 +15,9 @@ let grid = null;
 let searchInput = null;
 let filterButtons = null;
 let inStockOnlyToggle = null;
+let brandFilterStatus = null;
+let brandFilterLabel = null;
+let clearBrandFilterBtn = null;
 
 // auto-refresh configuration (seconds)
 const AUTO_REFRESH_SECONDS = 30;
@@ -23,6 +26,8 @@ let productsRaw = [];
 // indica si los productos fueron cargados desde el API remoto o desde el archivo local
 let productsSource = 'api';
 let currentFilter = "all";
+let currentBrandFilter = '';
+let currentBrandFilterLabel = '';
 let currentCustomerType = CUSTOMER_TYPE_DEFAULT;
 let autoTimer = null;
 let countdownTimer = null;
@@ -105,6 +110,102 @@ function formatNumber(value, { digits = 0 } = {}){
   const n = Number(value);
   if (!Number.isFinite(n)) return '—';
   return digits >= 3 ? numFmt3.format(n) : numFmt0.format(n);
+}
+
+function normalizeText(value){
+  return String(value || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function getBrandFromProduct(p){
+  try{
+    return String(p?.brand || p?.marca || '').trim();
+  }catch(_){ return ''; }
+}
+
+function normalizeBrand(value){
+  return normalizeText(value || '');
+}
+
+function getBrandFilterFromUrl(){
+  try{
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get('brand');
+    return raw ? { value: normalizeBrand(raw), label: raw } : { value: '', label: '' };
+  }catch(_){ return { value: '', label: '' }; }
+}
+
+function setBrandFilter(value, { updateUrl = true, label = '' } = {}){
+  currentBrandFilter = normalizeBrand(value || '');
+  currentBrandFilterLabel = label || value || '';
+  if (updateUrl){
+    try{
+      const url = new URL(window.location.href);
+      if (currentBrandFilter) url.searchParams.set('brand', currentBrandFilterLabel || value || '');
+      else url.searchParams.delete('brand');
+      window.history.replaceState({}, '', url);
+    }catch(_){ }
+  }
+  updateBrandFilterStatus();
+}
+
+function updateBrandFilterStatus(){
+  if (!brandFilterStatus || !brandFilterLabel) return;
+  if (currentBrandFilter){
+    const decoded = (() => { try{ return decodeURIComponent(currentBrandFilterLabel || currentBrandFilter); }catch(_){ return currentBrandFilterLabel || currentBrandFilter; } })();
+    brandFilterLabel.textContent = decoded;
+    brandFilterStatus.hidden = false;
+  } else {
+    brandFilterStatus.hidden = true;
+  }
+}
+
+const WEBP_EXT_RE = /\.(jpe?g|png)$/i;
+function toWebpUrl(src){
+  try{
+    const raw = String(src || '').trim();
+    if (!raw || raw.startsWith('data:')) return '';
+    const rawLower = raw.toLowerCase();
+    if (rawLower.includes('/uploads/')) return '';
+    if (rawLower.startsWith('/uploads')) return '';
+    if (rawLower.startsWith('uploads/')) return '';
+    if (rawLower.includes('uploads/')) return '';
+    if (rawLower.startsWith('http') && !rawLower.includes('/images/')) return '';
+    const clean = raw.split('?')[0];
+    if (!WEBP_EXT_RE.test(clean)) return '';
+    return raw.replace(WEBP_EXT_RE, '.webp');
+  }catch(_){ return ''; }
+}
+
+function buildSrcSet(src){
+  const raw = String(src || '').trim();
+  if (!raw) return '';
+  const encoded = raw.replace(/ /g, '%20');
+  const safe = escapeHtml(encoded);
+  return `${safe} 1x, ${safe} 2x`;
+}
+
+function buildResponsiveImageHtml({ src, alt = '', pictureClass = '', imgClass = '', imgStyle = '', width = 320, height = 240, sizes = '', loading = 'lazy', fetchpriority = 'low' } = {}){
+  const safeSrc = escapeHtml(src || DEFAULT_FALLBACK_IMAGE);
+  const safeAlt = escapeHtml(alt || '');
+  const webp = toWebpUrl(src);
+  const srcset = buildSrcSet(src);
+  const webpSrcset = webp ? buildSrcSet(webp) : '';
+  const pictureClassAttr = pictureClass ? ` class="${pictureClass}"` : '';
+  const imgClassAttr = imgClass ? ` class="${imgClass}"` : '';
+  const imgStyleAttr = imgStyle ? ` style="${imgStyle}"` : '';
+  const sizesAttr = sizes ? ` sizes="${sizes}"` : '';
+  const srcsetAttr = srcset ? ` srcset="${srcset}"` : '';
+  const loadingAttr = loading ? ` loading="${loading}"` : '';
+  const fetchAttr = fetchpriority ? ` fetchpriority="${fetchpriority}"` : '';
+  const dimAttr = (width && height) ? ` width="${width}" height="${height}"` : '';
+  if (webp){
+    return `<picture${pictureClassAttr}><source type="image/webp" srcset="${webpSrcset}"${sizesAttr}><img${imgClassAttr}${imgStyleAttr} src="${safeSrc}" alt="${safeAlt}"${srcsetAttr}${loadingAttr} decoding="async"${fetchAttr}${sizesAttr}${dimAttr}></picture>`;
+  }
+  return `<img${imgClassAttr}${imgStyleAttr} src="${safeSrc}" alt="${safeAlt}"${srcsetAttr}${loadingAttr} decoding="async"${fetchAttr}${sizesAttr}${dimAttr}>`;
 }
 
 function getStoredInStockOnly(){
@@ -1103,8 +1204,18 @@ async function openPromotionDetail(promoId){
       : ('<span style="font-weight:900;color:var(--deep)">' + formatMoney(item.finalPrice) + '</span>');
     const descText = String(item.description || '').trim();
     const safeDesc = descText ? ('<div style="font-size:12px;color:var(--muted);margin-top:2px">' + escapeHtml(descText) + '</div>') : '';
+    const promoImg = buildResponsiveImageHtml({
+      src: item.image,
+      alt: item.name,
+      imgStyle: 'width:54px;height:54px;border-radius:10px;object-fit:cover;border:1px solid rgba(10,34,64,0.08)',
+      width: 54,
+      height: 54,
+      sizes: '54px',
+      loading: 'lazy',
+      fetchpriority: 'low'
+    });
     return '<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(10,34,64,0.06)">' +
-      '<img src="' + escapeHtml(item.image) + '" alt="' + escapeHtml(item.name) + '" loading="lazy" decoding="async" fetchpriority="low" style="width:54px;height:54px;border-radius:10px;object-fit:cover;border:1px solid rgba(10,34,64,0.08)">' +
+      promoImg +
       '<div style="flex:1;min-width:0">' +
       '<div style="font-weight:800;color:var(--deep);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(item.name) + '</div>' +
       safeDesc +
@@ -1242,6 +1353,8 @@ function renderSkeleton(count = 6) {
         if (!img.getAttribute('loading')) img.setAttribute('loading', 'lazy');
         if (!img.getAttribute('decoding')) img.setAttribute('decoding', 'async');
         if (!img.getAttribute('fetchpriority')) img.setAttribute('fetchpriority', 'low');
+        if (!img.getAttribute('srcset') && img.src) img.setAttribute('srcset', img.src + ' 1x, ' + img.src + ' 2x');
+        if (!img.getAttribute('sizes')) img.setAttribute('sizes', '(max-width: 700px) 92vw, 260px');
       }catch(e){}
     });
   }catch(e){/* ignore */}
@@ -1496,6 +1609,8 @@ function render({ animate = false } = {}) {
   const productCatMap = loadProductCategories();
   const filtered = products.filter(p => {
     const productCode = String(p.code || p.codigo || '').toLowerCase();
+    const brandValue = normalizeBrand(getBrandFromProduct(p));
+    const matchesBrand = !currentBrandFilter || brandValue === currentBrandFilter;
     const matchesSearch =
       (p.nombre || '').toLowerCase().includes(search) ||
       (p.descripcion || '').toLowerCase().includes(search) ||
@@ -1535,7 +1650,7 @@ function render({ animate = false } = {}) {
       if (!(Number(stockVal) > 0)) return false;
     }
 
-    return matchesSearch && matchesFilter;
+    return matchesSearch && matchesFilter && matchesBrand;
   });
 
   // Sort so products with stock appear first (in-stock before out-of-stock), preserving relative order otherwise
@@ -1627,6 +1742,15 @@ function render({ animate = false } = {}) {
           const card = document.createElement('article');
           card.className = 'consumo-card reveal';
           const imgSrc = match.imagen || match.image || DEFAULT_FALLBACK_IMAGE;
+          const consumoImg = buildResponsiveImageHtml({
+            src: imgSrc,
+            alt: match.nombre || match.name || '',
+            width: 320,
+            height: 200,
+            sizes: '(max-width: 700px) 90vw, (max-width: 1100px) 45vw, 260px',
+            loading: 'lazy',
+            fetchpriority: 'low'
+          });
           const cType = getConsumoType(c);
           const rawLabel = (c.discount || c.value) ? (cType === 'percent' ? `-${Math.round(Number(c.discount || c.value))}%` : formatMoney(c.value || 0)) : 'Consumo';
           const basePrice = Number(match.precio ?? match.price ?? 0) || 0;
@@ -1647,7 +1771,7 @@ function render({ animate = false } = {}) {
           const btnHtml = (avail == null || avail > 0) ? `<button class="btn btn-primary consumo-add" data-pid="${escapeHtml(String((match.id ?? match._id) || match.name || ''))}">Agregar</button>` : `<button class="btn btn-disabled" disabled>Agotado</button>`;
           card.innerHTML = `
             <div class="consumo-badge">${escapeHtml(rawLabel)}</div>
-            <div class="consumo-thumb"><img src="${imgSrc}" alt="${escapeHtml(match.nombre || match.name || '')}" loading="lazy" decoding="async" fetchpriority="low"></div>
+            <div class="consumo-thumb">${consumoImg}</div>
             <div class="consumo-info">
               <h4>${escapeHtml(c.name || match.nombre || match.name || 'Consumo inmediato')}</h4>
               <p>${escapeHtml(c.description || match.descripcion || '')}</p>
@@ -1750,7 +1874,7 @@ function render({ animate = false } = {}) {
     activePromotions.forEach(pr => {
       try {
         const prIds = Array.isArray(pr.productIds) ? pr.productIds.map(x => String(x)) : [];
-        const sourceProducts = (Array.isArray(products) && products.length) ? products : filtered;
+        const sourceProducts = filtered;
         const match = sourceProducts.find(p => {
           const pid = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '');
           if (prIds.length && prIds.includes(pid)) return true;
@@ -1767,6 +1891,15 @@ function render({ animate = false } = {}) {
         card.setAttribute('role', 'button');
         card.setAttribute('aria-label', 'Ver detalle de la promocion ' + String(pr.name || ''));
         const imgSrc = (match && (match.imagen || match.image)) ? (match.imagen || match.image) : DEFAULT_FALLBACK_IMAGE;
+        const promoImg = buildResponsiveImageHtml({
+          src: imgSrc,
+          alt: pr.name || 'Promoción',
+          width: 220,
+          height: 220,
+          sizes: '120px',
+          loading: 'lazy',
+          fetchpriority: 'low'
+        });
         // compute readable promo label: support percent as fraction (0.12) or as whole number (12)
         let promoLabel = 'Oferta';
         const validityInfo = getPromotionValidityInfo(pr);
@@ -1785,10 +1918,10 @@ function render({ animate = false } = {}) {
         } catch (e) { promoLabel = 'Oferta'; }
         if (promoOutOfStock) card.classList.add('out-of-stock');
         const promoStockHtml = promoOutOfStock
-          ? '<div class="stock-info" style="color:#b86a00;margin-top:4px;font-weight:700">Sin stock</div>'
-          : '<div class="stock-info" style="color:#666;margin-top:4px">Stock: ' + String(promoAvailable) + ' promo' + (promoAvailable === 1 ? '' : 's') + '</div>';
+          ? '<div class="stock-info stock-info--out">Sin stock</div>'
+          : '<div class="stock-info">Stock: ' + String(promoAvailable) + ' promo' + (promoAvailable === 1 ? '' : 's') + '</div>';
         card.innerHTML = `
-          <div class="product-thumb"><img src="${imgSrc}" alt="${escapeHtml(pr.name || 'Promocion')}" loading="lazy" decoding="async" fetchpriority="low"></div>
+          <div class="product-thumb">${promoImg}</div>
             <div class="product-info">
             <div class="promo-head">
               <h3 class="product-title">${escapeHtml(pr.name || 'Promoción')}</h3>
@@ -1834,6 +1967,16 @@ function render({ animate = false } = {}) {
     }
 
     const imgSrc = p.imagen || 'images/placeholder.png';
+    const eagerImg = i < 6;
+    const productImg = buildResponsiveImageHtml({
+      src: imgSrc,
+      alt: p.nombre || '',
+      width: 420,
+      height: 320,
+      sizes: '(max-width: 700px) 92vw, (max-width: 1100px) 45vw, 260px',
+      loading: eagerImg ? 'eager' : 'lazy',
+      fetchpriority: eagerImg ? 'high' : 'low'
+    });
     const pid = String(p.id ?? p._id ?? p.nombre ?? i);
     const saleUnit = getSaleUnitFromObj(p);
     const unitSuffix = (saleUnit === 'kg') ? ' / unidad' : '';
@@ -1944,7 +2087,7 @@ function render({ animate = false } = {}) {
     let html = '';
     html += '<div class="product-image">';
     html += validConsumo ? ('<div class="consumo-ribbon">' + escapeHtml(consumoRibbon) + '</div>') : '';
-    html += '<img src="' + (imgSrc) + '" alt="' + escapeHtml(p.nombre) + '" loading="lazy" decoding="async" fetchpriority="low">';
+    html += productImg;
     html += '</div>';
     html += '<div class="product-info">';
     html += '<h3>' + escapeHtml(p.nombre) + (isNew ? ' <span class="new-badge">Nuevo</span>' : '') + '</h3>';
@@ -1956,9 +2099,9 @@ function render({ animate = false } = {}) {
     if (!Number.isNaN(stockVal)) {
       if (stockVal > 0) {
         const stockShown = (saleUnit === 'kg') ? formatNumber(displayStock, { digits: 3 }) : formatNumber(displayStock);
-        html += '<div class="stock-info" style="color:#666;margin-top:6px">Stock: ' + stockShown + stockUnitLabel + '</div>';
+        html += '<div class="stock-info">Stock: ' + stockShown + stockUnitLabel + '</div>';
       } else {
-        html += '<div class="stock-info" style="color:#b86a00;margin-top:6px;font-weight:700">Sin stock</div>';
+        html += '<div class="stock-info stock-info--out">Sin stock</div>';
       }
     }
     if (outOfStock) {
@@ -2295,9 +2438,20 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
         </div>
       `;
 
+    const qbImg = buildResponsiveImageHtml({
+      src: imgSrc,
+      alt: String(title),
+      imgClass: 'qb-img',
+      width: 320,
+      height: 200,
+      sizes: '320px',
+      loading: 'lazy',
+      fetchpriority: 'low'
+    });
+
     overlay.innerHTML = `
       <div class="qty-box" role="dialog" aria-modal="true" aria-label="Seleccionar cantidad">
-        <div class="qb-top"><img class="qb-img" src="${imgSrc}" alt="${escapeHtml(String(title))}"></div>
+        <div class="qb-top">${qbImg}</div>
         <div class="qb-head"><strong>${escapeHtml(String(title))}</strong></div>
         ${controlsHtml}
         <div class="qb-price">${isKg ? 'Precio unidad completa' : 'Precio unitario'}: ${formatMoney(unitPrice)}${consumoObj ? ' <small style="color:var(--muted);margin-left:8px">Consumo inmediato</small>' : ''}</div>
@@ -2733,7 +2887,17 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
 
   let subtotal = 0; cart.forEach(item=>{
     const row = document.createElement('div'); row.className = 'cart-item'; row.dataset.pid = item.id; row.dataset.key = (item.key || getCartKey(item));
-    const img = document.createElement('div'); img.className = 'ci-image'; img.innerHTML = `<img src="${item.meta?.image || 'images/placeholder.png'}" alt="${escapeHtml(item.meta?.name||'')}">`;
+    const img = document.createElement('div'); img.className = 'ci-image';
+    const cartImg = buildResponsiveImageHtml({
+      src: item.meta?.image || 'images/placeholder.png',
+      alt: item.meta?.name || '',
+      width: 84,
+      height: 84,
+      sizes: '84px',
+      loading: 'lazy',
+      fetchpriority: 'low'
+    });
+    img.innerHTML = cartImg;
     const info = document.createElement('div'); info.className = 'ci-info';
 
     // prefer item.meta.price when provided; try to reconcile with current `consumos` (admin changes may occur after item entered)
@@ -10592,6 +10756,9 @@ function init(){
       }catch(_){ }
     }
     searchInput = document.getElementById("searchInput") || (function(){ const i = document.createElement('input'); i.id='searchInput'; i.type='search'; document.body.insertBefore(i, grid); return i;} )();
+    brandFilterStatus = document.getElementById('brandFilterStatus');
+    brandFilterLabel = document.getElementById('brandFilterLabel');
+    clearBrandFilterBtn = document.getElementById('clearBrandFilterBtn');
     // Render dynamic filter buttons (admin-managed) or fallback to default inline ones
     try{ renderFilterButtons(); }catch(e){ console.warn('initial renderFilterButtons failed', e); }
 
@@ -10609,6 +10776,22 @@ function init(){
         });
       }
     }catch(e){ console.warn('inStockOnly init failed', e); }
+
+    // brand filter from URL (if present)
+    try{
+      const brandParam = getBrandFilterFromUrl();
+      if (brandParam && brandParam.value){
+        setBrandFilter(brandParam.label || brandParam.value, { updateUrl: false, label: brandParam.label });
+      } else {
+        updateBrandFilterStatus();
+      }
+      if (clearBrandFilterBtn){
+        clearBrandFilterBtn.addEventListener('click', () => {
+          setBrandFilter('', { updateUrl: true });
+          render({ animate: true });
+        });
+      }
+    }catch(e){ console.warn('brand filter init failed', e); }
 
     // initial load
     try{ fetchProducts(); }catch(e){ console.error('fetchProducts init failed', e); showMessage('No se pudieron cargar productos', 'error'); }

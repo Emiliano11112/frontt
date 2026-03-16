@@ -13,11 +13,12 @@
   <link rel="icon" href="images/icon.png" />
 </head>
 <body>
+  <a class="skip-link" href="#catalogGrid">Saltar al catálogo</a>
 
     <header class="site-header">
       <div class="container header-inner">
         <a href="index.html" class="logo brand-logo" aria-label="Ir al inicio">
-          <img id="siteBrandLogo" class="brand-logo-img" src="images/distriar.png" alt="DistriAr" />
+          <img id="siteBrandLogo" class="brand-logo-img" src="images/distriar.png" alt="DistriAr" loading="eager" decoding="async" fetchpriority="high" width="180" height="44" />
           <span class="logo-fallback" aria-hidden="true">DistriAr</span>
         </a>
         <nav class="nav" role="navigation">
@@ -25,8 +26,8 @@
             <li><a href="index.html#inicio">Inicio</a></li>
             <li><a href="index.html#quienes">Quiénes somos</a></li>
             <li><a href="index.html#productos">Productos</a></li>
+            <li><a href="marcas.html">Marcas</a></li>
             <li><a href="index.html#logistica">Logística</a></li>
-            <li><a href="index.html#marcas">Marcas</a></li>
             <li><a href="index.html#contacto" class="btn btn-primary contacto">Contacto</a></li>
             <li>
               <button id="authButton" class="account-access" aria-label="Abrir cuenta">
@@ -60,6 +61,11 @@
     <input id="inStockOnlyToggle" type="checkbox" />
     <span>Solo con stock</span>
   </label>
+  <div id="brandFilterStatus" class="brand-filter-status" hidden>
+    <span class="brand-filter-label">Marca:</span>
+    <strong id="brandFilterLabel"></strong>
+    <button id="clearBrandFilterBtn" class="btn btn-ghost" type="button">Quitar</button>
+  </div>
   <div id="customerTypeStatus" class="customer-type-status" hidden>
     <span id="customerTypeLabel" class="customer-type-label">Perfil: Mayorista</span>
     <button id="changeCustomerTypeBtn" class="btn btn-ghost" type="button">Cambiar categoria</button>
@@ -104,7 +110,7 @@
   <div class="modal-content">
     <button id="authClose" class="modal-close" aria-label="Cerrar">✕</button>
     <div class="brand-hero">
-      <img src="images/distriar.png" alt="DistriAr logo">
+      <img src="images/distriar.png" alt="DistriAr logo" loading="lazy" decoding="async" width="200" height="60">
       <h2>DistriAr</h2>
       <p>Distribuciones y logística local — pedidos rápidos y entregas seguras.</p>
       <div class="slogan">Compra fácil · Entrega confiable</div>
@@ -200,7 +206,7 @@
 <footer class="site-footer">
   <div class="container footer-grid">
     <div class="footer-left">
-      <img src="images/distriar.png" alt="DistriAr" class="footer-logo" />
+      <img src="images/distriar.png" alt="DistriAr" class="footer-logo" loading="lazy" decoding="async" width="200" height="60" />
       <p>Distribuidora mayorista de lácteos y embutidos · Mendoza</p>
       <div class="footer-legal" hidden>
         <h4>Datos legales</h4>
@@ -219,6 +225,7 @@
           <li><a href="index.html#productos">Productos</a></li>
           <li><a href="index.html#contacto">Contacto</a></li>
           <li><a href="index.html#trabaja">Trabajá con nosotros</a></li>
+          <li><button class="cookie-settings-link" type="button">Preferencias de cookies</button></li>
         </ul>
       </nav>
       <small class="footer-bottom">&copy; 2026 DistriAr · Todos los derechos reservados</small>
@@ -227,6 +234,7 @@
 </footer>
 
 <script src="main.js?v=3"></script>
+<script src="consent.js?v=1"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script src="catalogo.js?v=78"></script>
 </body>
