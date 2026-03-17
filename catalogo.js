@@ -40,6 +40,17 @@ const BACKEND_WARN_COOLDOWN_MS = 30000;
 const BACKEND_WARN_OK_GRACE_MS = 90000;
 
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const MIN_ANIMATE_GAP_MS = 1200;
+let lastAnimatedRender = 0;
+
+function joinOriginPath(origin, path){
+  try{
+    if (!origin) return String(path || '');
+    const base = String(origin).replace(/\/+$/, '');
+    const tail = String(path || '').replace(/^\/+/, '');
+    return base + '/' + tail;
+  }catch(_){ return String(path || ''); }
+}
 
 function hideBackendWarningBanner(){
   try{
@@ -357,6 +368,7 @@ let promotions = [];
 // consumos (admin-managed immediate-consumption discounts)
 let consumos = [];
 const DEFAULT_FALLBACK_IMAGE = 'images/icon.png';
+const PLACEHOLDER_IMAGE = DEFAULT_FALLBACK_IMAGE;
 const PROMOTIONS_CACHE_KEY = 'catalog:promotions_cache_v2';
 const DELIVERY_ADDRESS_CACHE_KEY = 'catalog:delivery_address_v1';
 const LOCATION_PREFILL_CACHE_KEY = 'catalog:location_prefill_v1';
@@ -1045,7 +1057,7 @@ function getPromotionProducts(promo){
         id: productKey,
         name: found.nombre || found.name || idStr,
         description: found.descripcion || found.description || '',
-        image: found.imagen || found.image || found.image_url || 'images/placeholder.png',
+        image: found.imagen || found.image || found.image_url || PLACEHOLDER_IMAGE,
         basePrice,
         finalPrice
       });
@@ -1280,17 +1292,24 @@ function normalize(p) {
     try{
       const imgStr = String(image || '');
       if (!imgStr) image = imgStr;
-      else if (imgStr.match(/^\/?uploads\//i)) {
-        // ensure absolute root path
-        image = '/' + imgStr.replace(/^\//, '');
-      } else if (imgStr.startsWith('/') && productsSource === 'api') {
-        image = API_ORIGIN + imgStr;
-      } else if (imgStr.startsWith('/') && productsSource !== 'api') {
-        // keep absolute root as-is (will point to project root)
+      else if (/^data:/i.test(imgStr) || /^https?:\/\//i.test(imgStr)) {
         image = imgStr;
       } else {
-        // leave as relative path for other assets
-        image = imgStr;
+        const clean = imgStr.replace(/^\/+/, '');
+        if (/^uploads\//i.test(clean)) {
+          // uploads from API should point to API_ORIGIN; local assets keep root path
+          image = (productsSource === 'api' && API_ORIGIN)
+            ? joinOriginPath(API_ORIGIN, clean)
+            : '/' + clean;
+        } else if (productsSource === 'api' && API_ORIGIN) {
+          image = joinOriginPath(API_ORIGIN, clean);
+        } else if (imgStr.startsWith('/')) {
+          // keep absolute root as-is (will point to project root)
+          image = imgStr;
+        } else {
+          // leave as relative path for other assets
+          image = imgStr;
+        }
       }
     }catch(e){ /* ignore normalization errors */ }
   }
@@ -1595,6 +1614,11 @@ function render({ animate = false } = {}) {
       grid.id = 'catalogGrid';
       document.body.appendChild(grid);
     }
+  }
+  if (animate && !reduceMotion) {
+    const now = Date.now();
+    if (now - lastAnimatedRender < MIN_ANIMATE_GAP_MS) animate = false;
+    else lastAnimatedRender = now;
   }
   grid.style.minHeight = grid.style.minHeight || '200px';
   // inject out-of-stock styles once
@@ -1966,7 +1990,7 @@ function render({ animate = false } = {}) {
       card.setAttribute('data-i', i);
     }
 
-    const imgSrc = p.imagen || 'images/placeholder.png';
+    const imgSrc = p.imagen || PLACEHOLDER_IMAGE;
     const eagerImg = i < 6;
     const productImg = buildResponsiveImageHtml({
       src: imgSrc,
@@ -2133,22 +2157,20 @@ function render({ animate = false } = {}) {
       try {
         const tries = Number(img.dataset.tryCount || '0');
         img.dataset.tryCount = String(tries + 1);
-        // simplified fallback sequence to avoid complex nested expressions
-        if (typeof API_ORIGIN === 'string' && img.src && img.src.startsWith(API_ORIGIN) && location.origin !== API_ORIGIN) {
-          img.src = img.src.replace(API_ORIGIN, '');
-          return;
-        }
-        if (img.src && img.src.startsWith('/')) {
-          img.src = img.src.replace(/^\//, '');
-          return;
-        }
-        if (img.src) {
-          const parts = img.src.split('/');
-          const name = parts[parts.length - 1];
-          if (name) { img.src = 'uploads/' + name; return; }
+        const srcRaw = String(img.getAttribute('src') || img.src || '');
+        const cleaned = srcRaw.split('?')[0].split('#')[0];
+        const name = cleaned ? cleaned.split('/').pop() : '';
+        const apiOrigin = (typeof API_ORIGIN === 'string' && API_ORIGIN) ? API_ORIGIN : '';
+        // First retry: if we can infer an uploads filename, try API_ORIGIN/uploads/<name>
+        if (tries === 0 && name) {
+          const candidate = (productsSource === 'api' && apiOrigin)
+            ? joinOriginPath(apiOrigin, 'uploads/' + name)
+            : ('uploads/' + name);
+          if (candidate && candidate !== srcRaw) { img.src = candidate; return; }
         }
       } catch (err) { /* ignore */ }
-      img.src = 'images/placeholder.png';
+      try{ img.onerror = null; }catch(_){ }
+      img.src = PLACEHOLDER_IMAGE;
       img.classList.add('img-loaded');
     });
 
@@ -2247,7 +2269,7 @@ function openLightbox(src, title = '', desc = ''){
   const img = overlay.querySelector('img');
   overlay.querySelector('.title').textContent = title || '';
   overlay.querySelector('.desc').textContent = desc || '';
-  img.src = src || 'images/placeholder.png';
+  img.src = src || PLACEHOLDER_IMAGE;
   img.alt = title || 'Imagen del producto';
   overlay.classList.add('open');
   overlay.querySelector('.lightbox-close').focus();
@@ -2379,7 +2401,7 @@ function showQuantitySelector(productId, sourceEl = null, opts = {}){
     const overlay = document.createElement('div');
     overlay.id = '__qty_selector';
     overlay.className = 'qty-overlay';
-    const imgSrc = prod?.imagen || prod?.image || prod?.image_url || 'images/placeholder.png';
+    const imgSrc = prod?.imagen || prod?.image || prod?.image_url || PLACEHOLDER_IMAGE;
     const basePrice = Number(prod?.precio ?? prod?.price ?? 0) || 0;
     let unitPrice = basePrice;
     const forceRegular = !!(opts && opts.forceRegular);
@@ -2889,7 +2911,7 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
     const row = document.createElement('div'); row.className = 'cart-item'; row.dataset.pid = item.id; row.dataset.key = (item.key || getCartKey(item));
     const img = document.createElement('div'); img.className = 'ci-image';
     const cartImg = buildResponsiveImageHtml({
-      src: item.meta?.image || 'images/placeholder.png',
+      src: item.meta?.image || PLACEHOLDER_IMAGE,
       alt: item.meta?.name || '',
       width: 84,
       height: 84,
@@ -10841,9 +10863,15 @@ function connectProductWS(){
   if (typeof WebSocket === 'undefined') return;
   let socket = null;
   let retries = 0;
-  // prefer same-origin host first, then consider API_ORIGIN as fallback
-  const hosts = [window.location.host];
-  try{ if (typeof API_ORIGIN === 'string' && API_ORIGIN) { const apiHost = (new URL(API_ORIGIN)).host; if (apiHost && apiHost !== window.location.host) hosts.push(apiHost); } }catch(e){}
+  // Prefer API host when different from the page host (reduces WS errors on static hosting)
+  const hosts = [];
+  try{
+    if (typeof API_ORIGIN === 'string' && API_ORIGIN) {
+      const apiHost = (new URL(API_ORIGIN)).host;
+      if (apiHost && apiHost !== window.location.host) hosts.push(apiHost);
+    }
+  }catch(e){}
+  hosts.push(window.location.host);
   let hostIdx = 0;
   let consecutiveFails = 0;
   function _connect(){
