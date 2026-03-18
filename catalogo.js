@@ -3090,6 +3090,31 @@ function buildOrdersRequestUrls(query = ''){
   });
 }
 
+
+function buildOrderActionRequestUrls(orderId, suffix = ''){
+  const safeId = encodeURIComponent(String(orderId || '').trim());
+  if (!safeId) return [];
+  const path = '/orders/' + safeId + String(suffix || '');
+  const urls = [];
+  try{
+    const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
+    if (typeof API_ORIGIN === 'string' && API_ORIGIN) urls.push(API_ORIGIN + path);
+    if (pageOrigin && shouldTryPageOriginOrders(pageOrigin)) {
+      urls.push(pageOrigin + path);
+      urls.push(path);
+    }
+  }catch(_){
+    urls.push(path);
+  }
+  const seen = new Set();
+  return urls.filter((u) => {
+    const url = String(u || '').trim();
+    if (!url || seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
+}
+
 function buildBackupOrdersRequestUrls(){
   const suffix = '/backup-orders';
   const urls = [];
@@ -4721,6 +4746,47 @@ function getOrderDeliveryScheduleMeta(order){
     };
   }catch(_){ return null; }
 }
+function canCustomerCancelOrder(order){
+  const statusKey = normalizeOrderLifecycleStatus(order?.status || '');
+  return statusKey === 'recibido' || statusKey === 'visto';
+}
+function buildOrderCancelInfoHtml(order){
+  const notices = [];
+  const cancelReason = String(order?.cancel_reason || '').trim();
+  const paymentMethod = normalizePaymentMethodKey(order?.payment_method || '');
+  const paymentStatus = normalizePaymentStatusKey(order?.payment_status || '');
+  const refundStatus = normalizePaymentStatusKey(order?.refund_status || '');
+  const lifecycleStatus = normalizeOrderLifecycleStatus(order?.status || '');
+  if (cancelReason) notices.push(cancelReason);
+  if (paymentMethod === 'mercadopago'){
+    if (paymentStatus === 'refunded') notices.push('Reembolso de Mercado Pago procesado.');
+    else if (refundStatus === 'pending') notices.push('Reembolso de Mercado Pago iniciado.');
+    else if (lifecycleStatus === 'cancelado' && paymentStatus === 'cancelled') notices.push('El cobro de Mercado Pago no llego a aprobarse.');
+  }
+  if (!notices.length && canCustomerCancelOrder(order)){
+    notices.push('Si sigue pendiente, puedes cancelarlo desde aqui.');
+  }
+  if (!notices.length) return '';
+  return `<div style="margin:12px 0 0;padding:10px 12px;border-radius:10px;background:#fff7ed;border:1px solid rgba(242,107,56,0.18);color:#9a3412;font-size:12px;line-height:1.5;">${notices.map((line) => escapeHtml(line)).join('<br>')}</div>`;
+}
+async function cancelOrderFromAccount(orderId, token){
+  const id = String(orderId || '').trim();
+  if (!id) throw new Error('Pedido invalido.');
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const urls = buildOrderActionRequestUrls(id, '/cancel');
+  let lastDetail = '';
+  for (const url of urls){
+    try{
+      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify({}), mode: 'cors' });
+      const data = await res.json().catch(() => null);
+      if (res.ok) return data || { message: 'Pedido cancelado correctamente.' };
+      lastDetail = String(data?.detail || data?.message || lastDetail || 'No se pudo cancelar el pedido.').trim();
+      if (res.status === 403 || res.status === 404 || res.status === 409) break;
+    }catch(_){ }
+  }
+  throw new Error(lastDetail || 'No se pudo cancelar el pedido en este momento.');
+}
 function buildOrderCardHtml(order){
   const rawId = String(order?.id ?? '').trim();
   const idLabel = escapeHtml(rawId || '-');
@@ -4734,6 +4800,11 @@ function buildOrderCardHtml(order){
   const deliveryScheduleMeta = getOrderDeliveryScheduleMeta(order);
   const deliveryScheduleLabel = deliveryScheduleMeta ? escapeHtml(formatDeliveryScheduleSummary(deliveryScheduleMeta) || '') : '';
   const repeatable = rawId && Array.isArray(order?.items) && order.items.length > 0;
+  const cancelable = rawId && canCustomerCancelOrder(order);
+  const noticeHtml = buildOrderCancelInfoHtml(order);
+  const actions = [];
+  if (repeatable) actions.push(`<button class="btn btn-ghost __order_repeat_btn" data-action="repeat_order" data-order-id="${escapeHtml(rawId)}">Repetir pedido</button>`);
+  if (cancelable) actions.push(`<button class="btn btn-ghost" data-action="cancel_order" data-order-id="${escapeHtml(rawId)}">Cancelar pedido</button>`);
   return `
     <article class="__order_card">
       <header class="__order_head">
@@ -4751,9 +4822,8 @@ function buildOrderCardHtml(order){
       <div class="__order_address"><strong>Entrega:</strong> ${addressLabel}</div>
       ${deliveryScheduleLabel ? `<div class="__order_address"><strong>Entrega programada:</strong> ${deliveryScheduleLabel}</div>` : ''}
       <ul class="__order_items">${buildOrderItemsListHtml(order)}</ul>
-      ${repeatable
-        ? `<div class="__order_actions"><button class="btn btn-ghost __order_repeat_btn" data-action="repeat_order" data-order-id="${escapeHtml(rawId)}">Repetir pedido</button></div>`
-        : ''}
+      ${noticeHtml}
+      ${actions.length ? `<div class="__order_actions">${actions.join('')}</div>` : ''}
     </article>
   `;
 }
@@ -4786,7 +4856,7 @@ async function showMyOrdersModal(){
           <h3>Mis pedidos</h3>
         </div>
         <div class="dialog-body">
-          <p class="__orders_hint">Aquí tienes el historial de pedidos de tu cuenta.</p>
+          <p class="__orders_hint">Aquí tienes el historial de pedidos de tu cuenta. Los pedidos pendientes se pueden cancelar desde esta pantalla.</p>
           <div class="__orders_toolbar">
             <input id="__orders_search" class="__orders_field __orders_search" type="search" placeholder="Buscar por pedido, producto o dirección" />
             <select id="__orders_status" class="__orders_field">
@@ -4852,9 +4922,9 @@ async function showMyOrdersModal(){
     }
 
     const orderById = new Map();
-    const indexedRows = ownOrders.map((order, idx) => {
+    const buildIndexedRow = (order, idx) => {
       const idKey = String(order?.id ?? '').trim();
-      if (idKey && !orderById.has(idKey)) orderById.set(idKey, order);
+      if (idKey) orderById.set(idKey, order);
       return {
         key: idKey ? (idKey + ':' + String(idx)) : ('row:' + String(idx)),
         order,
@@ -4864,22 +4934,38 @@ async function showMyOrdersModal(){
         searchText: buildOrderSearchIndex(order),
         html: buildOrderCardHtml(order)
       };
-    });
-
-    if (statusEl){
-      const statusKeys = Array.from(new Set(indexedRows.map(r => r.statusKey).filter(Boolean)));
-      statusKeys.sort((a, b) => formatOrderStatusLabel(a).localeCompare(formatOrderStatusLabel(b), 'es-AR'));
-      statusEl.innerHTML = '<option value="">Estado: todos</option>' + statusKeys.map((key) =>
-        '<option value="' + escapeHtml(key) + '">' + escapeHtml(formatOrderStatusLabel(key)) + '</option>'
-      ).join('');
-    }
-    if (paymentEl){
-      const paymentKeys = Array.from(new Set(indexedRows.map(r => r.paymentKey).filter(Boolean)));
-      paymentKeys.sort((a, b) => formatPaymentMethodLabel(a).localeCompare(formatPaymentMethodLabel(b), 'es-AR'));
-      paymentEl.innerHTML = '<option value="">Pago: todos</option>' + paymentKeys.map((key) =>
-        '<option value="' + escapeHtml(key) + '">' + escapeHtml(formatPaymentMethodLabel(key)) + '</option>'
-      ).join('');
-    }
+    };
+    let indexedRows = ownOrders.map((order, idx) => buildIndexedRow(order, idx));
+    const refreshFilterOptions = () => {
+      const currentStatusValue = String(statusEl?.value || '').trim();
+      const currentPaymentValue = String(paymentEl?.value || '').trim();
+      if (statusEl){
+        const statusKeys = Array.from(new Set(indexedRows.map(r => r.statusKey).filter(Boolean)));
+        statusKeys.sort((a, b) => formatOrderStatusLabel(a).localeCompare(formatOrderStatusLabel(b), 'es-AR'));
+        statusEl.innerHTML = '<option value="">Estado: todos</option>' + statusKeys.map((key) =>
+          '<option value="' + escapeHtml(key) + '">' + escapeHtml(formatOrderStatusLabel(key)) + '</option>'
+        ).join('');
+        if (currentStatusValue && Array.from(statusEl.options).some((opt) => opt.value === currentStatusValue)) statusEl.value = currentStatusValue;
+      }
+      if (paymentEl){
+        const paymentKeys = Array.from(new Set(indexedRows.map(r => r.paymentKey).filter(Boolean)));
+        paymentKeys.sort((a, b) => formatPaymentMethodLabel(a).localeCompare(formatPaymentMethodLabel(b), 'es-AR'));
+        paymentEl.innerHTML = '<option value="">Pago: todos</option>' + paymentKeys.map((key) =>
+          '<option value="' + escapeHtml(key) + '">' + escapeHtml(formatPaymentMethodLabel(key)) + '</option>'
+        ).join('');
+        if (currentPaymentValue && Array.from(paymentEl.options).some((opt) => opt.value === currentPaymentValue)) paymentEl.value = currentPaymentValue;
+      }
+    };
+    const upsertIndexedOrderRow = (order) => {
+      const idKey = String(order?.id ?? '').trim();
+      if (!idKey) return;
+      const idx = indexedRows.findIndex((row) => String(row?.order?.id ?? '').trim() === idKey);
+      const nextRow = buildIndexedRow(order, idx >= 0 ? idx : indexedRows.length);
+      if (idx >= 0) indexedRows[idx] = nextRow;
+      else indexedRows.unshift(nextRow);
+      refreshFilterOptions();
+    };
+    refreshFilterOptions();
 
     const PAGE_SIZE = 10;
     let filteredRows = indexedRows;
@@ -4967,26 +5053,52 @@ async function showMyOrdersModal(){
       try{ searchEl?.focus(); }catch(_){ }
     });
     listEl.addEventListener('click', async (ev) => {
-      const btn = ev.target.closest('button[data-action="repeat_order"]');
+      const btn = ev.target.closest('button[data-action]');
       if (!btn) return;
+      const action = String(btn.getAttribute('data-action') || '').trim();
       const orderId = String(btn.getAttribute('data-order-id') || '').trim();
       if (!orderId) return;
       const order = orderById.get(orderId);
       if (!order) return;
       const previousText = btn.textContent;
+      if (action === 'repeat_order'){
+        try{
+          btn.disabled = true;
+          btn.textContent = 'Cargando...';
+          await loadOrderIntoCart(order, {
+            sourceLabel: 'pedido #' + orderId,
+            askBeforeReplace: true
+          });
+        }catch(e){
+          console.warn('repeat_order from history failed', e);
+          await showAlert('No se pudo repetir este pedido en este momento.', 'warning');
+        }finally{
+          btn.disabled = false;
+          btn.textContent = previousText || 'Repetir pedido';
+        }
+        return;
+      }
+      if (action !== 'cancel_order') return;
+      const confirmed = await showConfirm('¿Quieres cancelar este pedido? Si el cobro de Mercado Pago ya estaba aprobado, procesaremos el reembolso automaticamente.', 'warning');
+      if (!confirmed) return;
       try{
         btn.disabled = true;
-        btn.textContent = 'Cargando...';
-        await loadOrderIntoCart(order, {
-          sourceLabel: 'pedido #' + orderId,
-          askBeforeReplace: true
-        });
+        btn.textContent = 'Cancelando...';
+        const result = await cancelOrderFromAccount(orderId, token);
+        const updatedOrder = result?.order && typeof result.order === 'object'
+          ? result.order
+          : Object.assign({}, order, { status: 'cancelado' });
+        upsertIndexedOrderRow(updatedOrder);
+        applyFilters();
+        showToast(String(result?.message || 'Pedido cancelado correctamente.'), 3600);
       }catch(e){
-        console.warn('repeat_order from history failed', e);
-        await showAlert('No se pudo repetir este pedido en este momento.', 'warning');
+        console.warn('cancel_order from history failed', e);
+        await showAlert(String(e?.message || 'No se pudo cancelar el pedido en este momento.'), 'warning');
       }finally{
-        btn.disabled = false;
-        btn.textContent = previousText || 'Repetir pedido';
+        if (btn && btn.isConnected){
+          btn.disabled = false;
+          btn.textContent = previousText || 'Cancelar pedido';
+        }
       }
     });
     requestAnimationFrame(applyFilters);
