@@ -2,7 +2,7 @@
 document.addEventListener('DOMContentLoaded', function() {
 	const carousel = document.querySelector('.promo-carousel');
 	// If the page doesn't include the promo carousel, skip promo initialization
-	if(!carousel){ console.debug('[promos] .promo-carousel not found â€” skipping promos init'); return; }
+	if(!carousel){ console.debug('[promos] .promo-carousel not found - skipping promos init'); return; }
 	const leftBtn = document.querySelector('.promo-arrow-left');
 	const rightBtn = document.querySelector('.promo-arrow-right');
 	let promoImages = [];
@@ -46,7 +46,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 	function renderImage(idx) {
 		if (!promoImages.length) {
-			carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imÃ¡genes promocionales</div>';
+			carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imagenes promocionales</div>';
 			return;
 		}
 		// Crossfade animation: insert new img and fade out the old one
@@ -55,7 +55,7 @@ document.addEventListener('DOMContentLoaded', function() {
 			// remove any imgs and show placeholder
 			const existing = carousel.querySelectorAll('img');
 			existing.forEach(n => n.parentNode && n.parentNode.removeChild(n));
-			carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imÃ¡genes promocionales</div>';
+			carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imagenes promocionales</div>';
 			return;
 		}
 		// ensure two image slots exist
@@ -113,7 +113,7 @@ document.addEventListener('DOMContentLoaded', function() {
 				const data = await resp.json();
 				if(Array.isArray(data) && data.length>0){
 					promoImages = sanitizePromoItems(data);
-					if(!promoImages.length){ carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imÃ¡genes promocionales</div>'; return; }
+					if(!promoImages.length){ carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imagenes promocionales</div>'; return; }
 					if(current >= promoImages.length) current = 0;
 					renderIndicators();
 					renderImage(current);
@@ -131,7 +131,7 @@ document.addEventListener('DOMContentLoaded', function() {
 				if(Array.isArray(d2) && d2.length>0){
 					d2 = d2.map(i => { if (i && i.url && i.url.startsWith('/')) i.url = 'https://backend-0lcs.onrender.com' + i.url; return i; });
 					promoImages = sanitizePromoItems(d2);
-					if(!promoImages.length){ carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imÃ¡genes promocionales</div>'; return; }
+					if(!promoImages.length){ carousel.innerHTML = '<div style="text-align:center;width:100%">No hay imagenes promocionales</div>'; return; }
 					if(current >= promoImages.length) current = 0;
 					renderIndicators();
 					renderImage(current);
@@ -141,7 +141,7 @@ document.addEventListener('DOMContentLoaded', function() {
 				}
 			}
 		}catch(e){ /* final fallback */ }
-		carousel.innerHTML = '<div style="text-align:center;width:100%">No se pudieron cargar las imÃ¡genes</div>';
+		carousel.innerHTML = '<div style="text-align:center;width:100%">No se pudieron cargar las imagenes</div>';
 	}
 
 	// iniciar carga inicial
@@ -216,7 +216,14 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
 			const el = document.querySelector(targetId);
 			if (el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
 			// close mobile nav when clicked
-			if (nav.classList.contains('open')) nav.classList.remove('open');
+			if (nav.classList.contains('open')) {
+				nav.classList.remove('open');
+				document.body.classList.remove('nav-open');
+				if(menuToggle){
+					menuToggle.setAttribute('aria-expanded','false');
+					menuToggle.textContent = '\u2630';
+				}
+			}
 		}
 	});
 });
@@ -249,7 +256,7 @@ document.addEventListener('click', (e) => {
 			String(mail.getAttribute('data-mail-intent') || '') + ' ' +
 			String(mail.textContent || '')
 		).toLowerCase();
-		const isCvIntent = /(?:\bcv\b|curriculum|curr[ií]culum|trabaj[aá])/i.test(intentText);
+		const isCvIntent = /(?:\bcv\b|curriculum|trabaj)/i.test(intentText);
 		const professionalBody = isCvIntent
 			? (
 				(body ? body + '\n\n' : '') +
@@ -277,57 +284,6 @@ document.addEventListener('click', (e) => {
 	}
 });
 
-// Simple contact form handler
-function handleContact(e){
-	e.preventDefault();
-	const form = document.querySelector('.contact-form');
-	const name = document.getElementById('name').value.trim();
-	const email = document.getElementById('email').value.trim();
-	const message = document.getElementById('message').value.trim();
-	const msgBox = document.querySelector('.contact-form .form-msg');
-	const submitButton = form.querySelector('button[type="submit"]');
-
-	function setLoading(isLoading){
-		if(!submitButton) return;
-		if(isLoading){
-			submitButton.classList.add('is-loading');
-			submitButton.disabled = true;
-			submitButton.setAttribute('aria-busy', 'true');
-		} else {
-			submitButton.classList.remove('is-loading');
-			submitButton.disabled = false;
-			submitButton.setAttribute('aria-busy', 'false');
-		}
-	}
-	if(!name || !email || !message){
-		// Simple inline feedback: show message for a short time
-		if(msgBox){
-			msgBox.innerText = 'Por favor completa todos los campos obligatorios.';
-			msgBox.classList.add('show');
-			setTimeout(() => msgBox.classList.remove('show'), 3000);
-		} else {
-			alert('Por favor completa todos los campos obligatorios.');
-		}
-		return false;
-	}
-	// Simulate sending; show spinner while 'sending'
-	setLoading(true);
-	setTimeout(() => {
-		setLoading(false);
-		if(msgBox){
-			msgBox.innerText = `Gracias ${name}! Tu solicitud fue recibida. Nos contactaremos al correo ${email}.`;
-			msgBox.classList.add('show');
-			// remove message after 4s
-			setTimeout(() => msgBox.classList.remove('show'), 4000);
-		} else {
-			alert(`Gracias ${name}! Tu solicitud fue recibida. Nos contactaremos en breve al correo ${email}.`);
-		}
-		form.reset();
-		document.getElementById('name').focus();
-	}, 900);
-	return false;
-}
-
 // Scroll reveal for cards and sections
 const observer = new IntersectionObserver((entries) => {
 	entries.forEach(entry => {
@@ -336,7 +292,7 @@ const observer = new IntersectionObserver((entries) => {
 		}
 	});
 },{threshold: 0.15});
-document.querySelectorAll('.card, .log-card, .about-text, .about-values, .product-card, .hero-text').forEach(el => {
+document.querySelectorAll('.card, .log-card, .about-text, .about-values, .product-card, .hero-text, .hero-order-card, .shortcut-card').forEach(el => {
 	observer.observe(el);
 });
 

@@ -7,6 +7,7 @@ const AUTH_REGISTER = `${API_ORIGIN}/auth/register`;
 const AUTH_TOKEN = `${API_ORIGIN}/auth/token`;
 const AUTH_ADDRESSES = `${API_ORIGIN}/auth/addresses`;
 const CUSTOMER_TYPE_STORAGE_KEY = 'catalog:customer_type_v1';
+const CHECKOUT_DRAFT_KEY = 'catalog:checkout_draft_v1';
 const CUSTOMER_TYPE_DEFAULT = 'mayorista';
 const IN_STOCK_ONLY_STORAGE_KEY = 'catalog:in_stock_only_v1';
 
@@ -34,14 +35,37 @@ let countdownTimer = null;
 let countdown = AUTO_REFRESH_SECONDS;
 let inStockOnly = false;
 let backendStatus = { ok: null, fails: 0, lastOk: 0, lastWarn: 0 };
+let scheduledRenderTimer = null;
+let scheduledRenderFrame = 0;
 
 const BACKEND_WARN_FAILS = 2;
 const BACKEND_WARN_COOLDOWN_MS = 30000;
 const BACKEND_WARN_OK_GRACE_MS = 90000;
 
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function detectLowEndCatalogMode(){
+  try{
+    const nav = navigator || {};
+    const mem = Number(nav.deviceMemory || 0);
+    const cores = Number(nav.hardwareConcurrency || 0);
+    const conn = nav.connection || nav.mozConnection || nav.webkitConnection || null;
+    const saveData = !!(conn && conn.saveData);
+    const effectiveType = String((conn && conn.effectiveType) || '').toLowerCase();
+    const slowConnection = effectiveType === 'slow-2g' || effectiveType === '2g';
+    return reduceMotion || saveData || slowConnection || (mem > 0 && mem <= 4) || (cores > 0 && cores <= 4);
+  }catch(_){ return reduceMotion; }
+}
+const lowEndCatalogMode = detectLowEndCatalogMode();
+const CATALOG_SEARCH_DELAY_MS = lowEndCatalogMode ? 160 : 90;
+const MAX_EAGER_PRODUCT_IMAGES = lowEndCatalogMode ? 2 : 6;
 const MIN_ANIMATE_GAP_MS = 1200;
 let lastAnimatedRender = 0;
+
+function applyCatalogPerformanceMode(){
+  try{
+    document.body?.classList.toggle('catalog-low-end', !!lowEndCatalogMode);
+  }catch(_){ }
+}
 
 function joinOriginPath(origin, path){
   try{
@@ -325,6 +349,50 @@ function setStoredCustomerType(value){
   try{ localStorage.setItem(CUSTOMER_TYPE_STORAGE_KEY, normalizeCustomerType(value)); }catch(_){ }
 }
 
+function loadCheckoutDraft(){
+  try{
+    const raw = localStorage.getItem(CHECKOUT_DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  }catch(_){ return null; }
+}
+
+function saveCheckoutDraft(data = {}){
+  try{
+    const current = loadCheckoutDraft() || {};
+    const next = Object.assign({}, current, data || {}, { updated_at: Date.now() });
+    localStorage.setItem(CHECKOUT_DRAFT_KEY, JSON.stringify(next));
+  }catch(_){ }
+}
+
+function clearCheckoutDraft(){
+  try{ localStorage.removeItem(CHECKOUT_DRAFT_KEY); }catch(_){ }
+}
+
+function scheduleCatalogRender({ animate = true, delay = 0 } = {}){
+  const safeAnimate = lowEndCatalogMode ? false : animate;
+  try{
+    if (scheduledRenderTimer) {
+      clearTimeout(scheduledRenderTimer);
+      scheduledRenderTimer = null;
+    }
+    if (scheduledRenderFrame) {
+      cancelAnimationFrame(scheduledRenderFrame);
+      scheduledRenderFrame = 0;
+    }
+    const run = () => {
+      scheduledRenderTimer = null;
+      scheduledRenderFrame = requestAnimationFrame(() => {
+        scheduledRenderFrame = 0;
+        render({ animate: safeAnimate });
+      });
+    };
+    if (delay > 0) scheduledRenderTimer = setTimeout(run, delay);
+    else run();
+  }catch(_){ render({ animate: safeAnimate }); }
+}
+
 function getWholesalePriceFromProduct(prod){
   if (!prod) return 0;
   const candidates = [prod.price, prod.precio, prod.unit_price, prod.precio_unit, prod.price_display, prod.price_string, prod.pvp, prod.precio_unitario];
@@ -472,6 +540,7 @@ const SUPPORT_EMAIL = 'distriarmza@gmail.com';
 const ORDER_CUTOFF_HOUR = 18;
 let authLocationPrefill = null;
 let authLocationRequestInFlight = false;
+let authLocationSearchFlowInFlight = false;
 let authLocationMapInstance = null;
 let authLocationMapMarker = null;
 let addressPickerMapInstance = null;
@@ -801,7 +870,7 @@ function renderFilterButtons(){
     const active = loadActiveFilters();
 
     const allBtn = document.createElement('button'); allBtn.dataset.filter = 'all'; allBtn.textContent = 'Todos';
-    allBtn.addEventListener('click', ()=>{ currentFilter = 'all'; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(b=>b.classList.remove('active')); allBtn.classList.add('active'); });
+    allBtn.addEventListener('click', ()=>{ currentFilter = 'all'; scheduleCatalogRender({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(b=>b.classList.remove('active')); allBtn.classList.add('active'); });
     container.appendChild(allBtn);
 
     // Manage filters button (opens modal to choose which filters to apply)
@@ -840,7 +909,7 @@ function renderFilterButtons(){
         const b = document.createElement('button');
         b.dataset.filter = f.value || String(f.name || '').toLowerCase();
         b.textContent = f.name || f.value;
-        b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; render({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
+        b.addEventListener('click', ()=>{ currentFilter = b.dataset.filter; scheduleCatalogRender({ animate: true }); Array.from(container.querySelectorAll('button')).forEach(x=>x.classList.remove('active')); b.classList.add('active'); });
         // mark active if currentFilter matches
         const val = (b.dataset.filter || '').toLowerCase();
         if ((currentFilter && currentFilter.toLowerCase() === val)){ b.classList.add('active'); allBtn.classList.remove('active'); }
@@ -1384,6 +1453,7 @@ function renderSkeleton(count = 6) {
 // Center product images that have transparent margins (common in PNG cutouts)
 function autoCenterTransparentImage(img){
   try{
+    if (lowEndCatalogMode) return;
     if (!img || img.dataset.focused === '1') return;
     if (!img.naturalWidth || !img.naturalHeight) return;
     const src = String(img.currentSrc || img.src || '');
@@ -1447,6 +1517,7 @@ function autoCenterTransparentImage(img){
 
 function applyImageBackdrop(img){
   try{
+    if (lowEndCatalogMode) return;
     if (!img || !img.closest) return;
     const parent = img.closest('.product-image');
     if (!parent) return;
@@ -1536,8 +1607,7 @@ async function fetchProducts({ showSkeleton = true } = {}) {
         const local = JSON.parse(cached);
         productsRaw = Array.isArray(local) ? local : [];
         products = productsRaw.map(normalize);
-        await fetchPromotions();
-        await fetchConsumos();
+        await Promise.all([fetchPromotions(), fetchConsumos()]);
         syncCartPricesForCustomerType();
         render({ animate: true });
         showMessage('Mostrando catálogo desde caché local (offline).', 'info');
@@ -1552,8 +1622,7 @@ async function fetchProducts({ showSkeleton = true } = {}) {
       productsSource = 'local';
       productsRaw = Array.isArray(local) ? local : [];
       products = productsRaw.map(normalize);
-      await fetchPromotions();
-      await fetchConsumos();
+      await Promise.all([fetchPromotions(), fetchConsumos()]);
       syncCartPricesForCustomerType();
       render({ animate: true });
       updateLastUpdated(true);
@@ -1571,8 +1640,7 @@ async function fetchProducts({ showSkeleton = true } = {}) {
   productsRaw = Array.isArray(data) ? data : [];
   products = productsRaw.map(normalize);
   try { localStorage.setItem('catalog:products_cache_v1', JSON.stringify(data)); localStorage.setItem('catalog:products_cache_ts', String(Date.now())); } catch (e) { /* ignore */ }
-  await fetchPromotions();
-  await fetchConsumos();
+  await Promise.all([fetchPromotions(), fetchConsumos()]);
   syncCartPricesForCustomerType();
   render({ animate: true });
   updateLastUpdated();
@@ -1581,6 +1649,7 @@ async function fetchProducts({ showSkeleton = true } = {}) {
 // visual "fly to cart" effect
 function animateFlyToCart(sourceImg){
   try{
+    if (lowEndCatalogMode) return;
     const fab = document.getElementById('cartButton');
     if (!fab || !sourceImg) return;
     const rectSrc = sourceImg.getBoundingClientRect();
@@ -1615,6 +1684,7 @@ function render({ animate = false } = {}) {
       document.body.appendChild(grid);
     }
   }
+  if (lowEndCatalogMode) animate = false;
   if (animate && !reduceMotion) {
     const now = Date.now();
     if (now - lastAnimatedRender < MIN_ANIMATE_GAP_MS) animate = false;
@@ -1631,6 +1701,9 @@ function render({ animate = false } = {}) {
   }
   const search = (searchInput.value || '').toLowerCase();
   const productCatMap = loadProductCategories();
+  const activeFilters = loadActiveFilters();
+  const activePromotions = Array.isArray(promotions) ? promotions.filter(pr => isPromotionActive(pr)) : [];
+  const activeConsumos = Array.isArray(consumos) ? consumos : [];
   const filtered = products.filter(p => {
     const productCode = String(p.code || p.codigo || '').toLowerCase();
     const brandValue = normalizeBrand(getBrandFromProduct(p));
@@ -1642,30 +1715,14 @@ function render({ animate = false } = {}) {
     const pid = String(p.id ?? p._id ?? p.nombre ?? p.name ?? '');
 
     // Normalize assigned categories (ensure array, trim & lowercase values)
-    const assignedRaw = (productCatMap && (productCatMap[pid] || productCatMap[String(p.nombre)])) || [];
-    // Accept arrays, comma-separated strings or index-keyed objects (robust normalization)
-    let assignedArr = [];
-    if (Array.isArray(assignedRaw)) {
-      assignedArr = assignedRaw;
-    } else if (typeof assignedRaw === 'string') {
-      assignedArr = assignedRaw.split(',').map(s => s.trim()).filter(Boolean);
-    } else if (assignedRaw && typeof assignedRaw === 'object') {
-      assignedArr = Object.values(assignedRaw).flat().map(v => String(v || '').trim()).filter(Boolean);
-    } else {
-      assignedArr = [];
-    }
-    const assigned = assignedArr.map(v => String(v || '').trim().toLowerCase());
+    const assigned = getAssignedProductCategories(p, productCatMap);
 
-    // Support comma-separated categories in product.categoria (e.g. "lacteos, fiambres")
-    const prodCats = (p.categoria || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-
-    const activeFilters = loadActiveFilters();
     const focusedFilter = (currentFilter && String(currentFilter).toLowerCase() !== 'all')
       ? String(currentFilter).toLowerCase()
       : '';
     const filtersToMatch = focusedFilter ? [focusedFilter] : activeFilters;
     // If no selected filters, show all. If one chip is focused, filter only by that chip.
-    const matchesFilter = (!filtersToMatch || filtersToMatch.length === 0) || filtersToMatch.some(fv => ((assigned && assigned.includes(fv)) || prodCats.includes(fv)));
+    const matchesFilter = (!filtersToMatch || filtersToMatch.length === 0) || filtersToMatch.some(fv => assigned.includes(fv));
 
     // optional: show only products with stock
     if (inStockOnly) {
@@ -1867,7 +1924,7 @@ function render({ animate = false } = {}) {
     catalogSection = document.createElement('section');
     catalogSection.id = 'catalogSection';
     catalogSection.className = 'catalog-section';
-    catalogSection.innerHTML = '<div class="catalog-header"><h2 class="catalog-title">Catálogo <small id="catalogCount" class="catalog-sub"></small></h2></div><div class="catalog-grid-wrap" id="catalogGridWrap"></div>';
+    catalogSection.innerHTML = '<div class="catalog-header"><div><h2 class="catalog-title">Catálogo <small id="catalogCount" class="catalog-sub"></small></h2></div></div><div class="catalog-grid-wrap" id="catalogGridWrap"></div>';
     try{
       if (grid && grid.parentNode) grid.parentNode.insertBefore(catalogSection, grid);
       else document.body.appendChild(catalogSection);
@@ -1888,7 +1945,6 @@ function render({ animate = false } = {}) {
 
   // Render simple promotion cards for promotions that apply to the currently filtered products
   // Put promotions into a separate horizontal row so they don't push or hide products on mobile.
-  const activePromotions = Array.isArray(promotions) ? promotions.filter(pr => isPromotionActive(pr)) : [];
   if (activePromotions.length) {
     if (promotionsSection) promotionsSection.style.display = '';
     const promoFrag = document.createDocumentFragment();
@@ -1960,7 +2016,9 @@ function render({ animate = false } = {}) {
         try{
           const promoImg = card.querySelector('img');
           if (promoImg) {
-            promoImg.addEventListener('load', () => { autoCenterTransparentImage(promoImg); });
+            promoImg.addEventListener('load', () => {
+              if (!lowEndCatalogMode) autoCenterTransparentImage(promoImg);
+            });
             promoImg.addEventListener('error', () => { promoImg.src = DEFAULT_FALLBACK_IMAGE; });
           }
         }catch(_){ }
@@ -1991,7 +2049,7 @@ function render({ animate = false } = {}) {
     }
 
     const imgSrc = p.imagen || PLACEHOLDER_IMAGE;
-    const eagerImg = i < 6;
+    const eagerImg = i < MAX_EAGER_PRODUCT_IMAGES;
     const productImg = buildResponsiveImageHtml({
       src: imgSrc,
       alt: p.nombre || '',
@@ -2380,7 +2438,66 @@ function updateCartBadge(){
   const display = Number.isInteger(count) ? formatNumber(count) : formatNumber(count, { digits: 3 });
   const el = document.getElementById('cartCount');
   if(el) el.textContent = display;
-  if(count>0){ el.classList.add('has-items'); el.animate?.([{ transform: 'scale(1)' },{ transform: 'scale(1.12)' },{ transform: 'scale(1)' }], { duration: 320 }); }
+  if(el){
+    el.classList.toggle('has-items', count > 0);
+    if(count>0){ el.animate?.([{ transform: 'scale(1)' },{ transform: 'scale(1.12)' },{ transform: 'scale(1)' }], { duration: 320 }); }
+  }
+  const entryCount = document.getElementById('entryCartCount');
+  if (entryCount) entryCount.textContent = display;
+  const entryBtn = document.getElementById('entryCartBtn');
+  if (entryBtn) {
+    entryBtn.setAttribute('aria-label', count > 0 ? `Finalizar pedido con ${display} productos` : 'Abrir carrito');
+  }
+}
+
+function setCatalogFilterFromEntry(filterValue = 'all'){
+  try{
+    currentFilter = String(filterValue || 'all').toLowerCase();
+    scheduleCatalogRender({ animate: true });
+    const container = document.querySelector('.filters');
+    if (container){
+      Array.from(container.querySelectorAll('button')).forEach((btn) => {
+        const val = String(btn.dataset.filter || '').toLowerCase();
+        const isAllButton = val === 'all';
+        btn.classList.toggle('active', (isAllButton && currentFilter === 'all') || (!!val && !isAllButton && val === currentFilter));
+      });
+    }
+    const target = document.getElementById('catalogGrid');
+    target?.scrollIntoView?.({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+  }catch(_){ }
+}
+
+function normalizeCatalogToken(value){
+  return String(value || '').trim().toLowerCase();
+}
+
+function getAssignedProductCategories(product, productCatMap){
+  try{
+    const pid = String(product?.id ?? product?._id ?? product?.nombre ?? product?.name ?? '');
+    const assignedRaw = (productCatMap && (productCatMap[pid] || productCatMap[String(product?.nombre || product?.name || '')])) || [];
+    let assignedArr = [];
+    if (Array.isArray(assignedRaw)) assignedArr = assignedRaw;
+    else if (typeof assignedRaw === 'string') assignedArr = assignedRaw.split(',');
+    else if (assignedRaw && typeof assignedRaw === 'object') assignedArr = Object.values(assignedRaw).flat();
+    const directCats = String(product?.categoria || '').split(',');
+    return [...assignedArr, ...directCats].map((item) => normalizeCatalogToken(item)).filter(Boolean);
+  }catch(_){ return []; }
+}
+
+function initCatalogEntryActions(){
+  try{
+    const cartBtn = document.getElementById('entryCartBtn');
+    if (cartBtn && !cartBtn.dataset.bound){
+      cartBtn.dataset.bound = '1';
+      cartBtn.addEventListener('click', () => openCart());
+    }
+    document.querySelectorAll('[data-entry-filter]').forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', () => setCatalogFilterFromEntry(btn.getAttribute('data-entry-filter') || 'all'));
+    });
+    updateCartBadge();
+  }catch(e){ console.warn('initCatalogEntryActions failed', e); }
 }
 
 /* showQuantitySelector: minimal, scoped modal to choose quantity before adding to cart */
@@ -3046,7 +3163,7 @@ function renderCart(){ const container = document.getElementById('cartItems'); c
 
   // move actions into footer area if present
   try{
-    const footer = document.getElementById('cartFooter'); if(footer){ footer.innerHTML = `<div class="cart-footer"><div id="cartSubtotal">Subtotal</div><div class="cart-actions"><button id="clearCart" class="btn">Vaciar</button><button id="checkoutBtn" class="btn btn-primary">Hacer pedido</button></div></div>`; document.getElementById('cartSubtotal').innerHTML = `Subtotal: <strong>${formatMoney(subtotal)}</strong>`; }
+    const footer = document.getElementById('cartFooter'); if(footer){ footer.innerHTML = `<div class="cart-footer"><div id="cartSubtotal">Subtotal</div><div class="cart-actions"><button id="clearCart" class="btn">Vaciar</button><button id="checkoutBtn" class="btn btn-primary">Finalizar pedido</button></div></div>`; document.getElementById('cartSubtotal').innerHTML = `Subtotal: <strong>${formatMoney(subtotal)}</strong>`; }
   }catch(e){ }
 
   updateCartBadge(); }
@@ -3095,6 +3212,28 @@ function buildOrderActionRequestUrls(orderId, suffix = ''){
   const safeId = encodeURIComponent(String(orderId || '').trim());
   if (!safeId) return [];
   const path = '/orders/' + safeId + String(suffix || '');
+  const urls = [];
+  try{
+    const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
+    if (typeof API_ORIGIN === 'string' && API_ORIGIN) urls.push(API_ORIGIN + path);
+    if (pageOrigin && shouldTryPageOriginOrders(pageOrigin)) {
+      urls.push(pageOrigin + path);
+      urls.push(path);
+    }
+  }catch(_){
+    urls.push(path);
+  }
+  const seen = new Set();
+  return urls.filter((u) => {
+    const url = String(u || '').trim();
+    if (!url || seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
+}
+
+function buildOrderTrackingRequestUrls(){
+  const path = '/orders/tracking';
   const urls = [];
   try{
     const pageOrigin = (location && location.protocol && location.protocol.startsWith('http') && location.origin) ? location.origin : null;
@@ -3359,9 +3498,8 @@ async function submitOrderPayload(payload, baseHeaders){
   const clearBtn = document.getElementById('clearCart'); if(clearBtn) clearBtn.addEventListener('click', async ()=>{ const ok = await showConfirm('Vaciar el carrito?'); if (ok) clearCart(); });
   const checkout = document.getElementById('checkoutBtn');
   if (checkout) {
-    // ensure label matches requested copy
-    checkout.textContent = checkout.textContent.trim() || 'Hacer pedido';
-    checkout.setAttribute('aria-label', 'Hacer pedido');
+    checkout.textContent = checkout.textContent.trim() || 'Finalizar pedido';
+    checkout.setAttribute('aria-label', 'Finalizar pedido');
     checkout.addEventListener('click', async () => {
         const cart = readCart();
         if (!cart || cart.length === 0) return showAlert('El carrito está vacío');
@@ -3389,25 +3527,17 @@ async function submitOrderPayload(payload, baseHeaders){
           } catch (e) { /* ignore profile fetch errors */ }
         }
 
-        // Proceed — checkout button reference created later
+        saveCheckoutDraft({
+          customer_type: normalizeCustomerType(currentCustomerType),
+          items: Array.isArray(cart) ? cart : [],
+          total: Number(basePayload.total || 0)
+        });
 
-        // If there's no user info attached (guest checkout), offer to login or collect minimal contact info
         if (!basePayload.user_full_name && !basePayload.user_email) {
-          try {
-            const wantLogin = await showConfirm('No estás logueado. ¿Iniciar sesión para adjuntar tus datos al pedido? (Aceptar = login, Cancelar = enviar como invitado)');
-            if (wantLogin) { openAuthModal(); try{ checkout.disabled = false; }catch(_){ } return; }
-            // Collect minimal guest details via modal
-            const guestInfo = await showGuestModal();
-            if (!guestInfo || !guestInfo.email) { try{ checkout.disabled = false; }catch(_){ } return; }
-            if (guestInfo.name) basePayload.user_full_name = guestInfo.name;
-            if (guestInfo.email) basePayload.user_email = guestInfo.email;
-            if (guestInfo.barrio) basePayload.user_barrio = guestInfo.barrio;
-            if (guestInfo.calle) basePayload.user_calle = guestInfo.calle;
-            if (guestInfo.numero) basePayload.user_numeracion = guestInfo.numero;
-          } catch (e) { console.warn('guest info prompt failed', e); }
-        }
-        if (!basePayload.user_email) {
-          try { await showAlert('Necesitamos tu email para enviarte la confirmacion del pedido.'); } catch(_){}
+          try{
+            openAuthModal({ tab: 'login' });
+            showToast('Iniciá sesión o creá tu cuenta para continuar con el pedido.', 3200);
+          }catch(_){ openAuthModal({ tab: 'login' }); }
           try { checkout.disabled = false; } catch(_){}
           return;
         }
@@ -3461,6 +3591,21 @@ async function submitOrderPayload(payload, baseHeaders){
           basePayload.user_address = sanitizeAddressLongText(deliveryInfo.full_text || buildAddressDisplay(deliveryInfo), 200);
           basePayload.user_address_label = sanitizeAddressAlias(deliveryInfo.label || '');
           basePayload.user_delivery_notes = sanitizeDeliveryNotes(deliveryInfo.instrucciones || '');
+          saveCheckoutDraft({
+            delivery: {
+              barrio: basePayload.user_barrio || '',
+              calle: basePayload.user_calle || '',
+              numeracion: basePayload.user_numeracion || '',
+              postal_code: basePayload.user_postal_code || '',
+              department: basePayload.user_department || '',
+              query_hint: basePayload.user_query_hint || '',
+              full_text: basePayload.user_address || '',
+              label: basePayload.user_address_label || '',
+              lat: basePayload.user_lat || null,
+              lon: basePayload.user_lon || null,
+              instrucciones: basePayload.user_delivery_notes || ''
+            }
+          });
         }
         if (!basePayload.user_barrio || !basePayload.user_calle || !basePayload.user_numeracion) {
           try { await showAlert('Necesitamos dirección de entrega (barrio, calle y numeración).'); } catch(_){}
@@ -3557,11 +3702,6 @@ async function submitOrderPayload(payload, baseHeaders){
             // No user confirmation here: consumptions are processed server-side transparently
           }
         }catch(e){}
-        const confirmCheckout = await showCheckoutConfirmModal(payload, null);
-        if (!confirmCheckout){
-          try { checkout.disabled = false; } catch(_){}
-          return;
-        }
         selectedPaymentMethod = await showPaymentMethodModal();
         if (!selectedPaymentMethod){
           try { checkout.disabled = false; } catch(_){}
@@ -3569,6 +3709,26 @@ async function submitOrderPayload(payload, baseHeaders){
         }
         payload.payment_method = selectedPaymentMethod === 'mercadopago' ? 'mercadopago' : 'cash';
         payload.payment_status = selectedPaymentMethod === 'mercadopago' ? 'mp_pending' : 'cash_pending';
+        saveCheckoutDraft({
+          payment_method: payload.payment_method,
+          contact: {
+            name: String(payload.user_full_name || '').trim(),
+            email: String(payload.user_email || '').trim()
+          },
+          delivery: {
+            barrio: payload.user_barrio || '',
+            calle: payload.user_calle || '',
+            numeracion: payload.user_numeracion || '',
+            postal_code: payload.user_postal_code || '',
+            department: payload.user_department || '',
+            query_hint: payload.user_query_hint || '',
+            full_text: payload.user_address || '',
+            label: payload.user_address_label || '',
+            lat: payload.user_lat || null,
+            lon: payload.user_lon || null,
+            instrucciones: payload.user_delivery_notes || ''
+          }
+        });
 
       const btn = document.getElementById('checkoutBtn');
       btn.disabled = true;
@@ -3595,6 +3755,7 @@ async function submitOrderPayload(payload, baseHeaders){
             if (!orderId) {
               await showAlert('El pedido se creó, pero no pudimos preparar el pago de Mercado Pago.');
               clearCart(); closeCart();
+              clearCheckoutDraft();
               return;
             }
 
@@ -3704,6 +3865,7 @@ async function submitOrderPayload(payload, baseHeaders){
             const prefDetail = prefErrors.filter(Boolean).slice(0, 3).join(' | ');
             await showAlert(`Pedido #${orderId} creado, pero no pudimos abrir Mercado Pago.${prefDetail ? ('\n\nDetalle: ' + prefDetail) : ''}`, 'warning');
             clearCart(); closeCart();
+            clearCheckoutDraft();
             return;
           }
 
@@ -3714,6 +3876,7 @@ async function submitOrderPayload(payload, baseHeaders){
             : 'Pedido enviado — el panel de administración recibirá la orden.';
           await showAlert(successMessage);
           clearCart(); closeCart();
+          clearCheckoutDraft();
         } else {
           // graceful fallback: keep el carrito (NO WhatsApp), mostrar modal con opciones al usuario
           console.warn('Checkout failed — showing fallback modal and keeping cart locally.', _attemptErrors);
@@ -3856,17 +4019,6 @@ async function submitOrderPayload(payload, baseHeaders){
   function saveFailedOrder(payload){
     try{
       const key = 'catalog:failed_orders_v1';
-      // ensure guest contact details are attached when available so the saved payload is complete
-      try{
-        const g = JSON.parse(localStorage.getItem('catalog:guest_info_v1') || 'null');
-        if (g){
-          payload.user_full_name = payload.user_full_name || g.name;
-          payload.user_email = payload.user_email || g.email;
-          payload.user_barrio = payload.user_barrio || g.barrio;
-          payload.user_calle = payload.user_calle || g.calle;
-          payload.user_numeracion = payload.user_numeracion || g.numero;
-        }
-      }catch(e){}
       const existing = JSON.parse(localStorage.getItem(key) || '[]');
       const safePayload = buildSanitizedOrderPayload(payload);
       existing.push({ payload: safePayload, ts: Date.now() });
@@ -4207,6 +4359,31 @@ async function fetchOrdersForAccount(token){
   return fetchOrdersSnapshot(token, { limit: 300, source: 'web' });
 }
 
+async function fetchOrderTrackingSnapshot(token, orderIds){
+  const ids = Array.from(new Set((Array.isArray(orderIds) ? orderIds : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean)))
+    .slice(0, 60);
+  if (!ids.length) return [];
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  for (const url of buildOrderTrackingRequestUrls()){
+    try{
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ order_ids: ids }),
+        mode: 'cors',
+        cache: 'no-store'
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (Array.isArray(data)) return data;
+    }catch(_){ }
+  }
+  return [];
+}
+
 function updateRepeatOrderButton(){
   const btn = document.getElementById('repeatLastOrderBtn');
   if (!btn) return;
@@ -4369,6 +4546,39 @@ function formatOrderStatusLabel(value){
     canceled: 'Cancelado'
   };
   return map[key] || humanizeTokenLabel(key);
+}
+
+function getOrderTrackingPayload(order){
+  try{
+    return order && order.__tracking && typeof order.__tracking === 'object' ? order.__tracking : null;
+  }catch(_){ return null; }
+}
+
+function formatOrderStatusMessage(order){
+  const tracking = getOrderTrackingPayload(order);
+  const tracked = String(tracking?.status_message || '').trim();
+  if (tracked) return tracked;
+  const statusKey = normalizeOrderLifecycleStatus(order?.status || '');
+  const map = {
+    recibido: 'Estamos armando tu pedido.',
+    visto: 'Ya revisamos tu pedido y lo estamos preparando.',
+    preparado: 'Tu pedido ya esta listo.',
+    enviado: 'Ya va en camino.',
+    entregado: 'Tu pedido ya fue entregado.',
+    cancelado: 'Tu pedido fue cancelado.'
+  };
+  return map[statusKey] || formatOrderStatusLabel(statusKey);
+}
+
+function getOrderEtaText(order){
+  const tracking = getOrderTrackingPayload(order);
+  const etaText = String(tracking?.eta_text || '').trim();
+  return tracking?.eta_available === true && etaText ? etaText : '';
+}
+
+function getOrderEtaDetail(order){
+  const tracking = getOrderTrackingPayload(order);
+  return String(tracking?.eta_detail || '').trim();
 }
 
 function normalizeOrderLifecycleStatus(value){
@@ -4543,9 +4753,10 @@ function buildOrderSearchIndex(order){
     const id = String(order?.id ?? '').trim();
     const address = getOrderAddressLabel(order);
     const status = formatOrderStatusLabel(order?.status || '');
+    const statusMessage = formatOrderStatusMessage(order);
     const payment = formatOrderPaymentLabel(order?.payment_method || '', order?.payment_status || '');
     const itemNames = (Array.isArray(order?.items) ? order.items : []).map(resolveOrderItemName).join(' ');
-    return [id, address, status, payment, itemNames].join(' ').toLowerCase();
+    return [id, address, status, statusMessage, payment, itemNames].join(' ').toLowerCase();
   }catch(_){ return ''; }
 }
 function buildCheckoutAddressLabel(payload){
@@ -4793,6 +5004,9 @@ function buildOrderCardHtml(order){
   const dateLabel = escapeHtml(formatOrderDateLabel(order?.created_at));
   const statusKey = normalizeOrderLifecycleStatus(order?.status || 'recibido');
   const statusLabel = escapeHtml(formatOrderStatusLabel(statusKey));
+  const statusMessage = escapeHtml(formatOrderStatusMessage(order));
+  const etaText = escapeHtml(getOrderEtaText(order));
+  const etaDetail = escapeHtml(getOrderEtaDetail(order));
   const totalRaw = Number(order?.total || 0);
   const totalLabel = escapeHtml(formatMoney(totalRaw));
   const paymentLabel = escapeHtml(formatOrderPaymentLabel(order?.payment_method || '-', order?.payment_status || '-'));
@@ -4816,6 +5030,8 @@ function buildOrderCardHtml(order){
         <span class="__order_chip">Pago: ${paymentLabel}</span>
         <span class="__order_chip __order_total">Total: ${totalLabel}</span>
       </div>
+      <div class="__order_status_note">${statusMessage}</div>
+      ${etaText ? `<div class="__order_eta"><div class="__order_eta_text">${etaText}</div>${etaDetail ? `<div class="__order_eta_meta">${etaDetail}</div>` : ''}</div>` : ''}
       <div class="__order_progress">
         ${buildOrderLifecycleStepperHtml(statusKey)}
       </div>
@@ -4913,6 +5129,21 @@ async function showMyOrdersModal(){
       const tb = new Date(b && b.created_at ? b.created_at : 0).getTime();
       return tb - ta;
     });
+    const trackingEligibleIds = ownOrders
+      .filter((order) => ['recibido', 'visto', 'preparado', 'enviado'].includes(normalizeOrderLifecycleStatus(order?.status || '')))
+      .map((order) => String(order?.id ?? '').trim())
+      .filter(Boolean);
+    if (trackingEligibleIds.length){
+      try{
+        const trackingRows = await fetchOrderTrackingSnapshot(token, trackingEligibleIds);
+        const trackingMap = new Map((trackingRows || []).map((row) => [String(row?.order_id ?? '').trim(), row]));
+        ownOrders.forEach((order) => {
+          const key = String(order?.id ?? '').trim();
+          if (!key || !trackingMap.has(key)) return;
+          order.__tracking = trackingMap.get(key);
+        });
+      }catch(_){ }
+    }
 
     if (!listEl || !pagerEl) return;
     if (!ownOrders.length){
@@ -4960,6 +5191,8 @@ async function showMyOrdersModal(){
       const idKey = String(order?.id ?? '').trim();
       if (!idKey) return;
       const idx = indexedRows.findIndex((row) => String(row?.order?.id ?? '').trim() === idKey);
+      const previousTracking = idx >= 0 ? indexedRows[idx]?.order?.__tracking : orderById.get(idKey)?.__tracking;
+      if (previousTracking && !(order && order.__tracking)) order.__tracking = previousTracking;
       const nextRow = buildIndexedRow(order, idx >= 0 ? idx : indexedRows.length);
       if (idx >= 0) indexedRows[idx] = nextRow;
       else indexedRows.unshift(nextRow);
@@ -5406,6 +5639,10 @@ body.__lock_scroll{overflow:hidden}
 .__order_chip_status[data-status="enviado"]{background:linear-gradient(180deg,#eef2ff,#e0e7ff);border-color:rgba(79,70,229,0.22);color:#3730a3}
 .__order_chip_status[data-status="entregado"]{background:linear-gradient(180deg,#dff7ec,#bff0d9);border-color:rgba(16,185,129,0.26);color:#065f46}
 .__order_chip_status[data-status="cancelado"]{background:linear-gradient(180deg,#ffecec,#ffd6d6);border-color:rgba(239,68,68,0.24);color:#9b1e1e}
+.__order_status_note{margin:0 0 8px;font-size:13px;font-weight:800;color:#334155}
+.__order_eta{margin:0 0 10px;padding:10px 12px;border-radius:12px;background:linear-gradient(180deg,#f8fbff,#eef5ff);border:1px solid rgba(37,99,235,0.18)}
+.__order_eta_text{font-size:13px;font-weight:900;color:#1d4ed8}
+.__order_eta_meta{margin-top:4px;font-size:12px;line-height:1.45;color:#4f6b8a}
 .__order_progress{margin:2px 0 10px}
 .__order_stepper{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0}
 .__order_stepper.__compact{max-width:320px}
@@ -7068,6 +7305,33 @@ async function applyManualAuthLocationFromMap(lat, lon){
   }
 }
 
+function refreshAuthLocationMapLayout(){
+  try{
+    if (!authLocationMapInstance) return;
+    const run = () => {
+      try{ authLocationMapInstance.invalidateSize(true); }catch(_){ }
+      try{
+        const center = authLocationMapMarker && typeof authLocationMapMarker.getLatLng === 'function'
+          ? authLocationMapMarker.getLatLng()
+          : (typeof authLocationMapInstance.getCenter === 'function' ? authLocationMapInstance.getCenter() : null);
+        if (center && typeof authLocationMapInstance.setView === 'function'){
+          authLocationMapInstance.setView(center, authLocationMapInstance.getZoom(), { animate: false });
+        }
+      }catch(_){ }
+    };
+    run();
+    try{
+      requestAnimationFrame(() => {
+        run();
+        requestAnimationFrame(run);
+      });
+    }catch(_){ }
+    [120, 260, 520].forEach((ms) => {
+      setTimeout(run, ms);
+    });
+  }catch(_){ }
+}
+
 function syncAuthLocationMapPreview(prefill){
   try{
     const mapWrap = document.getElementById('authLocationMapWrap');
@@ -7118,15 +7382,7 @@ function syncAuthLocationMapPreview(prefill){
         mapFrame.hidden = true;
         mapFrame.src = '';
       }
-      setTimeout(() => {
-        try{ authLocationMapInstance.invalidateSize(); }catch(_){ }
-      }, 50);
-      setTimeout(() => {
-        try{ authLocationMapInstance.invalidateSize(); }catch(_){ }
-      }, 220);
-      setTimeout(() => {
-        try{ authLocationMapInstance.invalidateSize(); }catch(_){ }
-      }, 520);
+      refreshAuthLocationMapLayout();
       return;
     }
     // Fallback sin Leaflet: mapa embebido estático.
@@ -7159,10 +7415,41 @@ function setAuthLocationStatus(message){
   }catch(_){ }
 }
 
+function setAuthLocationCardPhase(phase = 'search'){
+  try{
+    const card = document.getElementById('authLocationCard');
+    const titleEl = document.querySelector('#authLocationCard .auth-location-copy h3');
+    const searchBtn = document.getElementById('authSearchLocationBtn');
+    const useBtn = document.getElementById('authUseLocationBtn');
+    if (card) card.dataset.phase = String(phase || 'search') === 'confirm' ? 'confirm' : 'search';
+    const isConfirm = !!(card && card.dataset.phase === 'confirm');
+    if (titleEl) titleEl.textContent = isConfirm ? 'Confirmá tu ubicación' : 'Elegí tu dirección';
+    if (searchBtn) {
+      searchBtn.textContent = isConfirm ? 'Cambiar dirección' : 'Buscar dirección';
+      searchBtn.classList.toggle('btn-primary', !isConfirm);
+      searchBtn.classList.toggle('btn-ghost', isConfirm);
+    }
+    if (useBtn) {
+      useBtn.classList.toggle('btn-primary', isConfirm);
+      useBtn.classList.toggle('btn-ghost', !isConfirm);
+    }
+  }catch(_){ }
+}
+
 function updateAuthLocationCard(prefill, statusMessage = ''){
   try{
-    if (statusMessage) setAuthLocationStatus(statusMessage);
     const normalized = prefill ? normalizeLocationPrefill(prefill) : null;
+    const hasLocation = !!(normalized && normalized.lat != null && normalized.lon != null);
+    setAuthLocationCardPhase(hasLocation ? 'confirm' : 'search');
+    if (statusMessage) {
+      setAuthLocationStatus(statusMessage);
+    } else {
+      setAuthLocationStatus(
+        hasLocation
+          ? 'Revisá la dirección en el mapa y usala en el registro cuando esté correcta.'
+          : 'Elegí una dirección o, si querés, usá tu ubicación actual. Después la confirmás en el mapa.'
+      );
+    }
     const addressEl = document.getElementById('authLocationAddress');
     const applyBtn = document.getElementById('authApplyLocationBtn');
     const prefillKey = normalized && normalized.lat != null && normalized.lon != null
@@ -7181,7 +7468,7 @@ function updateAuthLocationCard(prefill, statusMessage = ''){
     if (addressEl){
       const isActive = (typeof document !== 'undefined' && document.activeElement === addressEl);
       const userEdited = String(addressEl.dataset.userEdited || '') === '1';
-      addressEl.placeholder = 'Ubicación no confirmada todavía';
+      addressEl.placeholder = hasLocation ? 'Ubicación confirmada' : 'Elegí una dirección primero';
       if (!isActive && !userEdited){
         addressEl.value = label || '';
       }
@@ -9238,6 +9525,30 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección',
         addressPickerMapInstance = null;
         addressPickerMapMarker = null;
       };
+      const refreshPickerMapLayout = () => {
+        try{
+          if (!addressPickerMapInstance) return;
+          const run = () => {
+            try{ addressPickerMapInstance.invalidateSize(true); }catch(_){ }
+            try{
+              const point = addressPickerMapMarker && typeof addressPickerMapMarker.getLatLng === 'function'
+                ? addressPickerMapMarker.getLatLng()
+                : (typeof addressPickerMapInstance.getCenter === 'function' ? addressPickerMapInstance.getCenter() : null);
+              if (point && typeof addressPickerMapInstance.setView === 'function'){
+                addressPickerMapInstance.setView(point, addressPickerMapInstance.getZoom(), { animate: false });
+              }
+            }catch(_){ }
+          };
+          run();
+          try{
+            requestAnimationFrame(() => {
+              run();
+              requestAnimationFrame(run);
+            });
+          }catch(_){ }
+          [120, 260, 520].forEach((ms) => setTimeout(run, ms));
+        }catch(_){ }
+      };
       const cleanup = () => {
         closed = true;
         try{ cleanupMap(); }catch(_){ }
@@ -9379,9 +9690,7 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección',
           }catch(_){ }
         });
         addressPickerMapInstance.setView([latLon.lat, latLon.lon], 17, { animate: false });
-        setTimeout(() => {
-          try{ addressPickerMapInstance.invalidateSize(); }catch(_){ }
-        }, 60);
+        refreshPickerMapLayout();
       } else if (mapCanvas){
         mapCanvas.innerHTML = `
           <iframe
@@ -9472,9 +9781,7 @@ function showAddressMapConfirmModal(prefill, { title = 'Confirma tu dirección',
             if (addressPickerMapMarker && addressPickerMapInstance){
               addressPickerMapMarker.setLatLng([point.lat, point.lon]);
               addressPickerMapInstance.setView([point.lat, point.lon], 17, { animate: false });
-              setTimeout(() => {
-                try{ addressPickerMapInstance.invalidateSize(); }catch(_){ }
-              }, 40);
+              refreshPickerMapLayout();
             } else if (mapCanvas){
               const frame = mapCanvas.querySelector('iframe');
               if (frame){
@@ -9517,52 +9824,84 @@ async function pickAddressWithSearchAndMap({
   return payload;
 }
 
+function commitAuthLocationSelection(prefill, statusMessage = 'Ubicación confirmada.'){
+  const normalized = prefill ? normalizeLocationPrefill(prefill) : null;
+  if (!normalized) {
+    updateAuthLocationCard(authLocationPrefill, 'No pudimos guardar esa ubicación.');
+    return null;
+  }
+  authLocationPrefill = normalized;
+  saveLocationPrefillCache(normalized);
+  saveDeliveryAddressCache(normalized);
+  applyLocationToRegisterFields(normalized, { onlyEmpty: false });
+  updateAuthLocationCard(normalized, statusMessage);
+  return normalized;
+}
+
+async function startAuthLocationSearchFlow(options = {}){
+  if (authLocationSearchFlowInFlight) return null;
+  authLocationSearchFlowInFlight = true;
+  try{
+    const seed = authLocationPrefill || loadLocationPrefillCache() || loadDeliveryAddressCache() || null;
+    const initialQuery = options.initialQuery || (seed ? buildLocationDisplayLabel(seed) : '');
+    const picked = await pickAddressWithSearchAndMap({
+      title: 'Ingresá tu dirección',
+      subtitle: 'Buscá primero tu dirección y después confirmala en el mapa.',
+      initialQuery: initialQuery || ''
+    });
+    if (!picked){
+      updateAuthLocationCard(authLocationPrefill, authLocationPrefill ? 'Podés seguir con la ubicación actual o cambiarla.' : 'Todavía no elegiste una dirección.');
+      return null;
+    }
+    const normalized = commitAuthLocationSelection(picked, 'Ubicación confirmada para el registro.');
+    try{ if (normalized) showToast('Ubicación guardada', 2400); }catch(_){ }
+    return normalized;
+  }catch(e){
+    console.warn('startAuthLocationSearchFlow failed', e);
+    updateAuthLocationCard(authLocationPrefill, 'No pudimos buscar esa dirección. Probá de nuevo.');
+    return null;
+  }finally{
+    authLocationSearchFlowInFlight = false;
+  }
+}
+
 async function requestAuthLocation(options = {}){
   const auto = !!options?.auto;
   if (authLocationRequestInFlight) return;
-  if (!navigator.geolocation){
-    updateAuthLocationCard(authLocationPrefill, 'Tu navegador no soporta geolocalización.');
-    return;
-  }
   authLocationRequestInFlight = true;
   setAuthLocationLoading(true);
-  setAuthLocationStatus('Esperando permiso para acceder a tu ubicación...');
-  navigator.geolocation.getCurrentPosition(async (position) => {
-    try{
-      const lat = Number(position?.coords?.latitude);
-      const lon = Number(position?.coords?.longitude);
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new Error('invalid-coordinates');
-      let prefill = normalizeLocationPrefill({ lat, lon, ts: Date.now() });
-      try{
-        const reverse = await reverseGeocodeLocation(lat, lon);
-        if (reverse) prefill = reverse;
-      }catch(_){ }
-      authLocationPrefill = prefill;
-      saveLocationPrefillCache(prefill);
-      if (prefill.barrio || prefill.calle || prefill.numeracion){
-        saveDeliveryAddressCache(prefill);
-      }
-      applyLocationToRegisterFields(prefill, { onlyEmpty: true });
-      updateAuthLocationCard(prefill, auto ? 'Ubicación detectada. Revisá y continuá.' : 'Ubicación actualizada.');
-    }catch(_){
-      updateAuthLocationCard(authLocationPrefill, 'No pudimos obtener tu ubicación. Cargá tu dirección manualmente.');
-    }finally{
-      authLocationRequestInFlight = false;
-      setAuthLocationLoading(false);
+  setAuthLocationStatus('Buscando tu ubicación actual...');
+  try{
+    if (!navigator.geolocation){
+      updateAuthLocationCard(authLocationPrefill, 'Tu navegador no soporta geolocalización.');
+      return null;
     }
-  }, (error) => {
+    const currentPrefill = await getCurrentLocationPrefill();
+    if (!currentPrefill){
+      updateAuthLocationCard(authLocationPrefill, 'No pudimos obtener tu ubicación. Cargá tu dirección manualmente.');
+      return null;
+    }
+    if (!isMendozaPrefill(currentPrefill)){
+      updateAuthLocationCard(authLocationPrefill, 'Tu ubicación actual está fuera de Mendoza.');
+      return null;
+    }
+    const confirmed = await showAddressMapConfirmModal(currentPrefill, { title: 'Confirmá tu ubicación' });
+    if (!confirmed){
+      updateAuthLocationCard(authLocationPrefill, auto ? 'Podés elegir una dirección manualmente para continuar.' : 'No se aplicó ninguna ubicación nueva.');
+      return null;
+    }
+    return commitAuthLocationSelection(confirmed, auto ? 'Ubicación detectada y confirmada.' : 'Ubicación actual confirmada.');
+  }catch(error){
     let msg = 'No pudimos obtener tu ubicación. Cargá tu dirección manualmente.';
     if (error && error.code === 1) msg = 'No diste permiso de ubicación. Podés continuar cargando tu dirección manualmente.';
     else if (error && error.code === 2) msg = 'No se pudo detectar tu ubicación actual.';
     else if (error && error.code === 3) msg = 'La solicitud de ubicación tardó demasiado.';
     updateAuthLocationCard(authLocationPrefill, msg);
+    return null;
+  }finally{
     authLocationRequestInFlight = false;
     setAuthLocationLoading(false);
-  }, {
-    enableHighAccuracy: true,
-    timeout: 12000,
-    maximumAge: 0,
-  });
+  }
 }
 
 function initAuthLocationCard(){
@@ -9602,14 +9941,15 @@ function initAuthLocationCard(){
     try{ if (err) err.textContent = ''; }catch(_){ }
     try{
       if (st === '2'){
-        setAuthLocationStatus(authLocationPrefill ? 'Ubicación guardada lista para usar.' : 'Ahora confirmá tu ubicación en el mapa.');
+        setAuthLocationStatus(authLocationPrefill ? 'Ubicación guardada lista para usar.' : 'Primero elegí una dirección. Después la confirmás en el mapa.');
         updateAuthLocationCard(authLocationPrefill, '');
+        setTimeout(() => { refreshAuthLocationMapLayout(); }, 30);
       }
     }catch(_){ }
     if (!focus) return;
     try{
       if (st === '1') document.getElementById('regName')?.focus();
-      else document.getElementById('authUseLocationBtn')?.focus();
+      else document.getElementById(authLocationPrefill ? 'authUseLocationBtn' : 'authSearchLocationBtn')?.focus();
     }catch(_){ }
   };
 
@@ -9632,12 +9972,6 @@ function initAuthLocationCard(){
         return;
       }
       setRegisterStep(2);
-      // Best-effort: encourage the address step to start immediately.
-      try{
-        if (!authLocationPrefill){
-          requestAuthLocation({ auto: true });
-        }
-      }catch(_){ }
     });
   }
   if (backBtn && !backBtn.dataset.bound){
@@ -9677,38 +10011,7 @@ function initAuthLocationCard(){
 	  }
 	  if (searchBtn && !searchBtn.dataset.bound){
 	    searchBtn.dataset.bound = '1';
-	    searchBtn.addEventListener('click', async () => {
-	      const prev = searchBtn.textContent;
-	      try{
-	        searchBtn.disabled = true;
-	        searchBtn.textContent = 'Buscando...';
-	      }catch(_){ }
-	      try{
-	        const seed = authLocationPrefill || loadLocationPrefillCache() || loadDeliveryAddressCache() || null;
-	        const initialQuery = seed ? buildLocationDisplayLabel(seed) : '';
-		        const picked = await pickAddressWithSearchAndMap({
-		          title: 'Ingresá tu dirección',
-		          subtitle: '',
-		          initialQuery: initialQuery || ''
-		        });
-	        if (!picked) return;
-	        const normalized = normalizeLocationPrefill(picked);
-	        authLocationPrefill = normalized;
-	        saveLocationPrefillCache(normalized);
-	        saveDeliveryAddressCache(normalized);
-	        applyLocationToRegisterFields(normalized, { onlyEmpty: false });
-	        updateAuthLocationCard(normalized, 'Ubicación confirmada.');
-	        try{ showToast('Ubicación guardada', 2400); }catch(_){ }
-	      }catch(e){
-	        console.warn('authSearchLocationBtn failed', e);
-	        updateAuthLocationCard(authLocationPrefill, 'No pudimos buscar esa dirección. Probá de nuevo.');
-	      }finally{
-	        try{
-	          searchBtn.disabled = false;
-	          searchBtn.textContent = prev;
-	        }catch(_){ }
-	      }
-	    });
+	    searchBtn.addEventListener('click', () => { startAuthLocationSearchFlow().catch(() => {}); });
 	  }
 	  if (addressInput && !addressInput.dataset.bound){
 	    addressInput.dataset.bound = '1';
@@ -10327,110 +10630,6 @@ function openAccountModal(){
     showAlert('No se pudo abrir Mi cuenta en este momento.', 'warning');
   }
 }
-function showGuestModal(){
-  return new Promise((resolve)=>{
-    try{
-      ensureGlobalDialogStyles();
-      // build a nicer guest contact modal (styled) and read inputs before removing
-      const overlay = document.createElement('div'); overlay.className='__dialog_overlay'; overlay.style.zIndex = 3300;
-      overlay.innerHTML = `
-        <div class="__dialog __dialog--info" role="dialog" aria-modal="true" aria-label="Datos de contacto (invitado)">
-          <div class="dialog-header"><span class="dialog-icon">ℹ️</span><h3>Datos de contacto (invitado)</h3></div>
-          <div class="dialog-body">
-            <div style="display:flex;flex-direction:column;gap:10px">
-              <input id="__gname" type="text" placeholder="Nombre (opcional)" />
-              <input id="__gemail" type="email" placeholder="Email (obligatorio)" />
-              <input id="__gbarrio" type="text" placeholder="Barrio (obligatorio)" />
-              <input id="__gcalle" type="text" placeholder="Calle (obligatorio)" />
-              <input id="__gnumero" type="text" placeholder="Numeración (obligatoria)" />
-            </div>
-          </div>
-          <div class="actions">
-            <button class="btn btn-ghost" data-action="cancel">Cancelar</button>
-            <button class="btn btn-primary" data-action="save">Guardar</button>
-          </div>
-        </div>`;
-      document.body.appendChild(overlay);
-      const dialog = overlay.querySelector('.__dialog');
-      requestAnimationFrame(()=>{
-        try{
-          overlay.classList.add('open');
-          if (dialog) dialog.classList.add('open');
-        }catch(_){ }
-      });
-      // Prefill inputs from last guest info if available so data survives refresh/rerender
-      try{
-        const last = JSON.parse(localStorage.getItem('catalog:guest_info_v1') || 'null');
-        if (last){
-          setTimeout(()=>{
-            try{
-              if (last.name) document.getElementById('__gname').value = last.name;
-              if (last.email) document.getElementById('__gemail').value = last.email;
-              if (last.barrio) document.getElementById('__gbarrio').value = last.barrio;
-              if (last.calle) document.getElementById('__gcalle').value = last.calle;
-              if (last.numero) document.getElementById('__gnumero').value = last.numero;
-            }catch(_){ }
-          }, 50);
-        }
-      }catch(e){}
-
-      const cancelBtn = overlay.querySelector('[data-action="cancel"]');
-      const saveBtn = overlay.querySelector('[data-action="save"]');
-      const cleanup = ()=>{ try{ overlay.remove(); window.removeEventListener('keydown', onKey); }catch(_){ } };
-      cancelBtn.addEventListener('click', ()=>{ cleanup(); resolve(null); });
-      saveBtn.addEventListener('click', ()=>{
-        const emailRaw = (document.getElementById('__gemail')?.value || '').trim();
-        const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw);
-        if (!emailOk) {
-          try { showAlert('Para enviarte la confirmacion, ingresa un email valido.'); } catch(_){}
-          try { document.getElementById('__gemail')?.focus(); } catch(_){}
-          return;
-        }
-        const check = validateAddressInput({
-          barrio: document.getElementById('__gbarrio')?.value || '',
-          calle: document.getElementById('__gcalle')?.value || '',
-          numeracion: document.getElementById('__gnumero')?.value || ''
-        });
-        if (!check.ok) {
-          try { showAlert(check.message || 'Para entregar tu pedido, revisa la dirección.'); } catch(_){}
-          try {
-            if (check.field === 'barrio') document.getElementById('__gbarrio')?.focus();
-            else if (check.field === 'calle') document.getElementById('__gcalle')?.focus();
-            else document.getElementById('__gnumero')?.focus();
-          } catch(_){}
-          return;
-        }
-        const clean = check.value;
-        const o = {
-          name: (document.getElementById('__gname')?.value || '').trim(),
-          email: emailRaw,
-          barrio: clean.barrio,
-          calle: clean.calle,
-          numero: clean.numeracion
-        };
-        // persist guest info for future attempts / across reloads
-        try{ localStorage.setItem('catalog:guest_info_v1', JSON.stringify(o)); }catch(e){}
-        try{ saveDeliveryAddressCache({ barrio: clean.barrio, calle: clean.calle, numeracion: clean.numeracion }); }catch(_){ }
-        try{
-          const persisted = upsertAddressInBook({
-            label: o.name ? ('Contacto ' + o.name) : 'Invitado',
-            barrio: clean.barrio,
-            calle: clean.calle,
-            numeracion: clean.numeracion,
-            query_hint: `${clean.calle} ${clean.numeracion}, ${clean.barrio}`
-          }, { accountId: getCurrentAccountStorageId(), setDefault: true });
-          if (persisted && persisted.id) setLastUsedAddressId(persisted.id, getCurrentAccountStorageId());
-        }catch(_){ }
-        cleanup(); resolve(o);
-      });
-      const onKey = (ev)=>{ if (ev.key === 'Escape') { cleanup(); resolve(null); } };
-      window.addEventListener('keydown', onKey);
-      // focus first input
-      setTimeout(()=>{ try{ document.getElementById('__gname')?.focus(); }catch(_){ } }, 50);
-    }catch(e){ console.error('showGuestModal failed', e); resolve(null); }
-  });
-}
-
 async function syncMercadoPagoReturnToBackend({ paymentId, externalReference, status }){
   try{
     const body = {
@@ -10476,7 +10675,7 @@ async function syncMercadoPagoReturnToBackend({ paymentId, externalReference, st
   return false;
 }
 
-function handleMercadoPagoReturn(){
+async function handleMercadoPagoReturn(){
   try{
     if (!location || !location.search) return;
     const params = new URLSearchParams(location.search);
@@ -10510,14 +10709,15 @@ function handleMercadoPagoReturn(){
     }catch(_){ }
 
     if (result === 'success') {
-      showAlert('Pago aprobado en Mercado Pago. Tu pedido fue recibido.', 'success');
+      await showAlert('Pago aprobado en Mercado Pago. Tu pedido fue recibido.', 'success');
+      clearCheckoutDraft();
     } else if (result === 'pending') {
-      showAlert('Tu pago quedó pendiente. Te avisaremos cuando se confirme.', 'warning');
+      await showAlert('Tu pago quedó pendiente. Te avisaremos cuando se confirme.', 'warning');
     } else if (result === 'failure') {
-      showAlert('El pago no se pudo completar. Puedes intentar nuevamente.', 'danger');
+      await showAlert('El pago no se pudo completar. Puedes intentar nuevamente.', 'danger');
     } else {
       // generic fallback when MP returns only ids/status variants
-      showAlert('Recibimos el resultado del pago de Mercado Pago.', 'info');
+      await showAlert('Recibimos el resultado del pago de Mercado Pago.', 'info');
     }
 
     // Clean URL so reloading doesn't show the payment dialog again.
@@ -10573,13 +10773,38 @@ function updateAuthUI(){
     btn.title = String(email);
     btn.classList.add('logged');
   } else {
-    setAuthButtonDisplay(btn, 'Mi cuenta');
+    setAuthButtonDisplay(btn, 'Ingresar');
     btn.setAttribute('aria-label', 'Iniciar sesión');
     btn.title = '';
     btn.classList.remove('logged');
   }
   updateRepeatOrderButton();
 }
+
+function applyAuthModalTab(tab = 'login'){
+  const loginPanel = document.getElementById('loginForm');
+  const registerPanel = document.getElementById('registerForm');
+  const tabLogin = document.getElementById('tabLogin');
+  const tabRegister = document.getElementById('tabRegister');
+  const wantsRegister = String(tab || '').toLowerCase() === 'register';
+  if (tabLogin && tabRegister){
+    tabLogin.classList.toggle('active', !wantsRegister);
+    tabRegister.classList.toggle('active', wantsRegister);
+  }
+  if (loginPanel && registerPanel){
+    loginPanel.style.display = wantsRegister ? 'none' : 'block';
+    registerPanel.style.display = wantsRegister ? 'block' : 'none';
+  }
+  try{ if (registerPanel) registerPanel.dataset.step = '1'; }catch(_){ }
+  initAuthLocationCard();
+  setTimeout(() => {
+    try{
+      if (wantsRegister) document.getElementById('regName')?.focus();
+      else document.getElementById('loginEmail')?.focus();
+    }catch(_){ }
+  }, 120);
+}
+
 async function doRegister(){
   const name = document.getElementById('regName').value.trim();
   const email = document.getElementById('regEmail').value.trim();
@@ -10685,8 +10910,6 @@ async function doLogin(emailArg,passwordArg){
       let name = email;
       try { const p = parseJwt(data.access_token); if (p) name = p.full_name || p.name || p.sub || p.email || email; } catch (e) {}
       closeAuthModal();
-      // mark that auth modal was shown this session (ensure consistent behavior)
-      try { sessionStorage.setItem('catalog:auth_shown', '1'); } catch(e) {}
     }
   } catch (e) { if (e && e.name === 'AbortError') err.textContent = 'Tiempo de espera agotado'; else err.textContent = 'No se pudo conectar con el servidor'; }
 }
@@ -10694,7 +10917,6 @@ function logout(){
   // remove token and update UI
   clearToken();
   try{ document.getElementById('__account_overlay')?.remove(); }catch(_){ }
-  try{ sessionStorage.removeItem('catalog:auth_shown'); }catch(e){}
   // reset login/register form fields so user can re-login immediately
   try{ const le=document.getElementById('loginEmail'); const lp=document.getElementById('loginPassword'); if(le) le.value=''; if(lp) lp.value=''; }catch(e){}
   try{ const re=document.getElementById('regEmail'); const rn=document.getElementById('regName'); const rb=document.getElementById('regBarrio'); const rc=document.getElementById('regCalle'); const rnum=document.getElementById('regNumero'); const rp=document.getElementById('regPassword'); if(re) re.value=''; if(rn) rn.value=''; if(rb) rb.value=''; if(rc) rc.value=''; if(rnum) rnum.value=''; if(rp) rp.value=''; }catch(e){}
@@ -10706,30 +10928,26 @@ function logout(){
 function _authOutsideClick(e){
   const m = document.getElementById('authModal');
   if (!m) return;
+  try{
+    const nestedOverlay = e && e.target && typeof e.target.closest === 'function'
+      ? e.target.closest('.__dialog_overlay')
+      : null;
+    if (nestedOverlay) return;
+  }catch(_){ }
   const content = m.querySelector('.modal-content');
   if (!content) return;
   if (!content.contains(e.target)) closeAuthModal();
 }
 
-function openAuthModal(){
+function openAuthModal(options = {}){
   const m = document.getElementById('authModal'); if(!m) return;
   m.classList.add('open');
   m.setAttribute('aria-hidden','false');
   document.body.classList.add('modal-open');
-  // ensure login tab shown by default
-  const loginPanel = document.getElementById('loginForm');
-  const registerPanel = document.getElementById('registerForm');
-  const tabLogin = document.getElementById('tabLogin');
-  const tabRegister = document.getElementById('tabRegister');
-  if (tabLogin && tabRegister){ tabLogin.classList.add('active'); tabRegister.classList.remove('active'); }
-  if (loginPanel && registerPanel){ loginPanel.style.display = 'block'; registerPanel.style.display = 'none'; }
-  try{ if (registerPanel) registerPanel.dataset.step = '1'; }catch(_){ }
-  initAuthLocationCard();
   const cachedLocation = authLocationPrefill || loadLocationPrefillCache();
   authLocationPrefill = cachedLocation || null;
-  updateAuthLocationCard(authLocationPrefill, authLocationPrefill ? 'Ubicación guardada lista para usar.' : 'Permití ubicación para cargar tu dirección más rápido.');
-  // focus first field
-  setTimeout(()=>{ try{ document.getElementById('loginEmail')?.focus(); }catch(e){} }, 120);
+  updateAuthLocationCard(authLocationPrefill, authLocationPrefill ? 'Ubicación guardada lista para usar.' : 'Si querés, usá tu ubicación actual o buscá tu dirección.');
+  applyAuthModalTab(options && options.tab ? options.tab : 'login');
   // close when clicking outside content
   setTimeout(()=>{ document.addEventListener('pointerdown', _authOutsideClick); }, 40);
 }
@@ -10796,16 +11014,18 @@ function initCustomerTypeSelection(){
   const stored = getStoredCustomerType();
   if (stored) {
     applyCustomerType(stored, { persist: false, rerender: false });
-    closeCustomerTypeModal();
   } else {
     applyCustomerType(CUSTOMER_TYPE_DEFAULT, { persist: false, rerender: false });
-    openCustomerTypeModal();
   }
+  closeCustomerTypeModal();
 }
 
 // wire auth modal and button (DOMContentLoaded handled later)
 document.addEventListener('DOMContentLoaded', ()=>{
+  applyCatalogPerformanceMode();
   try{ initCustomerTypeSelection(); }catch(e){ console.warn('initCustomerTypeSelection failed', e); }
+  try{ initCatalogEntryActions(); }catch(e){ console.warn('initCatalogEntryActions failed', e); }
+  try{ localStorage.removeItem('catalog:guest_info_v1'); }catch(_){ }
   initCatalogHeaderLogo();
   updateAuthUI();
   try{ initAuthLocationCard(); }catch(e){ console.warn('initAuthLocationCard failed', e); }
@@ -10852,18 +11072,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
   }
   const doLoginBtn = document.getElementById('doLogin'); if (doLoginBtn) doLoginBtn.addEventListener('click', ()=>doLogin());
   const doRegisterBtn = document.getElementById('doRegister'); if (doRegisterBtn) doRegisterBtn.addEventListener('click', ()=>doRegister());
-  // Auto-open modal on entry if user not logged in (per request)
-  try{
-    if (!getToken()) {
-      // show modal only once per session
-      const shown = sessionStorage.getItem('catalog:auth_shown');
-      const customerTypeChosen = !!getStoredCustomerType();
-      if (!shown && customerTypeChosen) {
-        setTimeout(()=> { openAuthModal(); try{ sessionStorage.setItem('catalog:auth_shown','1'); }catch(e){} }, 600);
-      }
-    }
-  }catch(e){}
-
 });
 
 // Ensure fetchProducts includes Authorization header when token present
@@ -10873,6 +11081,7 @@ const _origFetchProducts = typeof fetchProducts === 'function' ? fetchProducts :
 // browsers that load scripts early don't cause a hard error that stops rendering.
 function init(){
   try{
+    applyCatalogPerformanceMode();
     grid = document.getElementById("catalogGrid") || (function(){ const s = document.createElement('section'); s.id='catalogGrid'; document.body.appendChild(s); return s;} )();
     // ensure there is a visible catalog title for clarity
     if (!document.getElementById('catalogTitle')){
@@ -10906,7 +11115,7 @@ function init(){
         inStockOnlyToggle.addEventListener('change', () => {
           inStockOnly = !!inStockOnlyToggle.checked;
           setStoredInStockOnly(inStockOnly);
-          render({ animate: true });
+          scheduleCatalogRender({ animate: true });
         });
       }
     }catch(e){ console.warn('inStockOnly init failed', e); }
@@ -10922,7 +11131,7 @@ function init(){
       if (clearBrandFilterBtn){
         clearBrandFilterBtn.addEventListener('click', () => {
           setBrandFilter('', { updateUrl: true });
-          render({ animate: true });
+          scheduleCatalogRender({ animate: true });
         });
       }
     }catch(e){ console.warn('brand filter init failed', e); }
@@ -10934,14 +11143,14 @@ function init(){
     // start auto-refresh if enabled
     startAutoRefresh();
 
-    if (searchInput) searchInput.addEventListener("input", () => { render({ animate: true }); });
+    if (searchInput) searchInput.addEventListener("input", () => { scheduleCatalogRender({ animate: true, delay: CATALOG_SEARCH_DELAY_MS }); });
 
     // wire clear button (if present)
     const clearBtn = document.querySelector('.search-clear');
     if (clearBtn) {
       clearBtn.addEventListener('click', (ev) => {
         ev.preventDefault();
-        try { searchInput.value = ''; searchInput.focus(); render({ animate: true }); } catch (e) { console.error(e); }
+        try { searchInput.value = ''; searchInput.focus(); scheduleCatalogRender({ animate: true }); } catch (e) { console.error(e); }
       });
     }
   }catch(err){ console.error('init failed', err); }
@@ -11097,4 +11306,3 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 }
-

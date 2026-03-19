@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
   <link rel="stylesheet" href="styles.css?v=8">
-  <link rel="stylesheet" href="catalogo.css?v=124">
+  <link rel="stylesheet" href="catalogo.css?v=127">
   <link rel="icon" href="images/icon.png" />
 </head>
 <body>
@@ -24,10 +24,9 @@
         <nav class="nav" role="navigation">
           <ul>
             <li><a href="index.html#inicio">Inicio</a></li>
-            <li><a href="index.html#quienes">Quiénes somos</a></li>
-            <li><a href="index.html#productos">Productos</a></li>
+            <li><a href="#promotionsSection">Promociones</a></li>
+            <li><a href="#catalogEntry">Categorías</a></li>
             <li><a href="marcas.html">Marcas</a></li>
-            <li><a href="index.html#logistica">Logística</a></li>
             <li><a href="index.html#contacto" class="btn btn-primary contacto">Contacto</a></li>
             <li>
               <button id="authButton" class="account-access" aria-label="Abrir cuenta">
@@ -45,6 +44,28 @@
         <button class="menu-toggle" aria-label="Abrir menú" aria-expanded="false"><span aria-hidden="true">&#9776;</span></button>
       </div>
     </header>
+
+<section id="catalogEntry" class="catalog-entry" aria-label="Inicio rápido del catálogo">
+  <div class="catalog-entry-copy">
+    <span class="catalog-entry-kicker">Compra sin vueltas</span>
+    <h1>Explorá el catálogo, mirá promos y cerrá tu pedido cuando quieras.</h1>
+    <p>Podés recorrer todo, filtrar y armar tu carrito sin registrarte. Tus datos los pedimos recién al final.</p>
+  </div>
+  <div class="catalog-entry-actions">
+    <a class="btn btn-primary" href="#promotionsSection">Ver promociones</a>
+    <a class="btn btn-ghost" href="#catalogGrid">Explorar productos</a>
+    <button id="entryCartBtn" class="btn btn-ghost" type="button">
+      Finalizar pedido
+      <span id="entryCartCount" class="entry-cart-count" aria-hidden="true">0</span>
+    </button>
+  </div>
+  <div class="catalog-entry-chips" aria-label="Accesos rápidos por categoría">
+    <button class="catalog-entry-chip" type="button" data-entry-filter="all">Todo el catálogo</button>
+    <button class="catalog-entry-chip" type="button" data-entry-filter="lacteos">Lácteos</button>
+    <button class="catalog-entry-chip" type="button" data-entry-filter="fiambres">Fiambres</button>
+    <button class="catalog-entry-chip" type="button" data-entry-filter="complementos">Complementos</button>
+  </div>
+</section>
 
 <section class="controls">
   <div class="search">
@@ -68,7 +89,7 @@
   </div>
   <div id="customerTypeStatus" class="customer-type-status" hidden>
     <span id="customerTypeLabel" class="customer-type-label">Perfil: Mayorista</span>
-    <button id="changeCustomerTypeBtn" class="btn btn-ghost" type="button">Cambiar categoria</button>
+    <button id="changeCustomerTypeBtn" class="btn btn-ghost" type="button">Cambiar perfil</button>
   </div>
 
   <!-- Auto-refresh UI removed (auto-refresh runs silently) -->
@@ -120,7 +141,7 @@
         <div class="auth-location-head">
           <div class="auth-location-copy">
             <h3>Confirmá tu ubicación</h3>
-            <p id="authLocationStatus">Permití ubicación para cargar tu dirección más rápido.</p>
+            <p id="authLocationStatus">Si querés, usá tu ubicación actual o buscá tu dirección.</p>
           </div>
           <div class="auth-location-cta">
             <button id="authUseLocationBtn" class="btn btn-primary" type="button">Usar mi ubicación</button>
@@ -192,7 +213,7 @@
       <button id="repeatLastOrderBtn" class="btn btn-ghost" type="button" hidden>Repetir último pedido</button>
       <div class="cart-actions">
         <button id="clearCart" class="btn btn-ghost">Vaciar</button>
-        <button id="checkoutBtn" class="btn">Hacer pedido</button>
+        <button id="checkoutBtn" class="btn">Finalizar pedido</button>
       </div> 
     </div>
   </div>
@@ -236,7 +257,7 @@
 <script src="main.js?v=3"></script>
 <script src="consent.js?v=1"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="catalogo.js?v=78"></script>
+  <script src="catalogo.js?v=81"></script>
 </body>
 </html>
 
